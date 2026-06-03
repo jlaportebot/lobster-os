@@ -1,0 +1,179 @@
+//! Window manager input bridge — routes USB HID events to the WM
+//!
+//! Connects the USB HID subsystem (keyboard/mouse) to the window manager,
+//! dispatching keyboard input to the focused window and mouse events to
+//! the window under the cursor.
+//!
+//! Event flow:
+//!   USB xHCI → HID poll → InputEvent → WM dispatch → Window/Widget
+
+use crate::usb::hid::{self, HidEvent};
+use crate::wm::compositor;
+use crate::wm::window;
+use crate::println;
+
+// ─── Cursor State ──────────────────────────────────────────────────
+
+/// Current mouse cursor position (pixels from top-left)
+static mut CURSOR_X: u32 = 512;
+static mut CURSOR_Y: u32 = 384;
+
+/// Mouse button state
+static mut MOUSE_LEFT: bool = false;
+static mut MOUSE_RIGHT: bool = false;
+static mut MOUSE_MIDDLE: bool = false;
+
+// ─── Initialization ────────────────────────────────────────────────
+
+/// Initialize the WM input subsystem
+pub fn init() {
+    let info = compositor::fb_info();
+    unsafe {
+        CURSOR_X = info.width / 2;
+        CURSOR_Y = info.height / 2;
+    }
+    println!(
+        "[wm::input] Cursor at {},{}",
+        unsafe { CURSOR_X },
+        unsafe { CURSOR_Y }
+    );
+}
+
+// ─── Event Pump ────────────────────────────────────────────────────
+
+/// Poll HID devices and dispatch all pending events to the WM
+/// Call this once per scheduler tick or main loop iteration
+pub fn pump_events() {
+    // Drain up to 8 events per pump to stay responsive
+    for _ in 0..8 {
+        let event = hid::poll();
+        match event {
+            Some(HidEvent::KeyPress { scancode, extended }) => {
+                handle_key_press(scancode, extended);
+            }
+            Some(HidEvent::KeyRelease {
+                scancode,
+                extended: _,
+            }) => {
+                handle_key_release(scancode);
+            }
+            Some(HidEvent::MouseMove { dx, dy }) => {
+                handle_mouse_move(dx, dy);
+            }
+            Some(HidEvent::MouseButton {
+                left,
+                right,
+                middle,
+            }) => {
+                handle_mouse_button(left, right, middle);
+            }
+            None => break, // No more events
+        }
+    }
+}
+
+/// Get current cursor position
+pub fn cursor_pos() -> (u32, u32) {
+    unsafe { (CURSOR_X, CURSOR_Y) }
+}
+
+/// Get current mouse button state
+pub fn mouse_buttons() -> (bool, bool, bool) {
+    unsafe { (MOUSE_LEFT, MOUSE_RIGHT, MOUSE_MIDDLE) }
+}
+
+// ─── Keyboard Dispatch ─────────────────────────────────────────────
+
+/// Handle a key press event
+fn handle_key_press(scancode: u8, _extended: bool) {
+    // Get ASCII character from scancode (respecting shift state)
+    let shift = hid::shift_held();
+    let ch = hid::scancode_to_ascii(scancode, shift);
+
+    // Alt+Tab: cycle window focus
+    if hid::alt_held() && scancode == 0x2B {
+        // Tab scancode in USB HID = 0x2B
+        // Reuse the existing cycle_focus from window module
+        crate::wm::window::handle_event(HidEvent::KeyPress {
+            scancode,
+            extended: false,
+        });
+        return;
+    }
+
+    // Route to focused window via existing handle_event
+    crate::wm::window::handle_event(HidEvent::KeyPress {
+        scancode,
+        extended: false,
+    });
+
+    // Log printable characters (debug)
+    if let Some(c) = ch {
+        if c >= ' ' && c <= '~' {
+            // Printable — could feed to text input widget
+        }
+    }
+}
+
+/// Handle a key release event
+fn handle_key_release(_scancode: u8) {
+    // Forward to window module for potential key-up tracking
+}
+
+// ─── Mouse Dispatch ────────────────────────────────────────────────
+
+/// Handle mouse movement
+fn handle_mouse_move(dx: i16, dy: i16) {
+    let info = compositor::fb_info();
+
+    unsafe {
+        // Update cursor position (clamp to screen bounds)
+        let new_x = (CURSOR_X as i32 + dx as i32).max(0) as u32;
+        let new_y = (CURSOR_Y as i32 + dy as i32).max(0) as u32;
+        CURSOR_X = if new_x >= info.width {
+            info.width - 1
+        } else {
+            new_x
+        };
+        CURSOR_Y = if new_y >= info.height {
+            info.height - 1
+        } else {
+            new_y
+        };
+    }
+
+    // Delegate to window module's existing handle_event
+    crate::wm::window::handle_event(HidEvent::MouseMove { dx, dy });
+}
+
+/// Handle mouse button changes
+fn handle_mouse_button(left: bool, right: bool, middle: bool) {
+    let prev_left = unsafe { MOUSE_LEFT };
+
+    unsafe {
+        MOUSE_LEFT = left;
+        MOUSE_RIGHT = right;
+        MOUSE_MIDDLE = middle;
+    }
+
+    // On left press: find window under cursor and focus it
+    if left && !prev_left {
+        let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+        // Check which window the cursor is over and focus it
+        // The window module's handle_event will handle drag logic
+        crate::wm::window::handle_event(HidEvent::MouseButton {
+            left,
+            right,
+            middle,
+        });
+    }
+
+    // On left release: stop any drag
+    if !left && prev_left {
+        crate::wm::window::handle_event(HidEvent::MouseButton {
+            left,
+            right,
+            middle,
+        });
+    }
+}

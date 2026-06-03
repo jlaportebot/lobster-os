@@ -1,0 +1,43 @@
+# LobsterOS — Raspberry Pi 5 boot configuration
+# ═══════════════════════════════════════════════════════════════════════
+# Place this file on the boot partition alongside kernel8.img
+#
+# The Pi 5 firmware (VideoCore + TF-A BL31) reads config.txt
+# at power-on to determine boot parameters.
+# ═══════════════════════════════════════════════════════════════════════
+
+# ─── Kernel ────────────────────────────────────────────────────────────
+# Specify the kernel image filename
+kernel=kernel8.img
+
+# Boot in 64-bit mode (aarch64)
+arm_64bit=1
+
+# ─── Memory ────────────────────────────────────────────────────────────
+# Total memory: Pi 5 has 4GB, 8GB, or 2GB variants
+# The GPU needs some memory; 16MB is plenty for headless + FB
+gpu_mem=16
+
+# Disable Device Tree overlay processing (we handle DT ourselves)
+# dtoverlay=
+
+# ─── Serial / UART ────────────────────────────────────────────────────
+# Enable UART0 (PL011) on GPIO 14/15 — our primary serial console
+enable_uart=1
+
+# Don't force HDMI console (use serial)
+hdmi_force_hotplug=0
+
+# ─── Boot delay ────────────────────────────────────────────────────────
+# 1 second delay to give SD card time to settle
+boot_delay=1
+
+# ─── Clocks ────────────────────────────────────────────────────────────
+# Don't force turbo mode — let firmware decide
+# force_turbo=1
+
+# ─── QEMU note ─────────────────────────────────────────────────────────
+# When running under QEMU (raspi4b machine), config.txt is NOT used.
+# QEMU directly loads the kernel via: -kernel kernel8.img
+# The firmware emulation in QEMU starts the kernel at 0x80000
+# ═══════════════════════════════════════════════════════════════════════

@@ -1,0 +1,531 @@
+//! ELF loader for user-space processes
+//!
+//! Parses ELF64 binaries and loads them into a process's address space.
+//! Supports static executables (ET_EXEC, ET_DYN) for AArch64.
+//!
+//! Memory layout for user processes:
+//!   0x0000_0000_1000_0000  Code + data (loaded from ELF)
+//!   0x0000_0000_2000_0000  Heap (grows up via brk/mmap)
+//!   0x0000_0000_7F00_0000  User stack (grows down)
+//!   0x0000_0000_8000_0000  End of user address space
+
+use crate::memory::{PhysAddr, VirtAddr, PAGE_SIZE, phys_to_virt};
+use crate::memory::frame_alloc;
+use crate::println;
+
+/// User code region start (in TTBR0 space)
+pub const USER_CODE_START: u64 = 0x0000_0000_1000_0000;
+
+/// User heap start
+pub const USER_HEAP_START: u64 = 0x0000_0000_2000_0000;
+
+/// User stack start (grows downward from here)
+pub const USER_STACK_TOP: u64 = 0x0000_0000_7F00_0000;
+pub const USER_STACK_SIZE: u64 = 0x0010_0000; // 1MB
+
+/// User address space limit
+pub const USER_ADDR_LIMIT: u64 = 0x0000_0000_8000_0000;
+
+/// ELF magic number
+const ELF_MAGIC: u32 = 0x464C457F; // "\x7fELF"
+
+/// ELF class (64-bit)
+const ELFCLASS64: u8 = 2;
+
+/// ELF data encoding (little-endian)
+const ELFDATA2LSB: u8 = 1;
+
+/// ELF machine type (AArch64)
+const EM_AARCH64: u16 = 183;
+
+/// ELF type
+const ET_EXEC: u16 = 2;
+const ET_DYN: u16 = 3;
+
+/// ELF segment types
+const PT_LOAD: u32 = 1;
+
+/// ELF segment flags
+const PF_X: u32 = 1;
+const PF_W: u32 = 2;
+const PF_R: u32 = 4;
+
+/// ELF64 file header
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Elf64Ehdr {
+    pub e_ident: [u8; 16],
+    pub e_type: u16,
+    pub e_machine: u16,
+    pub e_version: u32,
+    pub e_entry: u64,
+    pub e_phoff: u64,
+    pub e_shoff: u64,
+    pub e_flags: u32,
+    pub e_ehsize: u16,
+    pub e_phentsize: u16,
+    pub e_phnum: u16,
+    pub e_shentsize: u16,
+    pub e_shnum: u16,
+    pub e_shstrndx: u16,
+}
+
+/// ELF64 program header
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Elf64Phdr {
+    pub p_type: u32,
+    pub p_flags: u32,
+    pub p_offset: u64,
+    pub p_vaddr: u64,
+    pub p_paddr: u64,
+    pub p_filesz: u64,
+    pub p_memsz: u64,
+    pub p_align: u64,
+}
+
+/// Result of loading an ELF binary
+#[derive(Debug)]
+pub struct LoadResult {
+    /// Entry point virtual address
+    pub entry_point: u64,
+    /// TTBR0 physical address (page table root)
+    pub ttbr0_phys: u64,
+    /// Highest loaded address (for brk base)
+    pub brk_base: u64,
+}
+
+/// Verify the ELF header is valid for AArch64
+pub fn verify_header(ehdr: &Elf64Ehdr) -> bool {
+    // Check magic
+    let magic = u32::from_le_bytes([ehdr.e_ident[0], ehdr.e_ident[1], ehdr.e_ident[2], ehdr.e_ident[3]]);
+    if magic != ELF_MAGIC {
+        println!("[elf] Bad magic: {:#010x}", magic);
+        return false;
+    }
+
+    // Check class (64-bit)
+    if ehdr.e_ident[4] != ELFCLASS64 {
+        println!("[elf] Not 64-bit ELF (class={})", ehdr.e_ident[4]);
+        return false;
+    }
+
+    // Check endianness
+    if ehdr.e_ident[5] != ELFDATA2LSB {
+        println!("[elf] Not little-endian (data={})", ehdr.e_ident[5]);
+        return false;
+    }
+
+    // Check machine
+    if ehdr.e_machine != EM_AARCH64 {
+        println!("[elf] Not AArch64 (machine={})", ehdr.e_machine);
+        return false;
+    }
+
+    // Check type
+    if ehdr.e_type != ET_EXEC && ehdr.e_type != ET_DYN {
+        println!("[elf] Not executable (type={})", ehdr.e_type);
+        return false;
+    }
+
+    true
+}
+
+/// User-space page table entry flags
+const PTE_USER_CODE: u64 = crate::memory::vmem::PTE_VALID
+    | crate::memory::vmem::PTE_PAGE
+    | crate::memory::vmem::PTE_ACCESS
+    | crate::memory::vmem::PTE_NG    // non-Global (process-specific)
+    | crate::memory::vmem::PTE_ISH
+    | crate::memory::mmu::MT_NORMAL;
+
+const PTE_USER_DATA: u64 = crate::memory::vmem::PTE_VALID
+    | crate::memory::vmem::PTE_PAGE
+    | crate::memory::vmem::PTE_ACCESS
+    | crate::memory::vmem::PTE_NG
+    | crate::memory::vmem::PTE_ISH
+    | crate::memory::mmu::MT_NORMAL;
+
+const PTE_USER_RO: u64 = crate::memory::vmem::PTE_VALID
+    | crate::memory::vmem::PTE_PAGE
+    | crate::memory::vmem::PTE_ACCESS
+    | crate::memory::vmem::PTE_NG
+    | crate::memory::vmem::PTE_ISH
+    | crate::memory::mmu::MT_NORMAL;
+
+/// Allocate a user-space page table root
+fn alloc_user_page_table() -> Option<PhysAddr> {
+    let frame = frame_alloc::allocate_frame()?;
+    // Zero the page table
+    let virt = phys_to_virt(PhysAddr::new(frame.0));
+    unsafe {
+        let table = virt.0 as *mut u64;
+        for i in 0..512 {
+            core::ptr::write_volatile(table.add(i), 0);
+        }
+    }
+    Some(frame)
+}
+
+/// Map a page into a user process's address space
+///
+/// This walks/creates page tables under the process's TTBR0 root.
+/// Since we're in kernel mode, we access page tables via the direct phys map.
+unsafe fn map_user_page(ttbr0_phys: u64, va: u64, pa: u64, flags: u64) {
+    // We need to walk the user page tables via physical addresses
+    // mapped through our direct phys map.
+    let phys_map = crate::memory::PHYS_MAP_OFFSET;
+
+    // Get the root table
+    let root_virt = (phys_map + ttbr0_phys) as *mut [u64; 512];
+    let mut table = root_virt;
+
+    for level in 0..3 {
+        let idx = ((va >> (39 - level * 9)) & 0x1FF) as usize;
+        let entry = (*table)[idx];
+
+        if entry & crate::memory::vmem::PTE_VALID == 0 {
+            // Allocate next-level table
+            let next_frame = match frame_alloc::allocate_frame() {
+                Some(f) => f,
+                None => {
+                    println!("[elf] Out of frames for user page tables!");
+                    return;
+                }
+            };
+            // Zero the new table
+            let next_virt = (phys_map + next_frame.0) as *mut u64;
+            for i in 0..512 {
+                core::ptr::write_volatile(next_virt.add(i), 0);
+            }
+            crate::arch::cpu::dsb();
+
+            (*table)[idx] = next_frame.0
+                | crate::memory::vmem::PTE_VALID
+                | crate::memory::vmem::PTE_PAGE; // Table descriptor
+
+            table = (phys_map + next_frame.0) as *mut [u64; 512];
+        } else if entry & crate::memory::mmu::PTE_TABLE != 0 {
+            let next_phys = entry & !(PAGE_SIZE - 1);
+            table = (phys_map + next_phys) as *mut [u64; 512];
+        } else {
+            // Block entry at L0/L1/L2 — we can't split for now
+            println!("[elf] Block entry at L{} for VA {:#018x}", level, va);
+            return;
+        }
+    }
+
+    // Level 3 — write the page entry
+    let idx = ((va >> 12) & 0x1FF) as usize;
+    (*table)[idx] = pa | flags;
+    crate::arch::cpu::dsb();
+}
+
+/// Load an ELF binary from a byte slice into a new address space
+///
+/// Returns the entry point and TTBR0 for the new process.
+pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
+    if elf_data.len() < core::mem::size_of::<Elf64Ehdr>() {
+        return Err("ELF data too small for header");
+    }
+
+    // Parse the ELF header
+    let ehdr = unsafe {
+        &*(elf_data.as_ptr() as *const Elf64Ehdr)
+    };
+
+    if !verify_header(ehdr) {
+        return Err("Invalid ELF header");
+    }
+
+    println!("[elf] Valid ELF64 AArch64 executable");
+    println!("[elf] Entry point: {:#018x}", ehdr.e_entry);
+    println!("[elf] Program headers: {} (offset={:#x}, size={})",
+        ehdr.e_phnum, ehdr.e_phoff, ehdr.e_phentsize);
+
+    // Allocate a user page table
+    let ttbr0 = alloc_user_page_table().ok_or("Failed to allocate user page table")?;
+    println!("[elf] User TTBR0: {:#010x}", ttbr0.0);
+
+    let mut highest_addr: u64 = 0;
+
+    // Load each PT_LOAD segment
+    for i in 0..ehdr.e_phnum as usize {
+        let phdr_offset = ehdr.e_phoff as usize + i * ehdr.e_phentsize as usize;
+        if phdr_offset + core::mem::size_of::<Elf64Phdr>() > elf_data.len() {
+            println!("[elf] Program header {} out of bounds", i);
+            continue;
+        }
+
+        let phdr = unsafe {
+            &*(elf_data.as_ptr().add(phdr_offset) as *const Elf64Phdr)
+        };
+
+        if phdr.p_type != PT_LOAD {
+            continue;
+        }
+
+        println!("[elf] LOAD segment {}: vaddr={:#018x} filesz={:#x} memsz={:#x} flags={:#x}",
+            i, phdr.p_vaddr, phdr.p_filesz, phdr.p_memsz, phdr.p_flags);
+
+        if phdr.p_vaddr < USER_CODE_START || phdr.p_vaddr >= USER_ADDR_LIMIT {
+            println!("[elf] Segment VA {:#018x} out of user range!", phdr.p_vaddr);
+            return Err("Segment VA out of user address range");
+        }
+
+        // Determine page flags
+        let flags = if phdr.p_flags & PF_X != 0 {
+            PTE_USER_CODE
+        } else if phdr.p_flags & PF_W != 0 {
+            PTE_USER_DATA
+        } else {
+            PTE_USER_RO
+        };
+
+        // Map and populate the segment
+        let segment_end = phdr.p_vaddr + phdr.p_memsz;
+        let va_start = phdr.p_vaddr & !(PAGE_SIZE - 1);
+        let va_end = (segment_end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+
+        let mut va = va_start;
+        let mut file_offset = phdr.p_offset;
+
+        while va < va_end {
+            // Allocate a physical frame
+            let frame = frame_alloc::allocate_frame().ok_or("Out of frames for ELF loading")?;
+
+            // Map the page in user space
+            unsafe {
+                map_user_page(ttbr0.0, va, frame.0, flags);
+            }
+
+            // Copy data from ELF file into the page
+            let page_virt = phys_to_virt(PhysAddr::new(frame.0)).0;
+            let page_ptr = page_virt as *mut u8;
+
+            // Zero the page first (for BSS)
+            unsafe {
+                for b in 0..PAGE_SIZE as usize {
+                    core::ptr::write_volatile(page_ptr.add(b), 0);
+                }
+            }
+
+            // Copy file data into this page
+            let page_offset = (va - phdr.p_vaddr) as usize;
+            let copy_start = file_offset as usize;
+            let copy_in_page = if page_offset < phdr.p_filesz as usize {
+                let remaining = phdr.p_filesz as usize - page_offset;
+                let avail = PAGE_SIZE as usize;
+                let n = remaining.min(avail);
+                if copy_start + n <= elf_data.len() {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            elf_data.as_ptr().add(copy_start),
+                            page_ptr,
+                            n,
+                        );
+                    }
+                    n
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
+            file_offset += copy_in_page as u64;
+            va += PAGE_SIZE;
+        }
+
+        if segment_end > highest_addr {
+            highest_addr = segment_end;
+        }
+    }
+
+    // Map the user stack
+    let stack_base = USER_STACK_TOP - USER_STACK_SIZE;
+    for page_off in (0..USER_STACK_SIZE).step_by(PAGE_SIZE as usize) {
+        let va = stack_base + page_off as u64;
+        let frame = frame_alloc::allocate_frame().ok_or("Out of frames for user stack")?;
+        unsafe {
+            map_user_page(ttbr0.0, va, frame.0, PTE_USER_DATA);
+        }
+    }
+    println!("[elf] User stack mapped: {:#018x}..{:#018x}", stack_base, USER_STACK_TOP);
+
+    // Align brk_base to page boundary
+    let brk_base = (highest_addr + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+
+    println!("[elf] Load complete! entry={:#018x} ttbr0={:#010x} brk={:#018x}",
+        ehdr.e_entry, ttbr0.0, brk_base);
+
+    Ok(LoadResult {
+        entry_point: ehdr.e_entry,
+        ttbr0_phys: ttbr0.0,
+        brk_base,
+    })
+}
+
+/// Build a simple "hello world" user program as a static byte array
+///
+/// This creates a tiny ELF binary that writes "Hello from EL0!\n" to UART
+/// via the write syscall. Used for testing EL0 transitions without
+/// needing an external toolchain or heap allocation.
+pub fn build_hello_elf() -> &'static [u8] {
+    // Minimal AArch64 code:
+    //   mov x8, #1      (SYS_WRITE)
+    //   mov x0, #1      (stdout)
+    //   adr x1, msg     (buffer pointer)
+    //   mov x2, #16     (length)
+    //   svc #0          (syscall)
+    //   mov x8, #0      (SYS_EXIT)
+    //   mov x0, #0      (exit code 0)
+    //   svc #0          (syscall)
+    // msg: .ascii "Hello from EL0!\n\0"
+    //
+    // We pre-construct a minimal ELF binary as a static array.
+    // This avoids needing alloc::vec::Vec in a no_std kernel.
+
+    // Hand-crafted ELF64 header + program header + AArch64 code + "Hello from EL0!\n"
+    // Total size: 64 (ehdr) + 56 (phdr) + 32 (code) + 17 (msg) = 169 bytes
+    static ELF: &[u8] = &[
+        // === ELF Header (64 bytes) ===
+        0x7f, 0x45, 0x4c, 0x46, // e_ident[0..4]: magic
+        0x02, 0x01, 0x01, 0x00, // class=64, data=LE, version=1, osabi=0
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // padding
+        0x02, 0x00, // e_type = ET_EXEC
+        0xb7, 0x00, // e_machine = EM_AARCH64 (183)
+        0x01, 0x00, 0x00, 0x00, // e_version = 1
+        0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, // e_entry = 0x10000000
+        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_phoff = 64
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_shoff = 0
+        0x00, 0x00, 0x00, 0x00, // e_flags = 0
+        0x40, 0x00, // e_ehsize = 64
+        0x38, 0x00, // e_phentsize = 56
+        0x01, 0x00, // e_phnum = 1
+        0x00, 0x00, // e_shentsize = 0
+        0x00, 0x00, // e_shnum = 0
+        0x00, 0x00, // e_shstrndx = 0
+
+        // === Program Header (56 bytes) ===
+        0x01, 0x00, 0x00, 0x00, // p_type = PT_LOAD
+        0x05, 0x00, 0x00, 0x00, // p_flags = PF_R | PF_X
+        0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_offset = 120
+        0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, // p_vaddr = 0x10000000
+        0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, // p_paddr = 0x10000000
+        0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_filesz = 49
+        0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_memsz = 49
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, // p_align = 0x10000
+
+        // === Code (32 bytes = 8 instructions) ===
+        0x28, 0x00, 0x80, 0xD2, // mov x8, #1
+        0x20, 0x00, 0x80, 0xD2, // mov x0, #1
+        0xA1, 0x00, 0x00, 0x58, // ldr x1, +8 (PC-relative to msg)
+        0x02, 0x02, 0x80, 0xD2, // mov x2, #16
+        0x01, 0x00, 0x00, 0xD4, // svc #0
+        0x08, 0x00, 0x80, 0xD2, // mov x8, #0
+        0x00, 0x00, 0x80, 0xD2, // mov x0, #0
+        0x01, 0x00, 0x00, 0xD4, // svc #0
+
+        // === Message (17 bytes) ===
+        0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x66, 0x72, // "Hello fr"
+        0x6f, 0x6d, 0x20, 0x45, 0x4c, 0x30, 0x21, 0x0a, // "om EL0!\n"
+        0x00, // null terminator
+    ];
+
+    ELF
+}
+
+/// Build a hello-world ELF binary into a provided mutable slice
+/// Returns the number of bytes written.
+pub fn build_hello_elf_into(buf: &mut [u8]) -> usize {
+    // Code: AArch64 instructions
+    let code: [u32; 8] = [
+        0xD2800028, // mov x8, #1       (SYS_WRITE)
+        0xD2800020, // mov x0, #1       (stdout fd)
+        0x580000A1, // ldr x1, msg      (PC-relative load)
+        0xD2800202, // mov x2, #16      (length)
+        0xD4000001, // svc #0
+        0xD2800008, // mov x8, #0       (SYS_EXIT)
+        0xD2800000, // mov x0, #0       (exit(0))
+        0xD4000001, // svc #0
+    ];
+
+    let msg = b"Hello from EL0!\n\0";
+
+    let ehdr_size = core::mem::size_of::<Elf64Ehdr>();
+    let phdr_size = core::mem::size_of::<Elf64Phdr>();
+    let load_offset = ehdr_size + phdr_size;
+    let code_size = code.len() * 4;
+    let total = load_offset + code_size + msg.len();
+
+    if buf.len() < total {
+        return 0;
+    }
+
+    // Build ELF header
+    let mut ehdr = Elf64Ehdr {
+        e_ident: [0; 16],
+        e_type: ET_EXEC,
+        e_machine: EM_AARCH64,
+        e_version: 1,
+        e_entry: USER_CODE_START,
+        e_phoff: ehdr_size as u64,
+        e_shoff: 0,
+        e_flags: 0,
+        e_ehsize: ehdr_size as u16,
+        e_phentsize: phdr_size as u16,
+        e_phnum: 1,
+        e_shentsize: 0,
+        e_shnum: 0,
+        e_shstrndx: 0,
+    };
+    ehdr.e_ident[0] = 0x7f;
+    ehdr.e_ident[1] = b'E';
+    ehdr.e_ident[2] = b'L';
+    ehdr.e_ident[3] = b'F';
+    ehdr.e_ident[4] = ELFCLASS64;
+    ehdr.e_ident[5] = ELFDATA2LSB;
+    ehdr.e_ident[6] = 1;
+
+    // Program header
+    let phdr = Elf64Phdr {
+        p_type: PT_LOAD,
+        p_flags: PF_R | PF_X,
+        p_offset: load_offset as u64,
+        p_vaddr: USER_CODE_START,
+        p_paddr: USER_CODE_START,
+        p_filesz: (code_size + msg.len()) as u64,
+        p_memsz: (code_size + msg.len()) as u64,
+        p_align: PAGE_SIZE,
+    };
+
+    // Write ELF header
+    unsafe {
+        let ehdr_bytes = core::slice::from_raw_parts(
+            &ehdr as *const Elf64Ehdr as *const u8,
+            ehdr_size,
+        );
+        buf[..ehdr_size].copy_from_slice(ehdr_bytes);
+    }
+
+    // Write program header
+    unsafe {
+        let phdr_bytes = core::slice::from_raw_parts(
+            &phdr as *const Elf64Phdr as *const u8,
+            phdr_size,
+        );
+        buf[ehdr_size..load_offset].copy_from_slice(phdr_bytes);
+    }
+
+    // Write code
+    let code_bytes = unsafe {
+        core::slice::from_raw_parts(code.as_ptr() as *const u8, code_size)
+    };
+    buf[load_offset..load_offset + code_size].copy_from_slice(code_bytes);
+
+    // Write message
+    buf[load_offset + code_size..total].copy_from_slice(msg);
+
+    total
+}

@@ -1,0 +1,319 @@
+//! Framebuffer driver — BCM2835 mailbox property channel for display setup
+
+use crate::println;
+
+/// Mailbox base address (mapped via BCM2712 peripheral base)
+const MAILBOX_BASE: u64 = 0x10_7C00_B880;
+const MAILBOX_READ: u64 = MAILBOX_BASE;
+const MAILBOX_STATUS: u64 = MAILBOX_BASE + 0x18;
+const MAILBOX_WRITE: u64 = MAILBOX_BASE + 0x20;
+
+/// Mailbox property channel (channel 8)
+const CHANNEL_PROPERTY: u32 = 8;
+
+/// Mailbox status flags
+const MAILBOX_FULL: u32 = 0x80000000;
+const MAILBOX_EMPTY: u32 = 0x40000000;
+
+/// Property tag IDs
+const TAG_ALLOCATE_BUFFER: u32 = 0x00040001;
+const TAG_SET_PHYSICAL_SIZE: u32 = 0x00048003;
+const TAG_SET_VIRTUAL_SIZE: u32 = 0x00048004;
+const TAG_SET_DEPTH: u32 = 0x00048005;
+const TAG_GET_PHYSICAL_SIZE: u32 = 0x00040003;
+const TAG_GET_VIRTUAL_SIZE: u32 = 0x00040004;
+const TAG_GET_DEPTH: u32 = 0x00040005;
+const TAG_GET_PITCH: u32 = 0x00040008;
+const TAG_RELEASE_BUFFER: u32 = 0x00048001;
+const TAG_END: u32 = 0x00000000;
+
+/// Property tag request code
+const CODE_REQUEST: u32 = 0x00000000;
+const CODE_RESPONSE_SUCCESS: u32 = 0x80000000;
+
+/// Framebuffer error types
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FbError {
+    MailboxTimeout,
+    InvalidResponse,
+    BufferAllocationFailed,
+    UnsupportedDepth,
+    ConfigurationFailed,
+}
+
+/// Framebuffer information
+#[derive(Debug, Clone, Copy)]
+pub struct FramebufferInfo {
+    pub base_addr: u64,
+    pub size: u64,
+    pub width: u32,
+    pub height: u32,
+    pub pitch: u32,
+    pub bpp: u32,
+}
+
+impl FramebufferInfo {
+    pub const fn empty() -> Self {
+        Self {
+            base_addr: 0,
+            size: 0,
+            width: 0,
+            height: 0,
+            pitch: 0,
+            bpp: 0,
+        }
+    }
+
+    /// Total pixels
+    pub fn total_pixels(&self) -> u32 {
+        self.width * self.height
+    }
+
+    /// Size in bytes
+    pub fn buffer_size(&self) -> u64 {
+        self.size
+    }
+}
+
+/// Property message buffer — 256 u32 words (1024 bytes, 16-byte aligned)
+const PROP_BUF_SIZE: usize = 256;
+
+/// Global property message buffer (16-byte aligned)
+#[repr(C, align(16))]
+struct PropertyBuffer {
+    data: [u32; PROP_BUF_SIZE],
+}
+
+static mut PROP_BUFFER: PropertyBuffer = PropertyBuffer {
+    data: [0u32; PROP_BUF_SIZE],
+};
+
+/// Read from mailbox
+unsafe fn mailbox_read() -> u32 {
+    let mut count = 0u32;
+    loop {
+        // Wait until there's data
+        while core::ptr::read_volatile(MAILBOX_STATUS as *mut u32) & MAILBOX_EMPTY != 0 {
+            count += 1;
+            if count > 1_000_000 {
+                return 0;
+            }
+            core::hint::spin_loop();
+        }
+
+        let value = core::ptr::read_volatile(MAILBOX_READ as *mut u32);
+
+        // Check it's from the property channel
+        if (value & 0xF) == CHANNEL_PROPERTY {
+            return value & !0xF;
+        }
+    }
+}
+
+/// Write to mailbox
+unsafe fn mailbox_write(value: u32) {
+    // Wait until we can write
+    let mut count = 0u32;
+    while core::ptr::read_volatile(MAILBOX_STATUS as *mut u32) & MAILBOX_FULL != 0 {
+        count += 1;
+        if count > 1_000_000 {
+            return;
+        }
+        core::hint::spin_loop();
+    }
+
+    core::ptr::write_volatile(MAILBOX_WRITE as *mut u32, value);
+}
+
+/// Send a property message and wait for response
+unsafe fn send_property_message(len: usize) -> Result<(), FbError> {
+    let buf_addr = &PROP_BUFFER as *const PropertyBuffer as u32;
+
+    // Send the bus address (convert virtual to bus address for mailbox)
+    // On RPi, peripheral bus address = virtual address - 0x10_0000_0000 + 0x0C000000
+    // Simplified: assume the buffer is in a region the GPU can access
+    let bus_addr = buf_addr & 0x3FFFFFFF; // Convert to bus address range
+
+    mailbox_write(bus_addr | CHANNEL_PROPERTY);
+
+    // Wait for response
+    let response_addr = mailbox_read();
+    if response_addr == 0 {
+        return Err(FbError::MailboxTimeout);
+    }
+
+    // Check response code
+    if PROP_BUFFER.data[1] != CODE_RESPONSE_SUCCESS {
+        return Err(FbError::InvalidResponse);
+    }
+
+    Ok(())
+}
+
+/// Initialize the framebuffer via mailbox property channel
+pub fn init(width: u32, height: u32, bpp: u32) -> Result<FramebufferInfo, FbError> {
+    unsafe {
+        let buf = &mut PROP_BUFFER.data;
+
+        // Build property message
+        let mut idx = 0usize;
+
+        // Header: size, code, tags...
+        // We'll fill the size at the end
+        let size_pos = idx;
+        idx += 1; // size placeholder
+        buf[idx] = CODE_REQUEST;
+        idx += 1;
+
+        // Tag: Set physical size
+        buf[idx] = TAG_SET_PHYSICAL_SIZE;
+        idx += 1;
+        buf[idx] = 8; // value size
+        idx += 1;
+        buf[idx] = 0; // request
+        idx += 1;
+        buf[idx] = width;
+        idx += 1;
+        buf[idx] = height;
+        idx += 1;
+
+        // Tag: Set virtual size
+        buf[idx] = TAG_SET_VIRTUAL_SIZE;
+        idx += 1;
+        buf[idx] = 8;
+        idx += 1;
+        buf[idx] = 0;
+        idx += 1;
+        buf[idx] = width;
+        idx += 1;
+        buf[idx] = height;
+        idx += 1;
+
+        // Tag: Set depth
+        buf[idx] = TAG_SET_DEPTH;
+        idx += 1;
+        buf[idx] = 4;
+        idx += 1;
+        buf[idx] = 0;
+        idx += 1;
+        buf[idx] = bpp;
+        idx += 1;
+
+        // Tag: Allocate buffer
+        buf[idx] = TAG_ALLOCATE_BUFFER;
+        idx += 1;
+        buf[idx] = 4; // value size
+        idx += 1;
+        buf[idx] = 0; // request
+        idx += 1;
+        buf[idx] = 16; // alignment = 16
+        idx += 1;
+
+        // Tag: Get pitch
+        buf[idx] = TAG_GET_PITCH;
+        idx += 1;
+        buf[idx] = 4;
+        idx += 1;
+        buf[idx] = 0;
+        idx += 1;
+        buf[idx] = 0; // placeholder
+        idx += 1;
+
+        // End tag
+        buf[idx] = TAG_END;
+        idx += 1;
+
+        // Fill in total size
+        buf[size_pos] = (idx * 4) as u32;
+
+        // Send message
+        send_property_message(idx)?;
+
+        // Parse response — find the tags we sent
+        let mut fb_addr = 0u64;
+        let mut fb_size = 0u64;
+        let mut pitch = 0u32;
+        let mut resp_width = width;
+        let mut resp_height = height;
+        let mut resp_bpp = bpp;
+
+        // Walk through tags in response
+        let mut tag_idx = 2; // Skip header
+        while buf[tag_idx] != TAG_END && tag_idx < PROP_BUF_SIZE - 4 {
+            let tag = buf[tag_idx];
+            let _val_size = buf[tag_idx + 1];
+            let _code = buf[tag_idx + 2];
+
+            match tag {
+                TAG_SET_PHYSICAL_SIZE | TAG_SET_VIRTUAL_SIZE => {
+                    resp_width = buf[tag_idx + 3];
+                    resp_height = buf[tag_idx + 4];
+                }
+                TAG_SET_DEPTH => {
+                    resp_bpp = buf[tag_idx + 3];
+                }
+                TAG_ALLOCATE_BUFFER => {
+                    // Response: alignment/result, then framebuffer address
+                    fb_addr = buf[tag_idx + 4] as u64;
+                    fb_size = buf[tag_idx + 5] as u64;
+                }
+                TAG_GET_PITCH => {
+                    pitch = buf[tag_idx + 3];
+                }
+                _ => {}
+            }
+
+            // Advance to next tag: header(3 words) + data (rounded up to 4 bytes)
+            let data_len = buf[tag_idx + 1] as usize;
+            let data_words = (data_len + 3) / 4;
+            tag_idx += 3 + data_words;
+        }
+
+        if fb_addr == 0 {
+            println!("[fb] Buffer allocation failed, trying fallback resolution");
+            return Err(FbError::BufferAllocationFailed);
+        }
+
+        let info = FramebufferInfo {
+            base_addr: fb_addr,
+            size: fb_size,
+            width: resp_width,
+            height: resp_height,
+            pitch: if pitch != 0 { pitch } else { resp_width * (resp_bpp / 8) },
+            bpp: resp_bpp,
+        };
+
+        println!(
+            "[fb] Framebuffer: {}x{} @ {}bpp, addr={:#010x}, size={}KB, pitch={}",
+            info.width, info.height, info.bpp,
+            info.base_addr, info.size / 1024, info.pitch
+        );
+
+        Ok(info)
+    }
+}
+
+/// Initialize with default settings (1920x1080 @ 32bpp, fallback to 640x480)
+pub fn init_default() -> Result<FramebufferInfo, FbError> {
+    // Try 1920x1080 first
+    match init(1920, 1080, 32) {
+        Ok(info) => Ok(info),
+        Err(_) => {
+            println!("[fb] 1920x1080 failed, trying 640x480");
+            init(640, 480, 32)
+        }
+    }
+}
+
+/// Global framebuffer info
+static mut FB_INFO: FramebufferInfo = FramebufferInfo::empty();
+
+/// Get the global framebuffer info
+pub fn get_info() -> FramebufferInfo {
+    unsafe { FB_INFO }
+}
+
+/// Store framebuffer info globally
+pub fn set_info(info: FramebufferInfo) {
+    unsafe { FB_INFO = info; }
+}

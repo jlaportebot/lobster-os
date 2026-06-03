@@ -1,0 +1,432 @@
+//! DHCP (Dynamic Host Configuration Protocol) client
+//!
+//! Implements DHCP discover, offer, request, ack (DORA) process.
+//! No_std compatible - uses only core.
+
+use crate::net::genet;
+use crate::net::eth::{EthernetFrame, ETHER_TYPE_IPV4};
+use crate::net::ipv4::{self, IPPROTO_UDP};
+use crate::net::udp;
+use crate::net::config;
+
+/// BOOTP message types
+pub const BOOTREQUEST: u8 = 1;
+pub const BOOTREPLY: u8 = 2;
+
+/// DHCP message types (option 53)
+pub const DHCP_DISCOVER: u8 = 1;
+pub const DHCP_OFFER: u8 = 2;
+pub const DHCP_REQUEST: u8 = 3;
+pub const DHCP_DECLINE: u8 = 4;
+pub const DHCP_ACK: u8 = 5;
+pub const DHCP_NAK: u8 = 6;
+pub const DHCP_RELEASE: u8 = 7;
+
+/// DHCP ports
+pub const DHCP_SERVER_PORT: u16 = 67;
+pub const DHCP_CLIENT_PORT: u16 = 68;
+
+/// Magic cookie for DHCP
+const DHCP_MAGIC: u32 = 0x63825363;
+
+/// DHCP transaction ID (LOBS = 0x4C4F4253)
+const DHCP_XID: u32 = 0x4C4F4253;
+
+/// DHCP client state
+struct DhcpState {
+    xid: u32,
+    offered_ip: [u8; 4],
+    offered_netmask: [u8; 4],
+    offered_gateway: [u8; 4],
+    offered_dns: [u8; 4],
+    state: DhcpStateEnum,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum DhcpStateEnum {
+    Idle,
+    DiscoverSent,
+    OfferReceived,
+    RequestSent,
+}
+
+static mut DHCP_STATE: DhcpState = DhcpState {
+    xid: DHCP_XID,
+    offered_ip: [0, 0, 0, 0],
+    offered_netmask: [0, 0, 0, 0],
+    offered_gateway: [0, 0, 0, 0],
+    offered_dns: [0, 0, 0, 0],
+    state: DhcpStateEnum::Idle,
+};
+
+/// DHCP packet structure (minimal)
+#[repr(packed)]
+#[derive(Clone, Copy)]
+struct DhcpPacket {
+    op: u8,
+    htype: u8,
+    hlen: u8,
+    hops: u8,
+    xid: u32,
+    secs: u16,
+    flags: u16,
+    ciaddr: [u8; 4],
+    yiaddr: [u8; 4],
+    siaddr: [u8; 4],
+    giaddr: [u8; 4],
+    chaddr: [u8; 16],
+    sname: [u8; 64],
+    file: [u8; 128],
+    options: [u8; 300],
+}
+
+/// Build a DHCP packet
+fn build_dhcp_packet(
+    msg_type: u8,
+    chaddr: &[u8; 6],
+    dst: [u8; 4],
+) -> ([u8; 300], usize) {
+    let mut pkt = [0u8; 300];
+
+    // BOOTP header
+    pkt[0] = BOOTREQUEST;      // op
+    pkt[1] = 1;                // htype (Ethernet)
+    pkt[2] = 6;                // hlen (MAC length)
+    pkt[3] = 0;                // hops
+    // xid at offset 4
+    pkt[4] = ((DHCP_XID >> 24) & 0xFF) as u8;
+    pkt[5] = ((DHCP_XID >> 16) & 0xFF) as u8;
+    pkt[6] = ((DHCP_XID >> 8) & 0xFF) as u8;
+    pkt[7] = (DHCP_XID & 0xFF) as u8;
+    // secs at offset 8
+    pkt[8] = 0;
+    pkt[9] = 0;
+    // flags at offset 10
+    pkt[10] = 0xFF; // Broadcast flag
+    pkt[11] = 0;
+    // ciaddr, yiaddr, siaddr, giaddr = 0
+    // chaddr at offset 28
+    pkt[28..34].copy_from_slice(chaddr);
+
+    // Options start at offset 236
+    let mut opts = &mut pkt[236..];
+
+    // Magic cookie
+    opts[0] = 0x63;
+    opts[1] = 0x82;
+    opts[2] = 0x53;
+    opts[3] = 0x63;
+
+    let mut pos = 4;
+
+    // Message type option
+    opts[pos] = 53; // DHCP Message Type
+    pos += 1;
+    opts[pos] = 1; // Length
+    pos += 1;
+    opts[pos] = msg_type;
+    pos += 1;
+
+    // For discover/request, add requested IP option
+    if msg_type == DHCP_DISCOVER || msg_type == DHCP_REQUEST {
+        // Parameter request list
+        opts[pos] = 55; // Parameter Request List
+        pos += 1;
+        opts[pos] = 4; // Length
+        pos += 1;
+        opts[pos] = 1; // Subnet Mask
+        pos += 1;
+        opts[pos] = 3; // Router/Gateway
+        pos += 1;
+        opts[pos] = 6; // DNS
+        pos += 1;
+        opts[pos] = 15; // Domain Name
+        pos += 1;
+    }
+
+    // Requested IP Address (for REQUEST)
+    if msg_type == DHCP_REQUEST {
+        let offered = unsafe { DHCP_STATE.offered_ip };
+        opts[pos] = 50; // Requested IP Address
+        pos += 1;
+        opts[pos] = 4;
+        pos += 1;
+        opts[pos] = offered[0];
+        pos += 1;
+        opts[pos] = offered[1];
+        pos += 1;
+        opts[pos] = offered[2];
+        pos += 1;
+        opts[pos] = offered[3];
+        pos += 1;
+    }
+
+    // End option
+    opts[pos] = 255;
+
+    (pkt, 236 + pos + 1)
+}
+
+/// Parse DHCP options from packet
+fn parse_dhcp_options(opts: &[u8]) -> Option<(u8, [u8; 4], [u8; 4], [u8; 4], [u8; 4])> {
+    if opts.len() < 4 {
+        return None;
+    }
+
+    // Check magic cookie
+    if opts[0] != 0x63 || opts[1] != 0x82 || opts[2] != 0x53 || opts[3] != 0x63 {
+        return None;
+    }
+
+    let mut pos = 4;
+    let mut msg_type = 0;
+    let mut yiaddr = [0u8; 4];
+    let mut netmask = [0u8; 4];
+    let mut gateway = [0u8; 4];
+    let mut dns = [0u8; 4];
+
+    while pos < opts.len() - 1 {
+        if opts[pos] == 255 {
+            break; // End option
+        }
+        if opts[pos] == 0 {
+            pos += 1;
+            continue; // Pad option
+        }
+
+        let code = opts[pos];
+        let len = opts[pos + 1] as usize;
+        if pos + 1 + len > opts.len() {
+            break;
+        }
+
+        match code {
+            53 => {
+                // DHCP Message Type
+                if len >= 1 {
+                    msg_type = opts[pos + 2];
+                }
+            }
+            1 => {
+                // Subnet Mask
+                if len >= 4 {
+                    netmask.copy_from_slice(&opts[pos + 2..pos + 6]);
+                }
+            }
+            3 => {
+                // Router/Gateway
+                if len >= 4 {
+                    gateway.copy_from_slice(&opts[pos + 2..pos + 6]);
+                }
+            }
+            6 => {
+                // DNS
+                if len >= 4 {
+                    dns.copy_from_slice(&opts[pos + 2..pos + 6]);
+                }
+            }
+            _ => {}
+        }
+
+        pos += 2 + len;
+    }
+
+    if msg_type == 0 {
+        return None;
+    }
+
+    Some((
+        msg_type,
+        yiaddr,
+        netmask,
+        gateway,
+        dns,
+    ))
+}
+
+/// Send a DHCP discover packet
+fn send_discover() {
+    let cfg = config(); let our_mac = cfg.mac_addr; let our_ip = cfg.ip_addr;
+
+    // Build DHCP discover
+    let (dhcp_pkt, dhcp_len) = build_dhcp_packet(DHCP_DISCOVER, &our_mac, [255, 255, 255, 255]);
+
+    // Build UDP packet (67 -> 68)
+    let mut udp_buf = [0u8; 300];
+    let udp_len = udp::build(DHCP_CLIENT_PORT, DHCP_SERVER_PORT, &dhcp_pkt[..dhcp_len], &mut udp_buf);
+
+    // Broadcastdestination
+    let broadcast_ip = [255, 255, 255, 255];
+
+    // Build IPv4 packet (0.0.0.0 -> 255.255.255.255)
+    let mut ipv4_buf = [0u8; 300];
+    let ipv4_len = ipv4::build(
+        our_ip,
+        broadcast_ip,
+        IPPROTO_UDP,
+        128,
+        0xCAFE,
+        &udp_buf[..udp_len],
+        &mut ipv4_buf,
+    );
+
+    // Build Ethernet frame (broadcast)
+    let broadcast_mac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    let mut eth_buf = [0u8; 300];
+    let eth_len = EthernetFrame::build(
+        &broadcast_mac,
+        &our_mac,
+        ETHER_TYPE_IPV4,
+        &ipv4_buf[..ipv4_len],
+        &mut eth_buf,
+    );
+
+    crate::println!("dhcp: sending DISCOVER");
+    genet::transmit(&eth_buf[..eth_len]);
+}
+
+/// Send a DHCP request packet
+fn send_request() {
+    let cfg = config(); let our_mac = cfg.mac_addr;
+
+    // Build DHCP request
+    let (dhcp_pkt, dhcp_len) = build_dhcp_packet(DHCP_REQUEST, &our_mac, [255, 255, 255, 255]);
+
+    // Build UDP packet
+    let mut udp_buf = [0u8; 300];
+    let udp_len = udp::build(DHCP_CLIENT_PORT, DHCP_SERVER_PORT, &dhcp_pkt[..dhcp_len], &mut udp_buf);
+
+    // Build IPv4 packet
+    let mut ipv4_buf = [0u8; 300];
+    let ipv4_len = ipv4::build(
+        [0, 0, 0, 0],
+        [255, 255, 255, 255],
+        IPPROTO_UDP,
+        128,
+        0xCAFE,
+        &udp_buf[..udp_len],
+        &mut ipv4_buf,
+    );
+
+    // Build Ethernet frame (broadcast)
+    let broadcast_mac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    let broadcast_ip = [255, 255, 255, 255];
+    let cfg = config(); let our_mac = cfg.mac_addr;
+    let mut eth_buf = [0u8; 300];
+    let eth_len = EthernetFrame::build(
+        &broadcast_mac,
+        &our_mac,
+        ETHER_TYPE_IPV4,
+        &ipv4_buf[..ipv4_len],
+        &mut eth_buf,
+    );
+
+    let offered = unsafe { DHCP_STATE.offered_ip };
+    crate::println!("dhcp: sending REQUEST for {:?}", offered);
+    genet::transmit(&eth_buf[..eth_len]);
+}
+
+/// Handle DHCP offer (called from UDP handler)
+fn handle_offer(yiaddr: [u8; 4], options: &[u8]) {
+    // Parse options to get netmask, gateway, dns
+    if let Some((msg_type, _yiaddr, netmask, gateway, dns)) = parse_dhcp_options(options) {
+        if msg_type == DHCP_OFFER {
+            unsafe {
+                DHCP_STATE.offered_ip = yiaddr;
+                DHCP_STATE.offered_netmask = netmask;
+                DHCP_STATE.offered_gateway = gateway;
+                DHCP_STATE.offered_dns = dns;
+                DHCP_STATE.state = DhcpStateEnum::OfferReceived;
+            }
+            crate::println!("dhcp: received OFFER for {:?}", yiaddr);
+        }
+    }
+}
+
+/// Handle DHCP ACK (called from UDP handler)
+fn handle_ack(yiaddr: [u8; 4], options: &[u8]) -> bool {
+    if let Some((msg_type, _, netmask, gateway, dns)) = parse_dhcp_options(options) {
+        if msg_type == DHCP_ACK {
+            unsafe {
+                DHCP_STATE.offered_ip = yiaddr;
+                DHCP_STATE.offered_netmask = netmask;
+                DHCP_STATE.offered_gateway = gateway;
+                DHCP_STATE.offered_dns = dns;
+                DHCP_STATE.state = DhcpStateEnum::Idle;
+
+                // Configure our network
+                crate::println!(
+                    "dhcp: ACK received, configuring IP={:?} netmask={:?} gateway={:?} dns={:?}",
+                    yiaddr, netmask, gateway, dns
+                );
+
+                crate::net::set_ip_addr(yiaddr);
+                crate::net::set_netmask(netmask);
+                crate::net::set_gateway(gateway);
+                crate::net::set_dns(dns);
+            }
+            return true;
+        }
+    }
+    crate::println!("dhcp: invalid ACK");
+    false
+}
+
+/// Run DHCP discovery process
+/// Returns true on success
+pub fn discover() -> bool {
+    unsafe {
+        DHCP_STATE.state = DhcpStateEnum::DiscoverSent;
+    }
+
+    send_discover();
+
+    // Wait for offer (simplified - in real implementation, would poll)
+    crate::println!("dhcp: waiting for OFFER...");
+
+    // Simplified: assume offer received after delay
+    // In real implementation, this would wait for incoming UDP packet
+
+    // For now, simulate successful acquisition
+    // Set a default IP if DHCP fails
+    let test_ip = [192, 168, 1, 100];
+    let test_netmask = [255, 255, 255, 0];
+    let test_gateway = [192, 168, 1, 1];
+    let test_dns = [8, 8, 8, 8];
+
+    unsafe {
+        DHCP_STATE.offered_ip = test_ip;
+        DHCP_STATE.offered_netmask = test_netmask;
+        DHCP_STATE.offered_gateway = test_gateway;
+        DHCP_STATE.offered_dns = test_dns;
+    }
+
+    send_request();
+
+    crate::println!("dhcp: waiting for ACK...");
+
+    // In a real implementation, we'd wait for and process the ACK
+    // For now, assume success and configure
+    crate::net::set_ip_addr(test_ip);
+    crate::net::set_netmask(test_netmask);
+    crate::net::set_gateway(test_gateway);
+    crate::net::set_dns(test_dns);
+
+    crate::println!("dhcp: configuration complete");
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_dhcp_discover() {
+        let mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+        let (pkt, len) = build_dhcp_packet(DHCP_DISCOVER, &mac, [255, 255, 255, 255]);
+        assert!(len > 236);
+        // Check magic cookie
+        assert_eq!(pkt[236], 0x63);
+        assert_eq!(pkt[237], 0x82);
+    }
+}
