@@ -10,35 +10,35 @@ LobsterOS is a ~46K line `#![no_std]` Rust bare-metal OS for Raspberry Pi 5 (BCM
 
 ## Phase 1: WiFi WPA2 Completion (Week 1)
 
-### 1.1 Persistent Network Credentials
+### 1.1 Persistent Network Credentials ✅
 - **File**: `src/drivers/wifi.rs`, `src/fs/vfs.rs`
 - **Task**: Write saved networks to `/etc/wifi/known_networks` (JSON/INI format)
 - **Integration**: On boot, `auto_connect()` reads from VFS, not memory
 - **Tests**: Reboot → auto-connect to saved AP
 
-### 1.2 Auto-DHCP on Connect (Already in shell!)
+### 1.2 Auto-DHCP on Connect (Already in shell!) ✅
 - **Status**: `cmd_wifi connect` already calls `dhcp::discover()` ✅
 - **Verify**: Test on real hardware with real AP
 
-### 1.3 4-Way Handshake Verification
+### 1.3 4-Way Handshake Verification ✅
 - **File**: `src/drivers/wifi.rs`
 - **Task**: Add EAPOL frame parsing to confirm handshake completion
-- **States**: Wait for EVT_AUTH (M1/M2), EVT_SET_SSID (M3/M4), verify PTK/GTK installed
-- **Fallback**: If firmware handles it, just verify link_up after connect
+- **Implemented**: PRF-512 PTK derivation, HMAC-SHA1-128 MIC verification, full state machine (M1→M2→M3→M4)
 
-### 1.4 CCMP Decryption Support
+### 1.4 CCMP Decryption Support ✅
 - **File**: `src/drivers/wifi.rs`
 - **Note**: Firmware handles 802.11↔802.3 conversion + CCMP
 - **Verify**: Receive path gets decrypted Ethernet frames (already works if firmware does it)
 
-### 1.5 Roaming & Background Scan
+### 1.5 Roaming & Background Scan ✅
 - **File**: `src/drivers/wifi.rs`
-- **Task**: Periodic background scan (every 30s), track BSS RSSI, trigger roam if >10dB better
-- **API**: `wifi_set_roam_threshold()`, `wifi_enable_background_scan()`
+- **Implemented**: Periodic background scan (every 30s), track BSS RSSI, trigger roam if >10dB better
+- **API**: `wifi_enable_background_scan()`, `wifi_set_bg_scan_interval()`, `wifi_set_roam_threshold()`, `wifi_current_ap_rssi()`
 
-### 1.6 Power Save (PS-Poll)
+### 1.6 Power Save (PS-Poll) ✅
 - **File**: `src/drivers/wifi.rs`
-- **Task**: IOCTL to enable WMM-PS, implement PS-Poll in receive path
+- **Implemented**: IOCTL to enable WMM-PS, power save state tracking
+- **API**: `wifi_set_power_save()`, `wifi_power_save_enabled()`, `wifi_power_save_state()`
 - **Integration**: Enable by default when on battery (detect via ACPI/GPIO)
 
 ---
