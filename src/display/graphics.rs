@@ -1,8 +1,8 @@
 //! 2D graphics primitives for the framebuffer
 
-use super::fb::FramebufferInfo;
 use super::console::FONT;
-use super::console::{CHAR_WIDTH, CHAR_HEIGHT};
+use super::console::{CHAR_HEIGHT, CHAR_WIDTH};
+use super::fb::FramebufferInfo;
 
 /// Draw a single pixel
 pub fn draw_pixel(fb: &FramebufferInfo, x: u32, y: u32, color: u32) {
@@ -157,14 +157,7 @@ pub fn draw_bitmap(
 }
 
 /// Blit a pixel buffer to the framebuffer
-pub fn blit(
-    fb: &FramebufferInfo,
-    x: u32,
-    y: u32,
-    src: &[u32],
-    src_w: u32,
-    src_h: u32,
-) {
+pub fn blit(fb: &FramebufferInfo, x: u32, y: u32, src: &[u32], src_w: u32, src_h: u32) {
     for row in 0..src_h {
         let py = y + row;
         if py >= fb.height {
@@ -194,7 +187,11 @@ pub fn draw_text(fb: &FramebufferInfo, x: u32, y: u32, text: &str, fg: u32, bg: 
             for row in 0..CHAR_HEIGHT {
                 let row_bits = glyph[row as usize];
                 for col in 0..CHAR_WIDTH {
-                    let color = if (row_bits >> (7 - col)) & 1 != 0 { fg } else { bg };
+                    let color = if (row_bits >> (7 - col)) & 1 != 0 {
+                        fg
+                    } else {
+                        bg
+                    };
                     draw_pixel(fb, cx + col, y + row, color);
                 }
             }

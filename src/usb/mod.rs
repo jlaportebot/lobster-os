@@ -6,8 +6,8 @@
 //! - xhci: xHCI host controller driver (command/event rings, enumeration)
 //! - hid: HID boot-protocol driver (keyboard, mouse)
 
-pub mod xhci;
 pub mod hid;
+pub mod xhci;
 
 use crate::println;
 

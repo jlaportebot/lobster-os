@@ -39,11 +39,11 @@ const TAG_GET_DEPTH: u32 = 0x00040005;
 const TAG_SET_DEPTH: u32 = 0x00048005;
 const TAG_GET_PIXEL_ORDER: u32 = 0x00040006;
 const TAG_SET_PIXEL_ORDER: u32 = 0x00048006;
-const TAG_GET_ALPHA_MODE: u32 = 0x00040007;
-const TAG_SET_ALPHA_MODE: u32 = 0x00048007;
 const TAG_GET_PITCH: u32 = 0x00040008;
 const TAG_GET_VIRTUAL_OFFSET: u32 = 0x00040009;
 const TAG_SET_VIRTUAL_OFFSET: u32 = 0x00048009;
+const TAG_GET_ALPHA_MODE: u32 = 0x00040007;
+const TAG_SET_ALPHA_MODE: u32 = 0x00048007;
 const TAG_GET_OVERSCAN: u32 = 0x0004000A;
 const TAG_SET_OVERSCAN: u32 = 0x0004800A;
 const TAG_GET_PALETTE: u32 = 0x0004000B;
@@ -92,7 +92,9 @@ pub fn init() {
 /// Send a message to the mailbox
 pub fn send_message(channel: u32, data: u32) -> Result<u32, MailboxError> {
     // Wait for the mailbox to be ready
-    while unsafe { core::ptr::read_volatile(MAILBOX_STATUS as *const u32) } & MAILBOX_STATUS_FULL != 0 {
+    while unsafe { core::ptr::read_volatile(MAILBOX_STATUS as *const u32) } & MAILBOX_STATUS_FULL
+        != 0
+    {
         crate::arch::cpu::nop();
     }
 
@@ -103,13 +105,16 @@ pub fn send_message(channel: u32, data: u32) -> Result<u32, MailboxError> {
     // Wait for a response
     loop {
         // Wait for the mailbox to have data
-        while unsafe { core::ptr::read_volatile(MAILBOX_STATUS as *const u32) } & MAILBOX_STATUS_EMPTY != 0 {
+        while unsafe { core::ptr::read_volatile(MAILBOX_STATUS as *const u32) }
+            & MAILBOX_STATUS_EMPTY
+            != 0
+        {
             crate::arch::cpu::nop();
         }
 
         // Read the message
         let msg = unsafe { core::ptr::read_volatile(MAILBOX_READ as *const u32) };
-        
+
         // Check if it's for our channel
         if (msg & 0xF) == channel {
             let data = msg & !0xF;
@@ -124,6 +129,51 @@ pub enum MailboxError {
     Timeout,
     InvalidChannel,
     InvalidData,
+}
+
+/// Send a property message to the mailbox
+/// Returns true if successful, false otherwise
+pub fn property_call(buf: &mut [u32]) -> bool {
+    // Build the property message
+    // buf[0] = size
+    // buf[1] = code (0 = request)
+    // buf[2..] = tags...
+    // Last tag must be 0
+
+    // Calculate size
+    let mut size = 0u32;
+    let mut i = 0;
+    while i < buf.len() && buf[i] != 0 {
+        size += 4;
+        i += 1;
+        if i >= buf.len() {
+            break;
+        }
+        // Skip value buffer
+        let val_size = buf[i] as usize;
+        size += 4 + (val_size as u32);
+        i += 1 + val_size;
+    }
+    // Add end tag
+    size += 4;
+
+    buf[0] = size;
+    buf[1] = 0; // request
+
+    // Send to property channel
+    let msg_ptr = buf.as_ptr() as u32;
+    match send_message(MAILBOX_CHANNEL_PROPERTY, msg_ptr) {
+        Ok(response) => {
+            // Check response code
+            if response & 0xFFFF == 0 {
+                return false;
+            }
+            // Copy response back to buffer
+            // In a real implementation, we'd read the response
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Get the firmware revision

@@ -38,6 +38,7 @@ pub fn disable_irqs() {
 
 /// Enable FIQs
 #[inline]
+#[allow(dead_code)]
 pub fn enable_fiqs() {
     unsafe { core::arch::asm!("msr DAIFClr, #4") }
 }
@@ -50,6 +51,7 @@ pub fn wfe() {
 
 /// Send Event (wake other cores)
 #[inline]
+#[allow(dead_code)]
 pub fn sev() {
     unsafe { core::arch::asm!("sev") }
 }

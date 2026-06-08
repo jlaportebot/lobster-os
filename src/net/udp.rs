@@ -3,10 +3,10 @@
 //! Handles UDP packet parsing and building.
 //! No_std compatible - uses only core.
 
-use crate::net::genet;
-use crate::net::eth::{EthernetFrame, ETHER_TYPE_IPV4};
-use crate::net::ipv4::{self, Ipv4Header, IPPROTO_UDP};
 use crate::net::config;
+use crate::net::eth::{EthernetFrame, ETHER_TYPE_IPV4};
+use crate::net::genet;
+use crate::net::ipv4::{self, IPPROTO_UDP};
 
 /// UDP header length
 pub const HEADER_LEN: usize = 8;
@@ -23,10 +23,10 @@ pub struct UdpHeader {
 impl UdpHeader {
     /// Get header weight (for pseudo header checksum)
     pub fn header_weight(&self) -> u32 {
-        ((self.src_port as u32) << 8) | (self.src_port as u32 >> 8)
-            + ((self.dst_port as u32) << 8) | (self.dst_port as u32 >> 8)
+        (((self.src_port as u32) << 8) | (self.src_port as u32 >> 8))
+            + (((self.dst_port as u32) << 8) | (self.dst_port as u32 >> 8))
             + (self.length as u32)
-            + ((self.checksum as u32) << 8) | (self.checksum as u32 >> 8)
+            + (((self.checksum as u32) << 8) | (self.checksum as u32 >> 8))
     }
 }
 
@@ -120,14 +120,9 @@ pub fn compute_checksum(ip_src: [u8; 4], ip_dst: [u8; 4], udp_len: u16, data: &[
 }
 
 /// Build and send a UDP packet
-pub fn send_packet(
-    src_ip: [u8; 4],
-    dst_ip: [u8; 4],
-    src_port: u16,
-    dst_port: u16,
-    payload: &[u8],
-) {
-    let cfg = config(); let our_mac = cfg.mac_addr;
+pub fn send_packet(src_ip: [u8; 4], dst_ip: [u8; 4], src_port: u16, dst_port: u16, payload: &[u8]) {
+    let cfg = config();
+    let our_mac = cfg.mac_addr;
 
     // Resolve MAC address for destination
     let dst_mac = match crate::net::arp::resolve(dst_ip) {
@@ -169,7 +164,12 @@ pub fn send_packet(
         &mut eth_buf,
     );
 
-    crate::println!("udp: sending {} bytes to {:?}:{}", udp_len, dst_ip, dst_port);
+    crate::println!(
+        "udp: sending {} bytes to {:?}:{}",
+        udp_len,
+        dst_ip,
+        dst_port
+    );
     genet::transmit(&eth_buf[..eth_len]);
 }
 

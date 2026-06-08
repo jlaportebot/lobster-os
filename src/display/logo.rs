@@ -1,9 +1,9 @@
 //! Boot logo / splash screen — LobsterOS branding drawn to framebuffer
 
-use crate::println;
 use super::console;
-use super::fb::{self, FramebufferInfo};
+use super::fb::FramebufferInfo;
 use super::graphics;
+use crate::println;
 
 /// Color palette for the boot logo
 const LOBSTER_RED: u32 = 0xFFCC3300;

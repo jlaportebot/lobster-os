@@ -3,10 +3,10 @@
 //! Handles ICMP echo requests/replies.
 //! No_std compatible - uses only core.
 
-use crate::net::genet;
-use crate::net::eth::{EthernetFrame, ETHER_TYPE_IPV4};
-use crate::net::ipv4::{self, Ipv4Header, IPPROTO_ICMP};
 use crate::net::config;
+use crate::net::eth::{EthernetFrame, ETHER_TYPE_IPV4};
+use crate::net::genet;
+use crate::net::ipv4::{self, Ipv4Header, IPPROTO_ICMP};
 
 /// ICMP Type constants
 pub const ICMP_TYPE_ECHO_REPLY: u8 = 0;
@@ -55,7 +55,7 @@ pub fn handle_packet(ip_hdr: &Ipv4Header, data: &[u8]) {
     }
 
     let icmp_type = data[0];
-    let code = data[1];
+    let _code = data[1];
     let checksum = u16::from_be_bytes([data[2], data[3]]);
 
     // Verify checksum
@@ -77,12 +77,7 @@ pub fn handle_packet(ip_hdr: &Ipv4Header, data: &[u8]) {
         );
 
         // Send echo reply
-        send_echo_reply(
-            ip_hdr.src_addr,
-            identifier,
-            sequence,
-            &data[8..],
-        );
+        send_echo_reply(ip_hdr.src_addr, identifier, sequence, &data[8..]);
     } else if icmp_type == ICMP_TYPE_ECHO_REPLY {
         crate::println!("icmp: received echo reply");
     } else {
@@ -92,7 +87,9 @@ pub fn handle_packet(ip_hdr: &Ipv4Header, data: &[u8]) {
 
 /// Send an ICMP echo request
 pub fn send_echo_request(dst: [u8; 4], seq: u16) {
-    let cfg = config(); let our_mac = cfg.mac_addr; let our_ip = cfg.ip_addr;
+    let cfg = config();
+    let our_mac = cfg.mac_addr;
+    let our_ip = cfg.ip_addr;
 
     // Resolve MAC address for destination
     let dst_mac = match crate::net::arp::resolve(dst) {
@@ -130,7 +127,7 @@ pub fn send_echo_request(dst: [u8; 4], seq: u16) {
         our_ip,
         dst,
         IPPROTO_ICMP,
-        64, // TTL
+        64,     // TTL
         0x1234, // Identification
         &icmp_data,
         &mut ipv4_buf,
@@ -152,7 +149,9 @@ pub fn send_echo_request(dst: [u8; 4], seq: u16) {
 
 /// Send an ICMP echo reply
 fn send_echo_reply(dst: [u8; 4], identifier: u16, sequence: u16, payload: &[u8]) {
-    let cfg = config(); let our_mac = cfg.mac_addr; let our_ip = cfg.ip_addr;
+    let cfg = config();
+    let our_mac = cfg.mac_addr;
+    let our_ip = cfg.ip_addr;
 
     // Resolve MAC address for destination
     let dst_mac = match crate::net::arp::resolve(dst) {
@@ -189,7 +188,7 @@ fn send_echo_reply(dst: [u8; 4], identifier: u16, sequence: u16, payload: &[u8])
         our_ip,
         dst,
         IPPROTO_ICMP,
-        64, // TTL
+        64,     // TTL
         0x5678, // Identification
         &icmp_data[..8 + payload_len],
         &mut ipv4_buf,

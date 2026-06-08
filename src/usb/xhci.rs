@@ -8,19 +8,19 @@
 //!
 //! References: xHCI Specification 1.2, BCM2712 peripherals datasheet
 
-use core::ptr::{read_volatile, write_volatile};
-use crate::memory::{VirtAddr, PhysAddr, phys_to_virt, virt_to_phys, PAGE_SIZE};
-use crate::memory::frame_alloc::allocate_contiguous;
 use crate::arch::cpu::delay_us;
+use crate::memory::frame_alloc::allocate_contiguous;
+use crate::memory::{phys_to_virt, PhysAddr, VirtAddr, PAGE_SIZE};
 use crate::println;
+use core::ptr::{read_volatile, write_volatile};
 
 // ─── BCM2712 xHCI Memory Map ──────────────────────────────────────────
 
 /// xHCI controller base physical address
-const XHCI_BASE_PHYS: u64 = 0x10_0C5_0000;
+const XHCI_BASE_PHYS: u64 = 0x0001_00C5_0000;
 
 /// USB PHY base
-const USB_PHY_BASE_PHYS: u64 = 0x10_0C5_1000;
+const USB_PHY_BASE_PHYS: u64 = 0x0001_00C5_1000;
 
 /// xHCI IRQ — GIC SPI 48
 pub const XHCI_IRQ: u32 = 48;
@@ -61,11 +61,11 @@ const USBSTS_CNR: u32 = 1 << 11;
 // ─── Runtime Register Offsets ─────────────────────────────────────────
 
 const MFINDEX: u64 = 0x240;
-const IMAN: u64 = 0x244;     // Interrupter 0
-const IMOD: u64 = 0x248;     // Interrupter 0 modulation
-const ERSTSZ: u64 = 0x24C;   // Event Ring Segment Table Size
-const ERSTBA: u64 = 0x250;   // Event Ring Segment Table Base Address
-const ERDP: u64 = 0x258;     // Event Ring Dequeue Pointer
+const IMAN: u64 = 0x244; // Interrupter 0
+const IMOD: u64 = 0x248; // Interrupter 0 modulation
+const ERSTSZ: u64 = 0x24C; // Event Ring Segment Table Size
+const ERSTBA: u64 = 0x250; // Event Ring Segment Table Base Address
+const ERDP: u64 = 0x258; // Event Ring Dequeue Pointer
 
 // IMAN bits
 const IMAN_IP: u32 = 1 << 0;
@@ -127,10 +127,18 @@ pub struct Trb {
 }
 
 impl Trb {
-    pub const ZERO: Trb = Trb { param: 0, status: 0, ctrl: 0 };
+    pub const ZERO: Trb = Trb {
+        param: 0,
+        status: 0,
+        ctrl: 0,
+    };
 
     pub fn new(param: u64, status: u32, ctrl: u32) -> Self {
-        Trb { param, status, ctrl }
+        Trb {
+            param,
+            status,
+            ctrl,
+        }
     }
 
     pub fn trb_type(&self) -> u32 {
@@ -146,7 +154,11 @@ impl Trb {
     }
 
     pub fn set_cycle(&mut self, c: bool) {
-        if c { self.ctrl |= 1; } else { self.ctrl &= !1; }
+        if c {
+            self.ctrl |= 1;
+        } else {
+            self.ctrl &= !1;
+        }
     }
 
     pub fn toggle_cycle(&mut self) {
@@ -176,22 +188,22 @@ const PORTLI: u64 = 0x08;
 const PORTHUBPMSC: u64 = 0x0C;
 
 // PORTSC bits
-const PORTSC_CCS: u32 = 1 << 0;     // Current Connect Status
-const PORTSC_PED: u32 = 1 << 1;     // Port Enabled/Disabled
-const PORTSC_OCA: u32 = 1 << 3;     // Over-Current Active
-const PORTSC_PR: u32 = 1 << 4;      // Port Reset
+const PORTSC_CCS: u32 = 1 << 0; // Current Connect Status
+const PORTSC_PED: u32 = 1 << 1; // Port Enabled/Disabled
+const PORTSC_OCA: u32 = 1 << 3; // Over-Current Active
+const PORTSC_PR: u32 = 1 << 4; // Port Reset
 const PORTSC_PLS_MASK: u32 = 0xF << 5; // Port Link State
-const PORTSC_PP: u32 = 1 << 9;      // Port Power
+const PORTSC_PP: u32 = 1 << 9; // Port Power
 const PORTSC_SPEED_MASK: u32 = 0xF << 10;
-const PORTSC_LWS: u32 = 1 << 16;    // Link State Write Strobe
-const PORTSC_CSC: u32 = 1 << 17;    // Connect Status Change
-const PORTSC_PEC: u32 = 1 << 18;    // Port Enable/Disable Change
-const PORTSC_WRC: u32 = 1 << 19;    // Warm Port Reset Change
-const PORTSC_OCC: u32 = 1 << 20;    // Over-Current Change
-const PORTSC_PRC: u32 = 1 << 21;    // Port Reset Change
-const PORTSC_PLC: u32 = 1 << 22;    // Port Link State Change
-const PORTSC_CEC: u32 = 1 << 23;    // Port Config Error Change
-const PORTSC_CAS: u32 = 1 << 26;    // Cold Attach Status
+const PORTSC_LWS: u32 = 1 << 16; // Link State Write Strobe
+const PORTSC_CSC: u32 = 1 << 17; // Connect Status Change
+const PORTSC_PEC: u32 = 1 << 18; // Port Enable/Disable Change
+const PORTSC_WRC: u32 = 1 << 19; // Warm Port Reset Change
+const PORTSC_OCC: u32 = 1 << 20; // Over-Current Change
+const PORTSC_PRC: u32 = 1 << 21; // Port Reset Change
+const PORTSC_PLC: u32 = 1 << 22; // Port Link State Change
+const PORTSC_CEC: u32 = 1 << 23; // Port Config Error Change
+const PORTSC_CAS: u32 = 1 << 26; // Cold Attach Status
 
 // ─── Ring Buffer ───────────────────────────────────────────────────────
 
@@ -336,15 +348,15 @@ impl XferRing {
 // ─── Device Slot ───────────────────────────────────────────────────────
 
 /// Maximum number of device slots
-pub const MAX_SLOTS: usize = 32;
+pub const MAX_SLOTS: usize = 4;
 
 /// USB device speed
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum UsbSpeed {
     Unknown,
-    Full,    // 12 Mbps
-    High,    // 480 Mbps
-    Super,   // 5 Gbps
+    Full,  // 12 Mbps
+    High,  // 480 Mbps
+    Super, // 5 Gbps
 }
 
 /// USB device slot
@@ -430,15 +442,17 @@ pub fn init() -> Result<(), &'static str> {
     // Map xHCI base address
     // For now, assume identity mapping or use phys_to_virt
     let base = phys_to_virt(PhysAddr(XHCI_BASE_PHYS));
-    unsafe { XHCI_BASE = base; }
+    unsafe {
+        XHCI_BASE = base;
+    }
 
     println!("[xhci] Base address: {:#x}", base.0);
 
     // 1. Read capability registers
     let cap_len = reg32_read(base, CAPLENGTH) as u8;
     let hcsparams1 = reg32_read(base, HCSPARAMS1);
-    let hcsparams2 = reg32_read(base, HCSPARAMS2);
-    let hccparams1 = reg32_read(base, HCCPARAMS1);
+    let _hcsparams2 = reg32_read(base, HCSPARAMS2);
+    let _hccparams1 = reg32_read(base, HCCPARAMS1);
 
     let max_slots = (hcsparams1 & 0xFF) as u8;
     let max_intrs = ((hcsparams1 >> 8) & 0x7FF) as u16;
@@ -450,8 +464,10 @@ pub fn init() -> Result<(), &'static str> {
         XHCI_MAX_PORTS = max_ports;
     }
 
-    println!("[xhci] CAPLENGTH={}, MaxSlots={}, MaxIntrs={}, MaxPorts={}",
-             cap_len, max_slots, max_intrs, max_ports);
+    println!(
+        "[xhci] CAPLENGTH={}, MaxSlots={}, MaxIntrs={}, MaxPorts={}",
+        cap_len, max_slots, max_intrs, max_ports
+    );
 
     // 2. Ensure controller is halted
     let sts = reg32_read(base, USBSTS);
@@ -600,8 +616,10 @@ pub fn init() -> Result<(), &'static str> {
         return Err("xHCI: controller did not start");
     }
 
-    println!("[xhci] Controller running, command ring at {:#x}, event ring at {:#x}",
-             cmd_ring_phys.0, evt_ring_phys.0);
+    println!(
+        "[xhci] Controller running, command ring at {:#x}, event ring at {:#x}",
+        cmd_ring_phys.0, evt_ring_phys.0
+    );
 
     // 10. Power on all ports
     for port in 1..=max_ports {
@@ -786,8 +804,10 @@ fn enumerate_device(port: u8, speed: UsbSpeed) -> Result<(), &'static str> {
 
     // 6. Get device descriptor (VID/PID)
     // For now, mark as generic — HID driver will probe class
-    println!("[xhci] Device enumerated: slot={}, port={}, speed={:?}",
-             slot_id, port, speed);
+    println!(
+        "[xhci] Device enumerated: slot={}, port={}, speed={:?}",
+        slot_id, port, speed
+    );
 
     Ok(())
 }
@@ -844,9 +864,18 @@ pub fn handle_event() {
                         let portsc_off = 0x400 + (port as u64 * 0x10);
                         let portsc = reg32_read(base, portsc_off);
                         // Clear change bits
-                        reg32_write(base, portsc_off,
-                            portsc | PORTSC_CSC | PORTSC_PEC | PORTSC_WRC |
-                            PORTSC_OCC | PORTSC_PRC | PORTSC_PLC | PORTSC_CEC);
+                        reg32_write(
+                            base,
+                            portsc_off,
+                            portsc
+                                | PORTSC_CSC
+                                | PORTSC_PEC
+                                | PORTSC_WRC
+                                | PORTSC_OCC
+                                | PORTSC_PRC
+                                | PORTSC_PLC
+                                | PORTSC_CEC,
+                        );
                     }
                     TRB_TYPE_MFINDEX_WRAP => {
                         // Frame index wrapped — ignore
@@ -861,7 +890,9 @@ pub fn handle_event() {
     }
 
     // Update ERDP
-    unsafe { EVT_RING.update_erdp(base); }
+    unsafe {
+        EVT_RING.update_erdp(base);
+    }
 }
 
 // ─── Transfer ──────────────────────────────────────────────────────────
@@ -877,7 +908,9 @@ pub fn submit_transfer(slot_id: u8, ep_id: u8, trb: Trb) -> Result<(), &'static 
 
     // For EP0, use the slot's EP0 ring
     if ep_id == 0 {
-        unsafe { SLOTS[idx].ep0_ring.enqueue(trb); }
+        unsafe {
+            SLOTS[idx].ep0_ring.enqueue(trb);
+        }
         ring_doorbell(base, slot_id, 1); // EP0 doorbell target = 1
     }
 

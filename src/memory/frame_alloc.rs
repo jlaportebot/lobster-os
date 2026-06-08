@@ -8,8 +8,8 @@ use crate::memory::{PhysAddr, PAGE_SIZE};
 use crate::println;
 
 /// Maximum RAM we support (8 GB for RPi 5 8GB model)
-const MAX_RAM: u64 = 8 * 1024 * 1024 * 1024;
-const MAX_FRAMES: usize = (MAX_RAM / PAGE_SIZE as u64) as usize; // 2M frames
+const MAX_RAM: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_FRAMES: usize = (MAX_RAM / PAGE_SIZE) as usize; // 2M frames
 
 /// Bitmap: 1 bit per frame, 1 = allocated, 0 = free
 /// 2M bits = 256KB of bitmap storage
@@ -32,11 +32,16 @@ fn lock() {
     unsafe {
         crate::arch::cpu::disable_irqs();
         while core::sync::atomic::AtomicBool::compare_exchange(
-            &core::ptr::read_volatile(&FRAME_LOCK as *const bool as *const core::sync::atomic::AtomicBool),
-            false, true,
+            &core::ptr::read_volatile(
+                &FRAME_LOCK as *const bool as *const core::sync::atomic::AtomicBool,
+            ),
+            false,
+            true,
             core::sync::atomic::Ordering::Acquire,
             core::sync::atomic::Ordering::Relaxed,
-        ).is_err() {
+        )
+        .is_err()
+        {
             core::hint::spin_loop();
         }
     }
@@ -97,10 +102,22 @@ pub unsafe fn init(ram_size: u64, kernel_end_phys: u64) {
 
     let free_frames = TOTAL_FRAMES - ALLOCATED_FRAMES;
     let free_kb = free_frames as u64 * PAGE_SIZE / 1024;
-    println!("[frame-alloc] {} total frames ({} MB RAM)", TOTAL_FRAMES, ram_size / (1024*1024));
-    println!("[frame-alloc] Kernel uses {} frames ({} KB)", ALLOCATED_FRAMES, ALLOCATED_FRAMES as u64 * PAGE_SIZE / 1024);
-    println!("[frame-alloc] {} free frames ({} KB / {} MB available)",
-             free_frames, free_kb, free_kb / 1024);
+    println!(
+        "[frame-alloc] {} total frames ({} MB RAM)",
+        TOTAL_FRAMES,
+        ram_size / (1024 * 1024)
+    );
+    println!(
+        "[frame-alloc] Kernel uses {} frames ({} KB)",
+        ALLOCATED_FRAMES,
+        ALLOCATED_FRAMES as u64 * PAGE_SIZE / 1024
+    );
+    println!(
+        "[frame-alloc] {} free frames ({} KB / {} MB available)",
+        free_frames,
+        free_kb,
+        free_kb / 1024
+    );
 }
 
 /// Allocate a single 4KB physical frame
@@ -140,8 +157,12 @@ pub fn allocate_contiguous(count: usize) -> Option<PhysAddr> {
 }
 
 unsafe fn allocate_contiguous_inner(count: usize) -> Option<PhysAddr> {
-    if count == 0 { return None; }
-    if count == 1 { return allocate_frame_inner(); }
+    if count == 0 {
+        return None;
+    }
+    if count == 1 {
+        return allocate_frame_inner();
+    }
 
     let mut run_start: usize = 0;
     let mut run_length: usize = 0;
@@ -152,7 +173,9 @@ unsafe fn allocate_contiguous_inner(count: usize) -> Option<PhysAddr> {
         let is_free = (FRAME_BITMAP[word] >> bit) & 1 == 0;
 
         if is_free {
-            if run_length == 0 { run_start = frame; }
+            if run_length == 0 {
+                run_start = frame;
+            }
             run_length += 1;
             if run_length == count {
                 // Mark all frames as allocated
@@ -195,7 +218,8 @@ unsafe fn deallocate_frame_inner(paddr: PhysAddr) {
 /// Get frame allocator statistics
 pub fn stats() -> (usize, usize, usize) {
     lock();
-    let (total, allocated, first_free) = unsafe { (TOTAL_FRAMES, ALLOCATED_FRAMES, FIRST_FREE_FRAME) };
+    let (total, allocated, first_free) =
+        unsafe { (TOTAL_FRAMES, ALLOCATED_FRAMES, FIRST_FREE_FRAME) };
     unlock();
     (total, allocated, first_free)
 }

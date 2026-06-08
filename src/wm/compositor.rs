@@ -7,16 +7,16 @@
 //! Optimization: dirty rectangles track which regions changed so we only
 //! repaint the affected areas.
 
-use crate::display::fb::{FramebufferInfo, get_info};
+use crate::display::fb::FramebufferInfo;
 use crate::display::graphics;
-use crate::display::console::{WHITE, BLACK};
 use crate::println;
+use alloc::vec::Vec;
 
 /// Maximum dirty rectangles per frame
-const MAX_DIRTY: usize = 32;
+const MAX_DIRTY: usize = 8;
 
 /// Maximum number of layers (windows) the compositor tracks
-const MAX_LAYERS: usize = 32;
+const MAX_LAYERS: usize = 8;
 
 // ─── Dirty Rectangle ──────────────────────────────────────────────────
 
@@ -31,7 +31,12 @@ pub struct DirtyRect {
 
 impl DirtyRect {
     pub const fn zero() -> Self {
-        DirtyRect { x: 0, y: 0, w: 0, h: 0 }
+        DirtyRect {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+        }
     }
 
     /// Check if this rect overlaps another
@@ -48,7 +53,12 @@ impl DirtyRect {
         let y = self.y.min(other.y);
         let r = (self.x + self.w).max(other.x + other.w);
         let b = (self.y + self.h).max(other.y + other.h);
-        DirtyRect { x, y, w: r - x, h: b - y }
+        DirtyRect {
+            x,
+            y,
+            w: r - x,
+            h: b - y,
+        }
     }
 }
 
@@ -71,157 +81,208 @@ pub struct Layer {
 impl Layer {
     pub const fn zero() -> Self {
         Layer {
-            id: 0, x: 0, y: 0, w: 0, h: 0,
-            z_order: 0, visible: false, has_alpha: false, opacity: 255,
+            id: 0,
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+            z_order: 0,
+            visible: false,
+            has_alpha: false,
+            opacity: 255,
         }
     }
 
     /// Get the bounding rect of this layer
     pub fn bounds(&self) -> DirtyRect {
-        DirtyRect { x: self.x, y: self.y, w: self.w, h: self.h }
+        DirtyRect {
+            x: self.x,
+            y: self.y,
+            w: self.w,
+            h: self.h,
+        }
     }
 }
 
 // ─── Compositor State ──────────────────────────────────────────────────
 
+use spin::Mutex;
+
+/// Wrapper for raw pointer to make it Send + Sync
+struct RawPtr(*mut u32);
+unsafe impl Send for RawPtr {}
+unsafe impl Sync for RawPtr {}
+
 /// Back buffer dimensions and pointer
-static mut BACK_BUF: *mut u32 = core::ptr::null_mut();
-static mut BACK_BUF_SIZE: usize = 0;
-static mut FB_INFO: FramebufferInfo = FramebufferInfo::empty();
+static BACK_BUF: Mutex<Option<RawPtr>> = Mutex::new(None);
+static BACK_BUF_SIZE: Mutex<usize> = Mutex::new(0);
+static FB_INFO: Mutex<Option<FramebufferInfo>> = Mutex::new(None);
 
 /// Dirty rectangle list
-static mut DIRTY_LIST: [DirtyRect; MAX_DIRTY] = [DirtyRect::zero(); MAX_DIRTY];
-static mut DIRTY_COUNT: usize = 0;
+static DIRTY_LIST: Mutex<[DirtyRect; MAX_DIRTY]> = Mutex::new([DirtyRect::zero(); MAX_DIRTY]);
+static DIRTY_COUNT: Mutex<usize> = Mutex::new(0);
 
 /// Layer list (sorted by z_order on each composite)
-static mut LAYERS: [Layer; MAX_LAYERS] = [Layer::zero(); MAX_LAYERS];
-static mut LAYER_COUNT: usize = 0;
+static LAYERS: Mutex<[Layer; MAX_LAYERS]> = Mutex::new([Layer::zero(); MAX_LAYERS]);
+static LAYER_COUNT: Mutex<usize> = Mutex::new(0);
 
 /// Full-screen dirty flag (set on init or resize)
-static mut FULL_REDRAW: bool = true;
+static FULL_REDRAW: Mutex<bool> = Mutex::new(true);
 
 // ─── Initialization ────────────────────────────────────────────────────
 
 /// Initialize the compositor
 pub fn init(fb: FramebufferInfo) {
-    unsafe {
-        FB_INFO = fb;
-        DIRTY_COUNT = 0;
-        LAYER_COUNT = 0;
-        FULL_REDRAW = true;
+    let mut fb_info = FB_INFO.lock();
+    *fb_info = Some(fb);
+    *DIRTY_COUNT.lock() = 0;
+    *LAYER_COUNT.lock() = 0;
+    *FULL_REDRAW.lock() = true;
 
-        // Allocate back buffer (same size as framebuffer)
-        let total_pixels = (fb.width * fb.height) as usize;
-        BACK_BUF_SIZE = total_pixels * 4;
+    // Allocate back buffer (same size as framebuffer)
+    let fb = FB_INFO.lock();
+    let fb = fb.as_ref().expect("FB_INFO not set");
+    let total_pixels = (fb.width * fb.height) as usize;
+    *BACK_BUF_SIZE.lock() = total_pixels * 4;
+    let back_buf_size = *BACK_BUF_SIZE.lock();
 
-        // Allocate from heap
-        let layout = core::alloc::Layout::from_size_align(BACK_BUF_SIZE, 16).unwrap();
-        let ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
-            if ptr.is_null() {
-                println!("[compositor] FATAL: cannot allocate back buffer ({} bytes)", BACK_BUF_SIZE);
-                return;
-            }
-            BACK_BUF = ptr as *mut u32;
-
-        // Clear back buffer to black
-        core::ptr::write_bytes(ptr, 0, BACK_BUF_SIZE);
-
-        println!("[compositor] Back buffer at {:#x} ({} KB)", ptr as u64, BACK_BUF_SIZE / 1024);
+    // Allocate from heap
+    let layout = core::alloc::Layout::from_size_align(back_buf_size, 16).unwrap();
+    let ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
+    if ptr.is_null() {
+        println!(
+            "[compositor] FATAL: cannot allocate back buffer ({} bytes)",
+            back_buf_size
+        );
+        return;
     }
+    *BACK_BUF.lock() = Some(RawPtr(ptr as *mut u32));
+
+    // Clear back buffer to black
+    unsafe {
+        core::ptr::write_bytes(ptr, 0, back_buf_size);
+    }
+
+    println!(
+        "[compositor] Back buffer at {:#x} ({} KB)",
+        ptr as u64,
+        back_buf_size / 1024
+    );
 }
 
-// ─── Layer Management ──────────────────────────────────────────────────
-
-/// Register a window as a compositor layer
+/// Add a new layer (window) to the compositor
 pub fn add_layer(id: u32, x: u32, y: u32, w: u32, h: u32, z_order: u32) {
-    unsafe {
-        if LAYER_COUNT >= MAX_LAYERS {
-            println!("[compositor] Layer table full, cannot add id={}", id);
-            return;
-        }
-        LAYERS[LAYER_COUNT] = Layer {
-            id, x, y, w, h, z_order, visible: true,
-            has_alpha: false, opacity: 255,
-        };
-        LAYER_COUNT += 1;
-        mark_dirty(DirtyRect { x, y, w, h });
+    let mut layers = LAYERS.lock();
+    let mut layer_count = LAYER_COUNT.lock();
+
+    if *layer_count >= MAX_LAYERS {
+        println!("[compositor] Layer table full, cannot add id={}", id);
+        return;
     }
+    layers[*layer_count] = Layer {
+        id,
+        x,
+        y,
+        w,
+        h,
+        z_order,
+        visible: true,
+        has_alpha: false,
+        opacity: 255,
+    };
+    *layer_count += 1;
+    drop(layers);
+    drop(layer_count);
+    mark_dirty(DirtyRect { x, y, w, h });
 }
 
 /// Remove a layer by window ID
 pub fn remove_layer(id: u32) {
-    unsafe {
-        let mut i = 0;
-        while i < LAYER_COUNT {
-            if LAYERS[i].id == id {
-                let bounds = LAYERS[i].bounds();
-                // Shift remaining layers down
-                for j in i..(LAYER_COUNT - 1) {
-                    LAYERS[j] = LAYERS[j + 1];
-                }
-                LAYER_COUNT -= 1;
-                mark_dirty(bounds);
-                return;
+    let mut layers = LAYERS.lock();
+    let mut layer_count = LAYER_COUNT.lock();
+
+    let mut i = 0;
+    while i < *layer_count {
+        if layers[i].id == id {
+            let bounds = layers[i].bounds();
+            // Shift remaining layers down
+            for j in i..(*layer_count - 1) {
+                layers[j] = layers[j + 1];
             }
-            i += 1;
+            *layer_count -= 1;
+            drop(layers);
+            drop(layer_count);
+            mark_dirty(bounds);
+            return;
         }
+        i += 1;
     }
 }
 
 /// Update a layer's position/size
 pub fn update_layer(id: u32, x: u32, y: u32, w: u32, h: u32) {
-    unsafe {
-        for i in 0..LAYER_COUNT {
-            if LAYERS[i].id == id {
-                let old_bounds = LAYERS[i].bounds();
-                LAYERS[i].x = x;
-                LAYERS[i].y = y;
-                LAYERS[i].w = w;
-                LAYERS[i].h = h;
-                let new_bounds = LAYERS[i].bounds();
-                mark_dirty(old_bounds.merge(&new_bounds));
-                return;
-            }
+    let mut layers = LAYERS.lock();
+    let layer_count = *LAYER_COUNT.lock();
+
+    for i in 0..layer_count {
+        if layers[i].id == id {
+            let old_bounds = layers[i].bounds();
+            layers[i].x = x;
+            layers[i].y = y;
+            layers[i].w = w;
+            layers[i].h = h;
+            let new_bounds = layers[i].bounds();
+            drop(layers);
+            mark_dirty(old_bounds.merge(&new_bounds));
+            return;
         }
     }
 }
 
 /// Update a layer's visibility
 pub fn set_layer_visible(id: u32, visible: bool) {
-    unsafe {
-        for i in 0..LAYER_COUNT {
-            if LAYERS[i].id == id {
-                LAYERS[i].visible = visible;
-                mark_dirty(LAYERS[i].bounds());
-                return;
-            }
+    let mut layers = LAYERS.lock();
+    let layer_count = *LAYER_COUNT.lock();
+
+    for i in 0..layer_count {
+        if layers[i].id == id {
+            layers[i].visible = visible;
+            let bounds = layers[i].bounds();
+            drop(layers);
+            mark_dirty(bounds);
+            return;
         }
     }
 }
 
 /// Update a layer's z-order (for raise/lower)
 pub fn set_layer_z(id: u32, z_order: u32) {
-    unsafe {
-        for i in 0..LAYER_COUNT {
-            if LAYERS[i].id == id {
-                LAYERS[i].z_order = z_order;
-                FULL_REDRAW = true; // Z-order change requires full redraw
-                return;
-            }
+    let mut layers = LAYERS.lock();
+    let layer_count = *LAYER_COUNT.lock();
+
+    for i in 0..layer_count {
+        if layers[i].id == id {
+            layers[i].z_order = z_order;
+            *FULL_REDRAW.lock() = true; // Z-order change requires full redraw
+            return;
         }
     }
 }
 
 /// Bring a layer to the top (highest z-order)
 pub fn raise_layer(id: u32) {
-    unsafe {
-        let max_z = LAYERS.iter().map(|l| l.z_order).max().unwrap_or(0);
-        for i in 0..LAYER_COUNT {
-            if LAYERS[i].id == id {
-                LAYERS[i].z_order = max_z + 1;
-                FULL_REDRAW = true;
-                return;
-            }
+    let mut layers = LAYERS.lock();
+    let layer_count = *LAYER_COUNT.lock();
+
+    let max_z = (0..layer_count)
+        .map(|i| layers[i].z_order)
+        .max()
+        .unwrap_or(0);
+    for i in 0..layer_count {
+        if layers[i].id == id {
+            layers[i].z_order = max_z + 1;
+            *FULL_REDRAW.lock() = true;
+            return;
         }
     }
 }
@@ -230,93 +291,104 @@ pub fn raise_layer(id: u32) {
 
 /// Mark a region as needing repaint
 pub fn mark_dirty(rect: DirtyRect) {
-    unsafe {
-        if DIRTY_COUNT >= MAX_DIRTY {
-            // Too many dirty rects — just do a full redraw
-            FULL_REDRAW = true;
+    let mut dirty_list = DIRTY_LIST.lock();
+    let mut dirty_count = DIRTY_COUNT.lock();
+    let mut full_redraw = FULL_REDRAW.lock();
+
+    if *dirty_count >= MAX_DIRTY {
+        // Too many dirty rects — just do a full redraw
+        *full_redraw = true;
+        return;
+    }
+    // Try to merge with existing dirty rect
+    for i in 0..*dirty_count {
+        if dirty_list[i].overlaps(&rect) {
+            dirty_list[i] = dirty_list[i].merge(&rect);
             return;
         }
-        // Try to merge with existing dirty rect
-        for i in 0..DIRTY_COUNT {
-            if DIRTY_LIST[i].overlaps(&rect) {
-                DIRTY_LIST[i] = DIRTY_LIST[i].merge(&rect);
-                return;
-            }
-        }
-        DIRTY_LIST[DIRTY_COUNT] = rect;
-        DIRTY_COUNT += 1;
     }
+    dirty_list[*dirty_count] = rect;
+    *dirty_count += 1;
 }
 
 /// Mark the entire screen dirty
 pub fn mark_full_redraw() {
-    unsafe { FULL_REDRAW = true; }
+    *FULL_REDRAW.lock() = true;
 }
 
 // ─── Composition ───────────────────────────────────────────────────────
 
 /// Composite all visible layers and present to the framebuffer
 pub fn composite() {
-    let fb = unsafe { FB_INFO };
-    if fb.width == 0 || unsafe { BACK_BUF.is_null() } {
-        return;
-    }
+    let fb = {
+        let fb_info = FB_INFO.lock();
+        match *fb_info {
+            Some(fb) => fb,
+            None => return,
+        }
+    };
 
-    let do_full = unsafe { FULL_REDRAW };
+    let back_buf = {
+        let back_buf_opt = BACK_BUF.lock();
+        match back_buf_opt.as_ref() {
+            Some(buf) => buf.0,
+            None => return,
+        }
+    };
+
+    let do_full = *FULL_REDRAW.lock();
 
     if do_full {
-        // Full redraw: clear entire back buffer with desktop color
-        let bg = crate::wm::theme::desktop_bg();
-        unsafe {
-            let total = (fb.width * fb.height) as usize;
-            for i in 0..total {
-                core::ptr::write_volatile(BACK_BUF.add(i), bg);
-            }
-        }
+        // Full redraw: draw wallpaper first
+        draw_wallpaper(fb, back_buf);
 
         // Sort layers by z_order (simple bubble sort — small N)
-        unsafe { sort_layers(); }
+        sort_layers();
 
         // Render each visible layer into back buffer
-        unsafe {
-            for i in 0..LAYER_COUNT {
-                if LAYERS[i].visible {
-                    render_layer(&LAYERS[i], fb);
-                }
+        let layers = LAYERS.lock();
+        let layer_count = *LAYER_COUNT.lock();
+
+        for i in 0..layer_count {
+            if layers[i].visible {
+                render_layer(&layers[i], fb);
             }
         }
 
         // Blit entire back buffer to front
-        blit_full(fb);
+        blit_full(fb, back_buf);
 
-        unsafe {
-            FULL_REDRAW = false;
-            DIRTY_COUNT = 0;
-        }
-    } else if unsafe { DIRTY_COUNT > 0 } {
+        *FULL_REDRAW.lock() = false;
+        *DIRTY_COUNT.lock() = 0;
+    } else if *DIRTY_COUNT.lock() > 0 {
         // Partial redraw: only repaint dirty regions
-        let dirty_count = unsafe { DIRTY_COUNT };
-        let dirty_list = unsafe { &DIRTY_LIST[..dirty_count] };
+        let dirty_count = *DIRTY_COUNT.lock();
+        let dirty_list = {
+            let d = DIRTY_LIST.lock();
+            d[..dirty_count].to_vec()
+        };
 
-        unsafe { sort_layers(); }
+        sort_layers();
 
         for rect in dirty_list.iter() {
-            // Clear dirty rect with desktop color
-            let bg = crate::wm::theme::desktop_bg();
-            fill_back_buffer_rect(fb, rect.x, rect.y, rect.w, rect.h, bg);
+            // Clear dirty rect with wallpaper
+            fill_back_buffer_rect_with_wallpaper(fb, back_buf, rect.x, rect.y, rect.w, rect.h);
 
             // Re-render layers that overlap this dirty rect
-            unsafe {
-                for i in 0..LAYER_COUNT {
-                    if LAYERS[i].visible {
-                        let layer_bounds = LAYERS[i].bounds();
-                        let layer_rect = DirtyRect {
-                            x: layer_bounds.x, y: layer_bounds.y,
-                            w: layer_bounds.w, h: layer_bounds.h,
-                        };
-                        if rect.overlaps(&layer_rect) {
-                            render_layer(&LAYERS[i], fb);
-                        }
+            let layers = LAYERS.lock();
+            let layer_count = *LAYER_COUNT.lock();
+
+            for i in 0..layer_count {
+                if layers[i].visible {
+                    let layer_bounds = layers[i].bounds();
+                    let layer_rect = DirtyRect {
+                        x: layer_bounds.x,
+                        y: layer_bounds.y,
+                        w: layer_bounds.w,
+                        h: layer_bounds.h,
+                    };
+                    if rect.overlaps(&layer_rect) {
+                        render_layer(&layers[i], fb);
                     }
                 }
             }
@@ -324,25 +396,60 @@ pub fn composite() {
 
         // Blit dirty rects to front buffer
         for rect in dirty_list.iter() {
-            blit_rect(fb, rect);
+            blit_rect(fb, back_buf, rect);
         }
 
-        unsafe { DIRTY_COUNT = 0; }
+        *DIRTY_COUNT.lock() = 0;
+    }
+}
+
+/// Fill a dirty rectangle with wallpaper content
+fn fill_back_buffer_rect_with_wallpaper(
+    fb: FramebufferInfo,
+    back_buf: *mut u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) {
+    unsafe {
+        let color = WALLPAPER.solid_color;
+        let pitch = fb.width;
+        for dy in 0..h {
+            let py = y + dy;
+            if py >= fb.height {
+                break;
+            }
+            for dx in 0..w {
+                let px = x + dx;
+                if px >= fb.width {
+                    break;
+                }
+                let idx = (py * pitch + px) as usize;
+                let back_buf_size = *BACK_BUF_SIZE.lock();
+                if idx < back_buf_size / 4 {
+                    core::ptr::write_volatile(back_buf.add(idx), color);
+                }
+            }
+        }
     }
 }
 
 // ─── Internal Rendering ────────────────────────────────────────────────
 
 /// Sort layers by z_order (ascending)
-unsafe fn sort_layers() {
-    for i in 1..LAYER_COUNT {
-        let key = LAYERS[i];
+fn sort_layers() {
+    let mut layers = LAYERS.lock();
+    let layer_count = *LAYER_COUNT.lock();
+
+    for i in 1..layer_count {
+        let key = layers[i];
         let mut j = i;
-        while j > 0 && LAYERS[j - 1].z_order > key.z_order {
-            LAYERS[j] = LAYERS[j - 1];
+        while j > 0 && layers[j - 1].z_order > key.z_order {
+            layers[j] = layers[j - 1];
             j -= 1;
         }
-        LAYERS[j] = key;
+        layers[j] = key;
     }
 }
 
@@ -351,23 +458,43 @@ fn render_layer(layer: &Layer, fb: FramebufferInfo) {
     // The window manager provides the window's pixel content
     // For now, render a themed window frame
     let theme = crate::wm::theme::current();
+    let back_buf = {
+        let buf = BACK_BUF.lock();
+        buf.as_ref().expect("back buffer not initialized").0
+    };
 
     // Window background
-    fill_back_buffer_rect(fb, layer.x, layer.y, layer.w, layer.h, theme.win_bg);
+    fill_back_buffer_rect(
+        fb,
+        back_buf,
+        layer.x,
+        layer.y,
+        layer.w,
+        layer.h,
+        theme.win_bg,
+    );
 
     // Window title bar (24px high)
     if layer.h > 24 {
-        fill_back_buffer_rect(fb, layer.x, layer.y, layer.w, 24, theme.title_bar);
+        fill_back_buffer_rect(fb, back_buf, layer.x, layer.y, layer.w, 24, theme.title_bar);
     }
 
     // Window border
-    draw_back_buffer_rect_outline(fb, layer.x, layer.y, layer.w, layer.h, theme.win_border);
+    draw_back_buffer_rect_outline(
+        fb,
+        back_buf,
+        layer.x,
+        layer.y,
+        layer.w,
+        layer.h,
+        theme.win_border,
+    );
 
     // Close button (red circle, 16x16 at top-right)
     if layer.w > 30 && layer.h > 20 {
         let btn_x = layer.x + layer.w - 22;
         let btn_y = layer.y + 4;
-        fill_back_buffer_rect(fb, btn_x, btn_y, 16, 16, theme.close_btn);
+        fill_back_buffer_rect(fb, back_buf, btn_x, btn_y, 16, 16, theme.close_btn);
     }
 
     // Title text — ask the window manager for the title
@@ -385,19 +512,34 @@ fn render_layer(layer: &Layer, fb: FramebufferInfo) {
 }
 
 /// Fill a rectangle in the back buffer
-fn fill_back_buffer_rect(fb: FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
+fn fill_back_buffer_rect(
+    fb: FramebufferInfo,
+    back_buf: *mut u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    color: u32,
+) {
     unsafe {
-        if BACK_BUF.is_null() { return; }
+        if back_buf.is_null() {
+            return;
+        }
         let pitch = fb.width; // pitch in pixels
         for dy in 0..h {
             let py = y + dy;
-            if py >= fb.height { break; }
+            if py >= fb.height {
+                break;
+            }
             for dx in 0..w {
                 let px = x + dx;
-                if px >= fb.width { break; }
+                if px >= fb.width {
+                    break;
+                }
                 let idx = (py * pitch + px) as usize;
-                if idx < BACK_BUF_SIZE / 4 {
-                    core::ptr::write_volatile(BACK_BUF.add(idx), color);
+                let back_buf_size = *BACK_BUF_SIZE.lock();
+                if idx < back_buf_size / 4 {
+                    core::ptr::write_volatile(back_buf.add(idx), color);
                 }
             }
         }
@@ -405,64 +547,87 @@ fn fill_back_buffer_rect(fb: FramebufferInfo, x: u32, y: u32, w: u32, h: u32, co
 }
 
 /// Draw a rectangle outline in the back buffer
-fn draw_back_buffer_rect_outline(fb: FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
+fn draw_back_buffer_rect_outline(
+    fb: FramebufferInfo,
+    back_buf: *mut u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    color: u32,
+) {
     // Top and bottom
     for dx in 0..w {
         let px = x + dx;
-        if px >= fb.width { break; }
-        set_back_pixel(fb, px, y, color);
+        if px >= fb.width {
+            break;
+        }
+        set_back_pixel(fb, back_buf, px, y, color);
         if y + h > 0 {
-            set_back_pixel(fb, px, y + h - 1, color);
+            set_back_pixel(fb, back_buf, px, y + h - 1, color);
         }
     }
     // Left and right
     for dy in 0..h {
         let py = y + dy;
-        if py >= fb.height { break; }
-        set_back_pixel(fb, x, py, color);
+        if py >= fb.height {
+            break;
+        }
+        set_back_pixel(fb, back_buf, x, py, color);
         if x + w > 0 {
-            set_back_pixel(fb, x + w - 1, py, color);
+            set_back_pixel(fb, back_buf, x + w - 1, py, color);
         }
     }
 }
 
 /// Set a single pixel in the back buffer
-fn set_back_pixel(fb: FramebufferInfo, x: u32, y: u32, color: u32) {
+fn set_back_pixel(fb: FramebufferInfo, back_buf: *mut u32, x: u32, y: u32, color: u32) {
     unsafe {
-        if x >= fb.width || y >= fb.height { return; }
+        if x >= fb.width || y >= fb.height {
+            return;
+        }
         let idx = (y * fb.width + x) as usize;
-        if idx < BACK_BUF_SIZE / 4 {
-            core::ptr::write_volatile(BACK_BUF.add(idx), color);
+        let back_buf_size = *BACK_BUF_SIZE.lock();
+        if idx < back_buf_size / 4 {
+            core::ptr::write_volatile(back_buf.add(idx), color);
         }
     }
 }
 
 /// Blit the entire back buffer to the front framebuffer
-fn blit_full(fb: FramebufferInfo) {
+fn blit_full(fb: FramebufferInfo, back_buf: *mut u32) {
     unsafe {
-        if BACK_BUF.is_null() { return; }
+        if back_buf.is_null() {
+            return;
+        }
         let front = fb.base_addr as *mut u32;
         let total = (fb.width * fb.height) as usize;
         for i in 0..total {
-            core::ptr::write_volatile(front.add(i), core::ptr::read_volatile(BACK_BUF.add(i)));
+            core::ptr::write_volatile(front.add(i), core::ptr::read_volatile(back_buf.add(i)));
         }
     }
 }
 
 /// Blit a dirty rectangle from back to front buffer
-fn blit_rect(fb: FramebufferInfo, rect: &DirtyRect) {
+fn blit_rect(fb: FramebufferInfo, back_buf: *mut u32, rect: &DirtyRect) {
     unsafe {
-        if BACK_BUF.is_null() { return; }
+        if back_buf.is_null() {
+            return;
+        }
         let front = fb.base_addr as *mut u32;
         let pitch = fb.width;
         for dy in 0..rect.h {
             let py = rect.y + dy;
-            if py >= fb.height { break; }
+            if py >= fb.height {
+                break;
+            }
             for dx in 0..rect.w {
                 let px = rect.x + dx;
-                if px >= fb.width { break; }
+                if px >= fb.width {
+                    break;
+                }
                 let idx = (py * pitch + px) as usize;
-                let pixel = core::ptr::read_volatile(BACK_BUF.add(idx));
+                let pixel = core::ptr::read_volatile(back_buf.add(idx));
                 core::ptr::write_volatile(front.add(idx), pixel);
             }
         }
@@ -472,11 +637,96 @@ fn blit_rect(fb: FramebufferInfo, rect: &DirtyRect) {
 // ─── Query ─────────────────────────────────────────────────────────────
 
 /// Get the framebuffer info the compositor is using
-pub fn fb_info() -> FramebufferInfo {
-    unsafe { FB_INFO }
+pub fn fb_info() -> Option<FramebufferInfo> {
+    let guard = FB_INFO.lock();
+    guard.map(|x| x)
 }
 
 /// Get the number of registered layers
 pub fn layer_count() -> usize {
-    unsafe { LAYER_COUNT }
+    *LAYER_COUNT.lock()
+}
+
+// ─── Wallpaper Support ─────────────────────────────────────────────────
+
+/// Wallpaper scaling mode
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WallpaperMode {
+    Fit,    // Scale to fit entirely (letterbox)
+    Fill,   // Scale to cover entirely (crop)
+    Center, // Center at 1:1
+    Tile,   // Tile the image
+}
+
+/// Background layer for wallpaper
+struct Wallpaper {
+    mode: WallpaperMode,
+    image_data: Option<Vec<u32>>, // ARGB pixels
+    image_width: u32,
+    image_height: u32,
+    solid_color: u32,
+}
+
+static mut WALLPAPER: Wallpaper = Wallpaper {
+    mode: WallpaperMode::Fill,
+    image_data: None,
+    image_width: 0,
+    image_height: 0,
+    solid_color: 0xFF0D1B2A, // Default dark theme color
+};
+
+/// Set wallpaper to a solid color
+pub fn set_wallpaper_color(color: u32) {
+    unsafe {
+        WALLPAPER.solid_color = color;
+        WALLPAPER.image_data = None;
+        WALLPAPER.image_width = 0;
+        WALLPAPER.image_height = 0;
+    }
+    mark_full_redraw();
+}
+
+/// Set wallpaper to an image file
+pub fn set_wallpaper_image(path: &str) -> Result<(), &'static str> {
+    // Read the image file from VFS
+    let data = crate::fs::vfs::read_file(path).map_err(|_| "Failed to read file")?;
+
+    // For now, only support simple formats or use the framebuffer directly
+    // In a real implementation, we'd decode PNG/JPEG/BMP here
+    // For now, just use the desktop background color from theme
+    let _ = data;
+
+    unsafe {
+        WALLPAPER.image_data = None;
+        WALLPAPER.image_width = 0;
+        WALLPAPER.image_height = 0;
+    }
+
+    // For now, just return success (placeholder)
+    // Real implementation would decode the image
+    Ok(())
+}
+
+/// Set wallpaper scaling mode
+pub fn set_wallpaper_mode(mode: WallpaperMode) {
+    unsafe {
+        WALLPAPER.mode = mode;
+    }
+    mark_full_redraw();
+}
+
+/// Get current wallpaper mode
+pub fn get_wallpaper_mode() -> WallpaperMode {
+    unsafe { WALLPAPER.mode }
+}
+
+/// Draw the wallpaper to the back buffer
+fn draw_wallpaper(fb: FramebufferInfo, back_buf: *mut u32) {
+    unsafe {
+        let color = WALLPAPER.solid_color;
+        let total = (fb.width * fb.height) as usize;
+        for i in 0..total {
+            core::ptr::write_volatile(back_buf.add(i), color);
+        }
+    }
 }

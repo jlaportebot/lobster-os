@@ -33,8 +33,8 @@ SD_MOUNT ?= /mnt/sd/boot
 # QEMU settings
 QEMU    ?= qemu-system-aarch64
 QEMU_M  := raspi4b
-QEMU_MEM:= 1G
-QEMU_SERIAL := -serial stdio -serial null -serial null -serial null
+QEMU_MEM:= 2G
+QEMU_SERIAL := -nographic -serial mon:stdio
 
 # ─── Phony targets ─────────────────────────────────────────────────────
 .PHONY: all dev qemu qemu-debug flash clean size objdump check clippy
@@ -51,6 +51,7 @@ $(BUILDDIR)/release/lobster-os:
 $(ELF): $(BUILDDIR)/release/lobster-os
 	@mkdir -p $(BINDIR)
 	cp $< $@
+	$(CROSS)strip --strip-unneeded $@
 
 $(IMG): $(ELF)
 	$(OBJCOPY) -O binary $< $@

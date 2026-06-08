@@ -9,7 +9,6 @@
 //! Themes are static configurations; at runtime `current()` returns the
 //! active theme and all rendering code reads from it.
 
-use crate::display::console::*;
 use crate::println;
 
 // ─── Theme Structure ───────────────────────────────────────────────────
@@ -81,17 +80,17 @@ pub struct Theme {
     pub menu_separator: u32,
 
     // ── Spacing ──
-    pub spacing_xs: u32,  // 2px
-    pub spacing_sm: u32,  // 4px
-    pub spacing_md: u32,  // 8px
-    pub spacing_lg: u32,  // 16px
-    pub spacing_xl: u32,  // 24px
+    pub spacing_xs: u32, // 2px
+    pub spacing_sm: u32, // 4px
+    pub spacing_md: u32, // 8px
+    pub spacing_lg: u32, // 16px
+    pub spacing_xl: u32, // 24px
 
     // ── Sizing ──
     pub title_bar_height: u32,
     pub border_width: u32,
-    pub widget_height: u32,     // standard widget height
-    pub font_size: u32,         // character cell height
+    pub widget_height: u32, // standard widget height
+    pub font_size: u32,     // character cell height
 
     // ── Taskbar ──
     pub taskbar_bg: u32,
@@ -105,7 +104,7 @@ pub struct Theme {
 /// LobsterOS Dark — the default theme (deep ocean colors)
 const THEME_DARK: Theme = Theme {
     // Desktop
-    desktop_bg: 0xFF0D1B2A,  // deep navy
+    desktop_bg: 0xFF0D1B2A, // deep navy
 
     // Window chrome
     title_bar: 0xFF1B2838,
@@ -285,7 +284,9 @@ static mut ACTIVE_THEME: ThemeId = ThemeId::Dark;
 
 /// Initialize the theme engine
 pub fn init() {
-    unsafe { ACTIVE_THEME = ThemeId::Dark; }
+    unsafe {
+        ACTIVE_THEME = ThemeId::Dark;
+    }
     println!("[theme] Loaded: Dark");
 }
 
@@ -362,9 +363,9 @@ pub fn darken(color: u32, factor: u32) -> u32 {
 /// Lighten a color by a factor (0.0–1.0, encoded as 0–255)
 pub fn lighten(color: u32, factor: u32) -> u32 {
     let f = factor.min(255) as u32;
-    let r = ((color >> 16) & 0xFF);
-    let g = ((color >> 8) & 0xFF);
-    let b = (color & 0xFF);
+    let r = (color >> 16) & 0xFF;
+    let g = (color >> 8) & 0xFF;
+    let b = color & 0xFF;
     let r = r + (255 - r) * f / 255;
     let g = g + (255 - g) * f / 255;
     let b = b + (255 - b) * f / 255;

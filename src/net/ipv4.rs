@@ -3,8 +3,8 @@
 //! Handles IPv4 header parsing and building.
 //! No_std compatible - uses only core.
 
-use crate::net::genet;
 use crate::net::eth::{EthernetFrame, ETHER_TYPE_IPV4};
+use crate::net::genet;
 
 /// Protocol numbers
 pub const IPPROTO_ICMP: u8 = 1;
@@ -12,7 +12,7 @@ pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
 
 /// Minimum IPv4 header length
-pub const IPv4_HEADER_MIN_LEN: u8 = 20;
+pub const IPV4_HEADER_MIN_LEN: u8 = 20;
 
 /// IPv4 header structure
 #[derive(Clone, Copy, Debug)]
@@ -137,7 +137,7 @@ pub fn parse(data: &[u8]) -> Option<Ipv4Header> {
 
     let version_dscp = data[0];
     let version = version_dscp >> 4;
-    let dscp = version_dscp & 0x3F;
+    let _dscp = version_dscp & 0x3F;
 
     if version != 4 {
         crate::println!("ipv4: not IPv4 (version={})", version);
@@ -145,8 +145,8 @@ pub fn parse(data: &[u8]) -> Option<Ipv4Header> {
     }
 
     let flags_frag = ((data[2] as u16) << 8) | (data[3] as u16);
-    let flags = (flags_frag >> 8) as u8;
-    let frag_offset = flags_frag & 0x1FFF;
+    let _flags = (flags_frag >> 8) as u8;
+    let _frag_offset = flags_frag & 0x1FFF;
 
     let ihl = data[0] & 0x0F;
     if ihl < 5 {
@@ -156,7 +156,11 @@ pub fn parse(data: &[u8]) -> Option<Ipv4Header> {
 
     let header_len = (ihl as usize) * 4;
     if data.len() < header_len {
-        crate::println!("ipv4: packet too short for header ({} < {})", data.len(), header_len);
+        crate::println!(
+            "ipv4: packet too short for header ({} < {})",
+            data.len(),
+            header_len
+        );
         return None;
     }
 
@@ -275,10 +279,24 @@ pub fn send_packet(
     payload: &[u8],
 ) {
     let mut buffer = [0u8; 1500];
-    let total_len = build(src, dst, protocol, ttl, identification, payload, &mut buffer);
+    let total_len = build(
+        src,
+        dst,
+        protocol,
+        ttl,
+        identification,
+        payload,
+        &mut buffer,
+    );
 
     let mut eth_buf = [0u8; 1500];
-    let eth_len = EthernetFrame::build(dst_mac, src_mac, ETHER_TYPE_IPV4, &buffer[..total_len], &mut eth_buf);
+    let eth_len = EthernetFrame::build(
+        dst_mac,
+        src_mac,
+        ETHER_TYPE_IPV4,
+        &buffer[..total_len],
+        &mut eth_buf,
+    );
 
     crate::println!("ipv4: sending {} bytes to {:?}", total_len, dst);
     genet::transmit(&eth_buf[..eth_len]);

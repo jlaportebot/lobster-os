@@ -11,15 +11,18 @@
 //! - dhcp: DHCP client for auto-configuration
 //! - socket: Socket API for userspace
 
-pub mod genet;
-pub mod eth;
 pub mod arp;
-pub mod ipv4;
-pub mod icmp;
-pub mod udp;
-pub mod tcp;
 pub mod dhcp;
+pub mod dns;
+pub mod eth;
+pub mod genet;
+pub mod http;
+pub mod icmp;
+pub mod iface;
+pub mod ipv4;
 pub mod socket;
+pub mod tcp;
+pub mod udp;
 
 use crate::println;
 
@@ -55,9 +58,15 @@ pub unsafe fn init() {
 
     // 2. Read MAC address
     NET_CONFIG.mac_addr = genet::mac_addr();
-    println!("[net] MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        NET_CONFIG.mac_addr[0], NET_CONFIG.mac_addr[1], NET_CONFIG.mac_addr[2],
-        NET_CONFIG.mac_addr[3], NET_CONFIG.mac_addr[4], NET_CONFIG.mac_addr[5]);
+    println!(
+        "[net] MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        NET_CONFIG.mac_addr[0],
+        NET_CONFIG.mac_addr[1],
+        NET_CONFIG.mac_addr[2],
+        NET_CONFIG.mac_addr[3],
+        NET_CONFIG.mac_addr[4],
+        NET_CONFIG.mac_addr[5]
+    );
 
     // 3. Initialize ARP cache
     arp::init();
@@ -69,9 +78,13 @@ pub unsafe fn init() {
     if NET_CONFIG.dhcp_enabled {
         println!("[net] Starting DHCP client...");
         if dhcp::discover() {
-            println!("[net] DHCP configured: {}.{}.{}.{}",
-                NET_CONFIG.ip_addr[0], NET_CONFIG.ip_addr[1],
-                NET_CONFIG.ip_addr[2], NET_CONFIG.ip_addr[3]);
+            println!(
+                "[net] DHCP configured: {}.{}.{}.{}",
+                NET_CONFIG.ip_addr[0],
+                NET_CONFIG.ip_addr[1],
+                NET_CONFIG.ip_addr[2],
+                NET_CONFIG.ip_addr[3]
+            );
         } else {
             println!("[net] DHCP failed, using link-local (169.254.x.x)");
             NET_CONFIG.ip_addr = [169, 254, 1, 1];
@@ -153,22 +166,30 @@ pub fn config_mac() -> [u8; 6] {
 
 /// Set IP address (called by DHCP client)
 pub fn set_ip_addr(addr: [u8; 4]) {
-    unsafe { NET_CONFIG.ip_addr = addr; }
+    unsafe {
+        NET_CONFIG.ip_addr = addr;
+    }
 }
 
 /// Set netmask (called by DHCP client)
 pub fn set_netmask(mask: [u8; 4]) {
-    unsafe { NET_CONFIG.netmask = mask; }
+    unsafe {
+        NET_CONFIG.netmask = mask;
+    }
 }
 
 /// Set gateway (called by DHCP client)
 pub fn set_gateway(gw: [u8; 4]) {
-    unsafe { NET_CONFIG.gateway = gw; }
+    unsafe {
+        NET_CONFIG.gateway = gw;
+    }
 }
 
 /// Set DNS server (called by DHCP client)
 pub fn set_dns(dns: [u8; 4]) {
-    unsafe { NET_CONFIG.dns_server = dns; }
+    unsafe {
+        NET_CONFIG.dns_server = dns;
+    }
 }
 
 /// Handle GENET IRQ

@@ -12,10 +12,10 @@ use crate::drivers::uart::Uart10;
 pub const UART10_SPI: u32 = 121;
 
 /// Ring buffer size (must be power of 2)
-const RX_BUF_SIZE: usize = 4096;
+const RX_BUF_SIZE: usize = 512;
 
 /// Line buffer size for shell input
-const LINE_BUF_SIZE: usize = 512;
+const LINE_BUF_SIZE: usize = 128;
 
 /// RX ring buffer — stores raw bytes from UART
 static mut RX_RING: [u8; RX_BUF_SIZE] = [0; RX_BUF_SIZE];
@@ -131,8 +131,7 @@ unsafe fn process_rx_bytes() {
                 if INPUT_LEN > 0 && LINE_COUNT == 0 {
                     // Copy input to line buffer
                     let copy_len = INPUT_LEN.min(LINE_BUF_SIZE - LINE_LEN);
-                    LINE_BUF[LINE_LEN..LINE_LEN + copy_len]
-                        .copy_from_slice(&INPUT_BUF[..copy_len]);
+                    LINE_BUF[LINE_LEN..LINE_LEN + copy_len].copy_from_slice(&INPUT_BUF[..copy_len]);
                     LINE_LEN += copy_len;
                     LINE_COUNT = 1;
                 }
@@ -156,8 +155,23 @@ unsafe fn process_rx_bytes() {
                 }
                 INPUT_LEN = 0;
             }
-            // Printable ASCII
-            0x20..=0x7E => {
+            // Escape sequences — swallow ESC + bracket sequences
+            0x1B => {
+                // Just swallow the ESC; arrow key sequences will be
+                // consumed as '[' + 'A'/'B'/'C'/'D' in subsequent bytes
+                // For now we ignore them
+            }
+            // Printable ASCII (excluding '[' which is handled above for escape sequences)
+            0x20..=0x5A => {
+                if INPUT_LEN < INPUT_BUF.len() {
+                    INPUT_BUF[INPUT_LEN] = byte;
+                    INPUT_LEN += 1;
+                    if ECHO_ENABLED {
+                        Uart10::putc(byte);
+                    }
+                }
+            }
+            0x5C..=0x7E => {
                 if INPUT_LEN < INPUT_BUF.len() {
                     INPUT_BUF[INPUT_LEN] = byte;
                     INPUT_LEN += 1;
@@ -171,15 +185,6 @@ unsafe fn process_rx_bytes() {
                 if ECHO_ENABLED {
                     Uart10::puts("    ");
                 }
-            }
-            // Escape sequences — swallow ESC + bracket sequences
-            0x1B => {
-                // Just swallow the ESC; arrow key sequences will be
-                // consumed as '[' + 'A'/'B'/'C'/'D' in subsequent bytes
-                // For now we ignore them
-            }
-            b'[' => {
-                // Part of escape sequence — swallow
             }
             // All other control chars — ignore
             _ => {}

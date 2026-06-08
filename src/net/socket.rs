@@ -3,9 +3,9 @@
 //! Provides a simple socket interface for UDP and TCP.
 //! No_std compatible - uses only core.
 
-use core::sync::atomic::{AtomicU8, Ordering};
 use crate::net::ipv4::Ipv4Header;
 use crate::net::udp::UdpHeader;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 /// Socket types
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -192,12 +192,19 @@ pub fn close(fd: usize) {
     crate::println!("socket: fd={} closed", fd);
 }
 
+/// Get the local port bound to a socket fd. Returns 0 if not bound.
+pub fn get_local_port(fd: usize) -> u16 {
+    if fd >= 16 {
+        return 0;
+    }
+    acquire_lock();
+    let port = unsafe { SOCKET_TABLE[fd].local_port };
+    release_lock();
+    port
+}
+
 /// Handle incoming UDP packet - deliver to matching socket
-pub fn handle_udp(
-    ip_hdr: &Ipv4Header,
-    udp_hdr: &UdpHeader,
-    data: &[u8],
-) {
+pub fn handle_udp(ip_hdr: &Ipv4Header, udp_hdr: &UdpHeader, data: &[u8]) {
     let dst_port = udp_hdr.dst_port;
 
     acquire_lock();
@@ -210,11 +217,7 @@ pub fn handle_udp(
             sock.remote_ip = ip_hdr.src_addr;
             sock.remote_port = udp_hdr.src_port;
             release_lock();
-            crate::println!(
-                "socket: UDP packet delivered to fd={} len={}",
-                sock.fd,
-                len
-            );
+            crate::println!("socket: UDP packet delivered to fd={} len={}", sock.fd, len);
             return;
         }
     }

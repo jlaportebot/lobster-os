@@ -7,8 +7,12 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 /// System timer base (BCM2835-style, 1 MHz)
-const SYSTEM_TIMER_BASE: u64 = 0x10_7C00_3000;
-const TIMER_CS: u64 = SYSTEM_TIMER_BASE + 0x00;
+/// System timer base address
+#[cfg(not(feature = "qemu"))]
+const SYSTEM_TIMER_BASE: u64 = 0x10_7C00_3000; // BCM2712
+#[cfg(feature = "qemu")]
+const SYSTEM_TIMER_BASE: u64 = 0xFE_000_300; // BCM2711 (QEMU raspi4b)
+const TIMER_CS: u64 = SYSTEM_TIMER_BASE;
 const TIMER_CLO: u64 = SYSTEM_TIMER_BASE + 0x04;
 const TIMER_CHI: u64 = SYSTEM_TIMER_BASE + 0x08;
 const TIMER_C1: u64 = SYSTEM_TIMER_BASE + 0x10;
@@ -87,17 +91,15 @@ impl Timer {
                     mmio_write32(TIMER_C1, current.wrapping_add(TICK_INTERVAL_US));
                     mmio_write32(TIMER_CS, 1 << 1);
                 }
-                if uptime % 1000 == 0 {
+                if uptime.is_multiple_of(1000) {
                     let secs = uptime / 1000;
                     crate::println!("[timer] Uptime: {}s", secs);
                 }
             }
-            64 | 66 | 67 => {
-                unsafe {
-                    let ch_bit = 1u32 << (irq_id - 64);
-                    mmio_write32(TIMER_CS, ch_bit);
-                }
-            }
+            64 | 66 | 67 => unsafe {
+                let ch_bit = 1u32 << (irq_id - 64);
+                mmio_write32(TIMER_CS, ch_bit);
+            },
             _ => {}
         }
     }

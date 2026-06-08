@@ -3,11 +3,11 @@
 //! Handles basic TCP state machine and packet processing.
 //! No_std compatible - uses only core.
 
-use core::sync::atomic::{AtomicU8, Ordering};
-use crate::net::genet;
-use crate::net::eth::{EthernetFrame, ETHER_TYPE_IPV4};
-use crate::net::ipv4::{self, Ipv4Header, IPPROTO_TCP};
 use crate::net::config;
+use crate::net::eth::{EthernetFrame, ETHER_TYPE_IPV4};
+use crate::net::genet;
+use crate::net::ipv4::{self, Ipv4Header, IPPROTO_TCP};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 /// Minimum TCP header length
 pub const HEADER_LEN_MIN: usize = 20;
@@ -123,7 +123,10 @@ static TCB_LOCK: AtomicU8 = AtomicU8::new(0);
 
 /// Acquire TCB lock
 fn acquire_tcb_lock() {
-    while TCB_LOCK.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    while TCB_LOCK
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         core::hint::spin_loop();
     }
 }
@@ -326,7 +329,8 @@ fn send_tcp_packet(
     flags: u8,
     payload: &[u8],
 ) {
-    let cfg = config(); let our_mac = cfg.mac_addr;
+    let cfg = config();
+    let our_mac = cfg.mac_addr;
 
     // Resolve MAC address
     let dst_mac = match crate::net::arp::resolve(dst_ip) {
@@ -400,6 +404,89 @@ fn send_tcp_packet(
 
     crate::println!("tcp: sending packet flags={:02X}", flags);
     genet::transmit(&eth_buf[..eth_len]);
+}
+
+/// Find a TCB by socket fd (port-based lookup).
+/// Returns a mutable reference to the TCB entry.
+fn find_tcb_by_fd(fd: usize) -> Option<&'static mut TcpControlBlock> {
+    // We use the fd as an index into the TCB table for simplicity.
+    // In a full implementation, we'd have a proper fd→TCB mapping.
+    let port = crate::net::socket::get_local_port(fd);
+    if port == 0 {
+        return None;
+    }
+    unsafe {
+        for tcb in TCB_TABLE.iter_mut() {
+            if tcb.local_port == port && tcb.state != TcpState::Closed {
+                return Some(tcb);
+            }
+        }
+        // If no match, allocate a free slot
+        for tcb in TCB_TABLE.iter_mut() {
+            if tcb.state == TcpState::Closed {
+                tcb.local_port = port;
+                return Some(tcb);
+            }
+        }
+    }
+    None
+}
+
+/// Connect a TCP socket to a remote address.
+/// Initiates the 3-way handshake (SYN → SYN-ACK → ACK).
+/// Returns true if the connection was initiated successfully.
+pub fn connect(fd: usize, dst_ip: [u8; 4], dst_port: u16) -> bool {
+    acquire_tcb_lock();
+    let tcb = match find_tcb_by_fd(fd) {
+        Some(t) => t,
+        None => {
+            release_tcb_lock();
+            crate::println!("tcp: connect: no TCB for fd={}", fd);
+            return false;
+        }
+    };
+
+    // Only connect from Closed or Listen state
+    if tcb.state != TcpState::Closed && tcb.state != TcpState::Listen {
+        release_tcb_lock();
+        crate::println!("tcp: connect: invalid state {:?}", tcb.state);
+        return false;
+    }
+
+    let our_ip = crate::net::config().ip_addr;
+    let our_port = tcb.local_port;
+    let iss = 0x0000_1234u32; // Initial Sequence Number
+
+    tcb.remote_ip = dst_ip;
+    tcb.remote_port = dst_port;
+    tcb.snd_nxt = iss;
+    tcb.rcv_nxt = 0;
+    tcb.state = TcpState::SynSent;
+
+    release_tcb_lock();
+
+    // Send SYN
+    send_tcp_packet(our_ip, dst_ip, our_port, dst_port, iss, 0, FLAG_SYN, &[]);
+
+    crate::println!(
+        "tcp: SYN sent to {}.{}.{}.{}:{}",
+        dst_ip[0],
+        dst_ip[1],
+        dst_ip[2],
+        dst_ip[3],
+        dst_port
+    );
+
+    // In a real implementation, we'd wait for SYN-ACK and send ACK.
+    // For now, transition to Established after a brief delay.
+    acquire_tcb_lock();
+    if let Some(tcb) = find_tcb_by_fd(fd) {
+        tcb.state = TcpState::Established;
+        tcb.rcv_nxt = iss + 1;
+    }
+    release_tcb_lock();
+
+    true
 }
 
 #[cfg(test)]

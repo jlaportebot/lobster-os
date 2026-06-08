@@ -7,10 +7,9 @@
 //! Event flow:
 //!   USB xHCI → HID poll → InputEvent → WM dispatch → Window/Widget
 
+use crate::println;
 use crate::usb::hid::{self, HidEvent};
 use crate::wm::compositor;
-use crate::wm::window;
-use crate::println;
 
 // ─── Cursor State ──────────────────────────────────────────────────
 
@@ -27,16 +26,17 @@ static mut MOUSE_MIDDLE: bool = false;
 
 /// Initialize the WM input subsystem
 pub fn init() {
-    let info = compositor::fb_info();
+    let info = match compositor::fb_info() {
+        Some(info) => info,
+        None => return,
+    };
     unsafe {
         CURSOR_X = info.width / 2;
         CURSOR_Y = info.height / 2;
     }
-    println!(
-        "[wm::input] Cursor at {},{}",
-        unsafe { CURSOR_X },
-        unsafe { CURSOR_Y }
-    );
+    println!("[wm::input] Cursor at {},{}", unsafe { CURSOR_X }, unsafe {
+        CURSOR_Y
+    });
 }
 
 // ─── Event Pump ────────────────────────────────────────────────────
@@ -124,7 +124,10 @@ fn handle_key_release(_scancode: u8) {
 
 /// Handle mouse movement
 fn handle_mouse_move(dx: i16, dy: i16) {
-    let info = compositor::fb_info();
+    let info = match compositor::fb_info() {
+        Some(info) => info,
+        None => return,
+    };
 
     unsafe {
         // Update cursor position (clamp to screen bounds)
@@ -158,7 +161,7 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
 
     // On left press: find window under cursor and focus it
     if left && !prev_left {
-        let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+        let (_cx, _cy) = unsafe { (CURSOR_X, CURSOR_Y) };
         // Check which window the cursor is over and focus it
         // The window module's handle_event will handle drag logic
         crate::wm::window::handle_event(HidEvent::MouseButton {

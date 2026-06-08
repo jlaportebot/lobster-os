@@ -1,9 +1,7 @@
 //! Ethernet II frame parser/builder
-//! 
+//!
 //! Provides functions to parse and build Ethernet frames.
 //! No_std compatible - uses only core.
-
-use core::mem::size_of;
 
 /// Ethernet type constants
 pub const ETHER_TYPE_IPV4: u16 = 0x0800;
@@ -30,10 +28,10 @@ impl EthernetFrame {
 
         let mut dst_mac = [0u8; 6];
         let mut src_mac = [0u8; 6];
-        
+
         dst_mac.copy_from_slice(&data[0..6]);
         src_mac.copy_from_slice(&data[6..12]);
-        
+
         // EtherType is big-endian
         let ether_type = u16::from_be_bytes([data[12], data[13]]);
 
@@ -46,11 +44,21 @@ impl EthernetFrame {
 
     /// Build an Ethernet frame into the output buffer
     /// Returns the total length of the frame (header + payload)
-    pub fn build(dst: &[u8; 6], src: &[u8; 6], ether_type: u16, payload: &[u8], out: &mut [u8]) -> usize {
+    pub fn build(
+        dst: &[u8; 6],
+        src: &[u8; 6],
+        ether_type: u16,
+        payload: &[u8],
+        out: &mut [u8],
+    ) -> usize {
         let total_len = HEADER_LEN + payload.len();
-        
+
         if out.len() < total_len {
-            crate::println!("eth: output buffer too small ({} < {})", out.len(), total_len);
+            crate::println!(
+                "eth: output buffer too small ({} < {})",
+                out.len(),
+                total_len
+            );
             return 0;
         }
 

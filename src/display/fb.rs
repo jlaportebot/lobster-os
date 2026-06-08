@@ -126,7 +126,7 @@ unsafe fn mailbox_write(value: u32) {
 }
 
 /// Send a property message and wait for response
-unsafe fn send_property_message(len: usize) -> Result<(), FbError> {
+unsafe fn send_property_message(_len: usize) -> Result<(), FbError> {
     let buf_addr = &PROP_BUFFER as *const PropertyBuffer as u32;
 
     // Send the bus address (convert virtual to bus address for mailbox)
@@ -279,14 +279,22 @@ pub fn init(width: u32, height: u32, bpp: u32) -> Result<FramebufferInfo, FbErro
             size: fb_size,
             width: resp_width,
             height: resp_height,
-            pitch: if pitch != 0 { pitch } else { resp_width * (resp_bpp / 8) },
+            pitch: if pitch != 0 {
+                pitch
+            } else {
+                resp_width * (resp_bpp / 8)
+            },
             bpp: resp_bpp,
         };
 
         println!(
             "[fb] Framebuffer: {}x{} @ {}bpp, addr={:#010x}, size={}KB, pitch={}",
-            info.width, info.height, info.bpp,
-            info.base_addr, info.size / 1024, info.pitch
+            info.width,
+            info.height,
+            info.bpp,
+            info.base_addr,
+            info.size / 1024,
+            info.pitch
         );
 
         Ok(info)
@@ -315,5 +323,12 @@ pub fn get_info() -> FramebufferInfo {
 
 /// Store framebuffer info globally
 pub fn set_info(info: FramebufferInfo) {
-    unsafe { FB_INFO = info; }
+    unsafe {
+        FB_INFO = info;
+    }
+}
+
+/// Check if the framebuffer has been initialized (non-zero base address)
+pub fn is_initialized() -> bool {
+    unsafe { FB_INFO.base_addr != 0 }
 }

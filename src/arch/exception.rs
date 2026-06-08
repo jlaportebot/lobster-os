@@ -8,15 +8,16 @@
 //! - SErrors (system errors)
 
 use crate::arch::gic;
-use crate::sched;
 use crate::println;
+use crate::sched;
 
 /// ESR_EL1.EC values (Exception Class)
-const EC_SVC64: u32 = 0b111101;   // SVC instruction from AArch64
+const EC_SVC64: u32 = 0b111101; // SVC instruction from AArch64
 const EC_DATA_ABORT: u32 = 0b100101;
 const EC_INSN_ABORT: u32 = 0b100000;
 const EC_PC_ALIGN: u32 = 0b100001;
 const EC_SP_ALIGN: u32 = 0b100010;
+#[allow(dead_code)]
 const EC_TRAP_FP: u32 = 0b111000;
 
 /// Synchronous exception handler (EL1h) — kernel-space fault
@@ -34,19 +35,31 @@ pub unsafe extern "C" fn handle_sync_exception(
     match ec {
         EC_SVC64 => {
             let svc_num = iss & 0xFFFF;
-            println!("[exception] SVC #{} from EL1 (unexpected in kernel)", svc_num);
+            println!(
+                "[exception] SVC #{} from EL1 (unexpected in kernel)",
+                svc_num
+            );
         }
         EC_DATA_ABORT => {
             let wnr = (iss >> 6) & 1; // Write not Read
             let access_type = if wnr != 0 { "write" } else { "read" };
-            println!("[exception] Data Abort ({}) at ELR={:#018x} FAR={:#018x}", access_type, elr, far);
-            println!("[exception] ESR={:#018x} (EC={}, ISS={:#010x})", esr, ec, iss);
+            println!(
+                "[exception] Data Abort ({}) at ELR={:#018x} FAR={:#018x}",
+                access_type, elr, far
+            );
+            println!(
+                "[exception] ESR={:#018x} (EC={}, ISS={:#010x})",
+                esr, ec, iss
+            );
             loop {
                 crate::arch::cpu::wfe();
             }
         }
         EC_INSN_ABORT => {
-            println!("[exception] Instruction Abort at ELR={:#018x} FAR={:#018x}", elr, far);
+            println!(
+                "[exception] Instruction Abort at ELR={:#018x} FAR={:#018x}",
+                elr, far
+            );
             loop {
                 crate::arch::cpu::wfe();
             }
@@ -65,7 +78,10 @@ pub unsafe extern "C" fn handle_sync_exception(
         }
         _ => {
             println!("[exception] Synchronous exception at ELR={:#018x}", elr);
-            println!("[exception] ESR={:#018x} (EC={}, ISS={:#010x})", esr, ec, iss);
+            println!(
+                "[exception] ESR={:#018x} (EC={}, ISS={:#010x})",
+                esr, ec, iss
+            );
             println!("[exception] SPSR={:#018x} FAR={:#018x}", spsr, far);
             loop {
                 crate::arch::cpu::wfe();
@@ -121,15 +137,34 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
         EC_DATA_ABORT => {
             let wnr = (iss >> 6) & 1;
             let access_type = if wnr != 0 { "write" } else { "read" };
-            println!("[exception] EL0 Data Abort ({}) at ELR={:#018x} FAR={:#018x}", access_type, elr, far);
-            println!("[exception] ESR={:#018x} (EC={}, ISS={:#010x})", esr, ec, iss);
-            // Kill the offending process
-            println!("[exception] Killing PID {}", sched::current_pid());
-            sched::kill(sched::current_pid());
+            println!(
+                "[exception] EL0 Data Abort ({}) at ELR={:#018x} FAR={:#018x}",
+                access_type, elr, far
+            );
+            println!(
+                "[exception] ESR={:#018x} (EC={}, ISS={:#010x})",
+                esr, ec, iss
+            );
+            // Route to page fault handler
+            let is_write = wnr != 0;
+            if !crate::sched::process::handle_page_fault(far, is_write) {
+                // Could not handle - kill the process
+                println!(
+                    "[exception] Unhandled page fault, killing PID {}",
+                    sched::current_pid()
+                );
+                sched::kill(sched::current_pid());
+            }
         }
         EC_INSN_ABORT => {
-            println!("[exception] EL0 Instruction Abort at ELR={:#018x} FAR={:#018x}", elr, far);
-            sched::kill(sched::current_pid());
+            println!(
+                "[exception] EL0 Instruction Abort at ELR={:#018x} FAR={:#018x}",
+                elr, far
+            );
+            // This could be a page fault on instruction fetch
+            if !crate::sched::process::handle_page_fault(far, false) {
+                sched::kill(sched::current_pid());
+            }
         }
         EC_PC_ALIGN | EC_SP_ALIGN => {
             println!("[exception] EL0 Alignment Fault at ELR={:#018x}", elr);
@@ -137,7 +172,10 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
         }
         _ => {
             println!("[exception] EL0 exception at ELR={:#018x}", elr);
-            println!("[exception] ESR={:#018x} (EC={}, ISS={:#010x})", esr, ec, iss);
+            println!(
+                "[exception] ESR={:#018x} (EC={}, ISS={:#010x})",
+                esr, ec, iss
+            );
             println!("[exception] SPSR={:#018x} FAR={:#018x}", spsr, far);
             sched::kill(sched::current_pid());
         }
@@ -146,13 +184,7 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
 
 /// IRQ handler — hardware interrupts + timer-driven scheduling
 #[no_mangle]
-pub unsafe extern "C" fn handle_irq(
-    _spsr: u64,
-    _elr: u64,
-    _esr: u64,
-    _far: u64,
-    _regs: *mut u64,
-) {
+pub unsafe extern "C" fn handle_irq(_spsr: u64, _elr: u64, _esr: u64, _far: u64, _regs: *mut u64) {
     let irq_id = gic::Gic::acknowledge();
 
     if irq_id >= 1020 {
@@ -160,10 +192,18 @@ pub unsafe extern "C" fn handle_irq(
     }
 
     match irq_id {
+        0..=15 => {
+            // SGI (Software Generated Interrupt) — these are IPIs
+            crate::smp::handle_ipi(irq_id);
+        }
         29 => {
             crate::arch::timer::Timer::handle_irq();
             // Drive scheduler from timer tick
             sched::on_timer_tick();
+            // Drive SMP per-core timer accounting + load balancing
+            let core_id = crate::smp::current_core_id() as usize;
+            crate::smp::runqueue::on_core_timer_tick(core_id);
+            crate::smp::balance::on_timer_tick();
         }
         121 => {
             // UART10 RX interrupt
@@ -173,6 +213,15 @@ pub unsafe extern "C" fn handle_irq(
             crate::arch::timer::Timer::handle_bcm_timer_irq(irq_id);
             // Also drive scheduler from BCM timer
             sched::on_timer_tick();
+            // Drive SMP per-core timer accounting + load balancing
+            let core_id = crate::smp::current_core_id() as usize;
+            crate::smp::runqueue::on_core_timer_tick(core_id);
+            crate::smp::balance::on_timer_tick();
+        }
+        274 => {
+            // SDIO2 interrupt (WiFi)
+            crate::drivers::sdio::handle_interrupt();
+            crate::drivers::wifi::handle_interrupt();
         }
         _ => {
             println!("[irq] Unhandled IRQ {}", irq_id);
@@ -192,26 +241,17 @@ pub unsafe extern "C" fn handle_irq(
 
 /// FIQ handler
 #[no_mangle]
-pub unsafe extern "C" fn handle_fiq(
-    _spsr: u64,
-    _elr: u64,
-    _esr: u64,
-    _far: u64,
-    _regs: *mut u64,
-) {
+pub unsafe extern "C" fn handle_fiq(_spsr: u64, _elr: u64, _esr: u64, _far: u64, _regs: *mut u64) {
     println!("[fiq] Unexpected FIQ!");
 }
 
 /// SError handler
 #[no_mangle]
-pub unsafe extern "C" fn handle_serror(
-    _spsr: u64,
-    elr: u64,
-    esr: u64,
-    _far: u64,
-    _regs: *mut u64,
-) {
-    println!("[serror] System Error at ELR={:#018x} ESR={:#018x}", elr, esr);
+pub unsafe extern "C" fn handle_serror(_spsr: u64, elr: u64, esr: u64, _far: u64, _regs: *mut u64) {
+    println!(
+        "[serror] System Error at ELR={:#018x} ESR={:#018x}",
+        elr, esr
+    );
     loop {
         crate::arch::cpu::wfe();
     }

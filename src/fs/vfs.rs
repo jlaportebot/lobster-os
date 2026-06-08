@@ -5,11 +5,11 @@ use crate::println;
 /// Maximum path depth for resolution
 const MAX_PATH_DEPTH: usize = 16;
 
-/// Maximum filename length
-const MAX_NAME_LEN: usize = 255;
+/// Maximum filename length (reduced from 255 to save kernel image size)
+const MAX_NAME_LEN: usize = 32;
 
 /// Maximum open files system-wide
-const MAX_OPEN_FILES: usize = 128;
+const MAX_OPEN_FILES: usize = 32;
 
 /// File types
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -38,6 +38,26 @@ pub enum VfsError {
     ReadOnly,
 }
 
+impl core::fmt::Display for VfsError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            VfsError::NotFound => write!(f, "not found"),
+            VfsError::NotADirectory => write!(f, "not a directory"),
+            VfsError::NotAFile => write!(f, "not a file"),
+            VfsError::PermissionDenied => write!(f, "permission denied"),
+            VfsError::IOError => write!(f, "I/O error"),
+            VfsError::EndOfFile => write!(f, "end of file"),
+            VfsError::InvalidOffset => write!(f, "invalid offset"),
+            VfsError::AlreadyExists => write!(f, "already exists"),
+            VfsError::NotEmpty => write!(f, "directory not empty"),
+            VfsError::Busy => write!(f, "device busy"),
+            VfsError::InvalidPath => write!(f, "invalid path"),
+            VfsError::OutOfMemory => write!(f, "out of memory"),
+            VfsError::ReadOnly => write!(f, "read only"),
+        }
+    }
+}
+
 /// File metadata
 #[derive(Debug, Clone, Copy)]
 pub struct Metadata {
@@ -46,6 +66,10 @@ pub struct Metadata {
     pub permissions: u32,
     pub modified_time: u64,
     pub inode_id: u64,
+    /// Owner user ID
+    pub uid: u32,
+    /// Owner group ID
+    pub gid: u32,
 }
 
 /// Directory entry
@@ -55,6 +79,14 @@ pub struct DirEntry {
     pub name_len: usize,
     pub file_type: FileType,
     pub inode_id: u64,
+    /// Convenience: file size copied from metadata at enumeration time
+    pub size: u64,
+    /// Convenience: owner uid
+    pub uid: u32,
+    /// Convenience: owner gid
+    pub gid: u32,
+    /// Convenience: true if directory
+    pub is_dir: bool,
 }
 
 impl DirEntry {
@@ -64,6 +96,10 @@ impl DirEntry {
             name_len: 0,
             file_type: FileType::RegularFile,
             inode_id: 0,
+            size: 0,
+            uid: 0,
+            gid: 0,
+            is_dir: false,
         }
     }
 
@@ -80,7 +116,7 @@ impl DirEntry {
 }
 
 /// Maximum directory entries per node
-pub const MAX_DIR_ENTRIES: usize = 64;
+pub const MAX_DIR_ENTRIES: usize = 16;
 
 /// VFS Node — represents a file, directory, device, or symlink
 #[derive(Copy, Clone)]
@@ -111,6 +147,8 @@ impl VfsNode {
                 permissions: 0,
                 modified_time: 0,
                 inode_id: 0,
+                uid: 0,
+                gid: 0,
             },
             fs_id: 0,
             parent_id: 0,
@@ -220,8 +258,8 @@ impl MountPoint {
     }
 }
 
-/// Maximum number of nodes in the VFS
-const MAX_VFS_NODES: usize = 512;
+/// Maximum number of nodes in the VFS (increased for ext2 rootfs support)
+const MAX_VFS_NODES: usize = 64;
 
 /// Maximum mount points
 const MAX_MOUNT_POINTS: usize = 8;
@@ -277,6 +315,8 @@ pub fn init() {
             permissions: 0o755,
             modified_time: 0,
             inode_id: 0,
+            uid: 0,
+            gid: 0,
         };
         root.fs_id = 0;
         root.parent_id = 0;
@@ -299,9 +339,15 @@ pub fn alloc_node(name: &str, file_type: FileType, parent_id: u64) -> Result<u64
         node.metadata = Metadata {
             size: 0,
             file_type,
-            permissions: if file_type == FileType::Directory { 0o755 } else { 0o644 },
+            permissions: if file_type == FileType::Directory {
+                0o755
+            } else {
+                0o644
+            },
             modified_time: 0,
             inode_id: idx as u64,
+            uid: 0,
+            gid: 0,
         };
         node.fs_id = 0;
         node.parent_id = parent_id;
@@ -369,7 +415,9 @@ pub fn resolve_path(path: &str) -> Result<u64, VfsError> {
         return Err(VfsError::InvalidPath);
     }
 
-    let start_node = if path.starts_with('/') { 0u64 } else {
+    let start_node = if path.starts_with('/') {
+        0u64
+    } else {
         // Use current working directory (simplified: root)
         0u64
     };
@@ -432,10 +480,57 @@ pub fn open(path: &str, flags: u32) -> Result<usize, VfsError> {
     let inode_id = match inode_id {
         Ok(id) => id,
         Err(VfsError::NotFound) if flags & O_CREAT != 0 => {
+            // Check write permission on parent directory
+            let (parent_path, _) = if let Some(idx) = path.rfind('/') {
+                (&path[..idx.max(1)], &path[idx + 1..])
+            } else {
+                ("", path)
+            };
+            let parent_id = if parent_path.is_empty() || parent_path == "/" {
+                0u64
+            } else {
+                resolve_path(parent_path)?
+            };
+            if let Some(parent) = get_node(parent_id) {
+                let write_access = crate::security::PERM_OWNER_WRITE
+                    | crate::security::PERM_GROUP_WRITE
+                    | crate::security::PERM_OTHERS_WRITE;
+                if !check_permission(parent, write_access) {
+                    return Err(VfsError::PermissionDenied);
+                }
+            }
             create(path)?
         }
         Err(e) => return Err(e),
     };
+
+    // Check access permissions on the file
+    if let Some(node) = get_node(inode_id) {
+        let access = match flags & 0x3 {
+            O_RDONLY => {
+                crate::security::PERM_OWNER_READ
+                    | crate::security::PERM_GROUP_READ
+                    | crate::security::PERM_OTHERS_READ
+            }
+            O_WRONLY => {
+                crate::security::PERM_OWNER_WRITE
+                    | crate::security::PERM_GROUP_WRITE
+                    | crate::security::PERM_OTHERS_WRITE
+            }
+            O_RDWR => {
+                crate::security::PERM_OWNER_READ
+                    | crate::security::PERM_GROUP_READ
+                    | crate::security::PERM_OTHERS_READ
+                    | crate::security::PERM_OWNER_WRITE
+                    | crate::security::PERM_GROUP_WRITE
+                    | crate::security::PERM_OTHERS_WRITE
+            }
+            _ => 0,
+        };
+        if !check_permission(node, access) {
+            return Err(VfsError::PermissionDenied);
+        }
+    }
 
     unsafe {
         for i in 0..MAX_OPEN_FILES {
@@ -477,7 +572,17 @@ pub fn read(fd: usize, buf: &mut [u8]) -> Result<usize, VfsError> {
             return Err(VfsError::InvalidOffset);
         }
         let handle = OPEN_FILES[fd].as_ref().ok_or(VfsError::InvalidOffset)?;
-        let node = get_node(handle.inode_id).ok_or(VfsError::NotFound)?;
+        let inode_id = handle.inode_id;
+        // Check read permission
+        if let Some(node) = get_node(inode_id) {
+            let read_access = crate::security::PERM_OWNER_READ
+                | crate::security::PERM_GROUP_READ
+                | crate::security::PERM_OTHERS_READ;
+            if !check_permission(node, read_access) {
+                return Err(VfsError::PermissionDenied);
+            }
+        }
+        let node = get_node(inode_id).ok_or(VfsError::NotFound)?;
         let bytes_read = node.read(handle.offset, buf)?;
         // Update offset (need to reconstruct since we can't hold mutable refs)
         if let Some(h) = OPEN_FILES[fd].as_mut() {
@@ -496,6 +601,15 @@ pub fn write(fd: usize, buf: &[u8]) -> Result<usize, VfsError> {
         let handle = OPEN_FILES[fd].as_ref().ok_or(VfsError::InvalidOffset)?;
         let inode_id = handle.inode_id;
         let offset = handle.offset;
+        // Check write permission
+        if let Some(node) = get_node(inode_id) {
+            let write_access = crate::security::PERM_OWNER_WRITE
+                | crate::security::PERM_GROUP_WRITE
+                | crate::security::PERM_OTHERS_WRITE;
+            if !check_permission(node, write_access) {
+                return Err(VfsError::PermissionDenied);
+            }
+        }
         let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
         let written = node.write(offset, buf)?;
         if let Some(h) = OPEN_FILES[fd].as_mut() {
@@ -513,7 +627,7 @@ pub fn seek(fd: usize, offset: i64, whence: u32) -> Result<u64, VfsError> {
         }
         let handle = OPEN_FILES[fd].as_mut().ok_or(VfsError::InvalidOffset)?;
         let new_offset = match whence {
-            0 => offset as u64, // SEEK_SET
+            0 => offset as u64,                             // SEEK_SET
             1 => handle.offset.wrapping_add(offset as u64), // SEEK_CUR
             2 => {
                 let node = get_node(handle.inode_id).ok_or(VfsError::NotFound)?;
@@ -527,13 +641,200 @@ pub fn seek(fd: usize, offset: i64, whence: u32) -> Result<u64, VfsError> {
 }
 
 /// List directory contents
-pub fn list_dir(path: &str) -> Result<&'static [DirEntry], VfsError> {
+pub fn list_dir(path: &str) -> Result<alloc::vec::Vec<DirEntry>, VfsError> {
     let inode_id = resolve_path(path)?;
     let node = get_node(inode_id).ok_or(VfsError::NotFound)?;
     if node.metadata.file_type != FileType::Directory {
         return Err(VfsError::NotADirectory);
     }
-    Ok(&node.dir_entries[..node.dir_count])
+    let mut entries = alloc::vec::Vec::new();
+    for i in 0..node.dir_count {
+        let de = &node.dir_entries[i];
+        let (size, uid, gid, is_dir) = if let Some(child) = get_node(de.inode_id) {
+            (
+                child.metadata.size,
+                child.metadata.uid,
+                child.metadata.gid,
+                child.metadata.file_type == FileType::Directory,
+            )
+        } else {
+            (0, 0, 0, false)
+        };
+        let mut enriched = *de;
+        enriched.size = size;
+        enriched.uid = uid;
+        enriched.gid = gid;
+        enriched.is_dir = is_dir;
+        entries.push(enriched);
+    }
+    Ok(entries)
+}
+
+/// Read entire file contents into a Vec
+pub fn read_file(path: &str) -> Result<alloc::vec::Vec<u8>, VfsError> {
+    let inode_id = resolve_path(path)?;
+    let node = get_node(inode_id).ok_or(VfsError::NotFound)?;
+    if node.metadata.file_type != FileType::RegularFile {
+        return Err(VfsError::NotAFile);
+    }
+    let len = node.data_len as usize;
+    let mut buf = alloc::vec::Vec::with_capacity(len);
+    buf.resize(len, 0);
+    node.read(0, &mut buf)?;
+    Ok(buf)
+}
+
+/// Create a directory (wrapper with shell-friendly name)
+pub fn create_dir(path: &str) -> Result<u64, VfsError> {
+    mkdir(path)
+}
+
+/// Remove a file or empty directory
+pub fn remove(path: &str) -> Result<(), VfsError> {
+    let inode_id = resolve_path(path)?;
+    let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
+    if node.metadata.file_type == FileType::Directory && node.dir_count > 0 {
+        return Err(VfsError::NotEmpty);
+    }
+    // Remove from parent
+    if node.parent_id < unsafe { VFS_NODE_COUNT } as u64 {
+        let parent = unsafe { &mut VFS_NODES[node.parent_id as usize] };
+        let name = node.name_str();
+        let mut shift = false;
+        for i in 0..parent.dir_count {
+            if shift {
+                parent.dir_entries[i - 1] = parent.dir_entries[i];
+            } else if parent.dir_entries[i].name_str() == name {
+                shift = true;
+            }
+        }
+        if shift && parent.dir_count > 0 {
+            parent.dir_count -= 1;
+        }
+    }
+    // Mark node as free (zero name)
+    node.name_len = 0;
+    node.metadata.file_type = FileType::RegularFile;
+    node.data_len = 0;
+    Ok(())
+}
+
+/// Rename / move a file or directory
+pub fn rename(src_path: &str, dst_path: &str) -> Result<(), VfsError> {
+    let src_id = resolve_path(src_path)?;
+    let (dst_parent, dst_name) = if let Some(idx) = dst_path.rfind('/') {
+        (&dst_path[..idx.max(1)], &dst_path[idx + 1..])
+    } else {
+        ("", dst_path)
+    };
+    let dst_parent_id = if dst_parent.is_empty() || dst_parent == "/" {
+        0u64
+    } else {
+        resolve_path(dst_parent)?
+    };
+    // Remove from old parent
+    let src_node = get_node(src_id).ok_or(VfsError::NotFound)?;
+    let old_parent_id = src_node.parent_id;
+    let src_name = src_node.name_str();
+    if old_parent_id < unsafe { VFS_NODE_COUNT } as u64 {
+        let old_parent = unsafe { &mut VFS_NODES[old_parent_id as usize] };
+        let mut shift = false;
+        for i in 0..old_parent.dir_count {
+            if shift {
+                old_parent.dir_entries[i - 1] = old_parent.dir_entries[i];
+            } else if old_parent.dir_entries[i].name_str() == src_name {
+                shift = true;
+            }
+        }
+        if shift && old_parent.dir_count > 0 {
+            old_parent.dir_count -= 1;
+        }
+    }
+    // Update node name and parent
+    let src = get_node_mut(src_id).ok_or(VfsError::NotFound)?;
+    src.set_name(dst_name);
+    src.parent_id = dst_parent_id;
+    // Add to new parent
+    if dst_parent_id < unsafe { VFS_NODE_COUNT } as u64 {
+        let new_parent = unsafe { &mut VFS_NODES[dst_parent_id as usize] };
+        let mut entry = DirEntry::empty();
+        entry.set_name(dst_name);
+        entry.file_type = src.metadata.file_type;
+        entry.inode_id = src_id;
+        let _ = new_parent.add_dir_entry(entry);
+    }
+    Ok(())
+}
+
+/// Get file metadata by path (stat)
+pub fn stat(path: &str) -> Option<Metadata> {
+    let id = resolve_path(path).ok()?;
+    get_node(id).map(|n| n.metadata)
+}
+
+/// Change file permissions
+pub fn chmod(path: &str, mode: u32) -> Result<(), VfsError> {
+    let inode_id = resolve_path(path)?;
+    let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
+
+    // Permission check: owner or CAP_FOWNER
+    {
+        let pid = crate::sched::current_pid();
+        if let Some(idx) = crate::sched::find_task_index(pid) {
+            let euid = unsafe {
+                crate::sched::TASK_TABLE[idx]
+                    .as_ref()
+                    .map(|t| t.euid)
+                    .unwrap_or(0)
+            };
+            if euid != 0 && euid != node.metadata.uid {
+                if !crate::security::has_capability(crate::security::CAP_FOWNER) {
+                    return Err(VfsError::PermissionDenied);
+                }
+            }
+        }
+    }
+
+    // Clear setuid/setgid bits when mode changes (POSIX)
+    node.metadata.permissions = mode & 0o7777;
+    Ok(())
+}
+
+/// Change file ownership
+pub fn chown(path: &str, uid: u32, gid: u32) -> Result<(), VfsError> {
+    let inode_id = resolve_path(path)?;
+    let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
+
+    // Permission check: owner or CAP_CHOWN (Linux: CAP_CHOWN required even for owner)
+    {
+        let pid = crate::sched::current_pid();
+        if let Some(idx) = crate::sched::find_task_index(pid) {
+            let euid = unsafe {
+                crate::sched::TASK_TABLE[idx]
+                    .as_ref()
+                    .map(|t| t.euid)
+                    .unwrap_or(0)
+            };
+            if euid != 0 {
+                if !crate::security::has_capability(crate::security::CAP_CHOWN) {
+                    return Err(VfsError::PermissionDenied);
+                }
+            }
+        }
+    }
+
+    // POSIX: clear setuid/setgid bits when owner/group changes (unless root)
+    let old_uid = node.metadata.uid;
+    let old_gid = node.metadata.gid;
+    node.metadata.uid = uid;
+    node.metadata.gid = gid;
+    if uid != old_uid {
+        node.metadata.permissions &= !crate::security::PERM_SETUID;
+    }
+    if gid != old_gid {
+        node.metadata.permissions &= !crate::security::PERM_SETGID;
+    }
+    Ok(())
 }
 
 /// Register a filesystem (assign an fs_id)
@@ -567,8 +868,10 @@ pub fn mount(path: &str, fs_id: u32, root_inode: u64) -> Result<(), VfsError> {
 /// Print VFS debug info
 pub fn print_debug() {
     unsafe {
-        println!("[vfs] {} nodes, {} mount points, {} open files",
-            VFS_NODE_COUNT, MOUNT_COUNT,
+        println!(
+            "[vfs] {} nodes, {} mount points, {} open files",
+            VFS_NODE_COUNT,
+            MOUNT_COUNT,
             OPEN_FILES.iter().filter(|f| f.is_some()).count()
         );
         for i in 0..VFS_NODE_COUNT {
@@ -579,7 +882,90 @@ pub fn print_debug() {
                 FileType::Device => "DEV ",
                 FileType::Symlink => "LINK",
             };
-            println!("[vfs]   {} {} ({} bytes)", node.name_str(), type_str, node.metadata.size);
+            println!(
+                "[vfs] {} {} ({} bytes)",
+                node.name_str(),
+                type_str,
+                node.metadata.size
+            );
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Security: VFS permission checks
+// ═══════════════════════════════════════════════════════════════
+
+/// Check if the current process has permission to access a VFS node.
+/// `access` is a bitmask of PERM_* bits to check (e.g., PERM_OWNER_READ | PERM_OWNER_WRITE).
+/// Returns true if access is allowed.
+pub fn check_permission(node: &VfsNode, access: u32) -> bool {
+    use crate::security::{self, AccessMode};
+
+    // If the process has CAP_DAC_OVERRIDE, bypass all permission checks
+    if security::has_capability(security::CAP_DAC_OVERRIDE) {
+        return true;
+    }
+
+    let perm = node.metadata.permissions;
+    let file_uid = node.metadata.uid;
+    let file_gid = node.metadata.gid;
+
+    // Determine which permission bits apply based on the access type
+    // access is a mask of specific permission bits to verify
+    // We need to check the appropriate owner/group/other triplet
+
+    // Use the security module's check_access for each requested bit
+    if (access
+        & (security::PERM_OWNER_READ | security::PERM_GROUP_READ | security::PERM_OTHERS_READ))
+        != 0
+    {
+        if !security::check_access(file_uid, file_gid, perm, AccessMode::Read) {
+            return false;
+        }
+    }
+    if (access
+        & (security::PERM_OWNER_WRITE | security::PERM_GROUP_WRITE | security::PERM_OTHERS_WRITE))
+        != 0
+    {
+        if !security::check_access(file_uid, file_gid, perm, AccessMode::Write) {
+            return false;
+        }
+    }
+    if (access
+        & (security::PERM_OWNER_EXEC | security::PERM_GROUP_EXEC | security::PERM_OTHERS_EXEC))
+        != 0
+    {
+        if !security::check_access(file_uid, file_gid, perm, AccessMode::Execute) {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Mount virtual filesystems (/proc, /dev, /sys) and register them with the VFS.
+/// Called from kernel_init after vfs::init().
+pub fn mount_virtual_fs() {
+    // Create mount-point directories in VFS root
+    let proc_id = alloc_node("proc", FileType::Directory, 0);
+    let dev_id = alloc_node("dev", FileType::Directory, 0);
+    let sys_id = alloc_node("sys", FileType::Directory, 0);
+
+    // Register and mount each virtual filesystem
+    let proc_fs_id = register_fs();
+    let dev_fs_id = register_fs();
+    let sys_fs_id = register_fs();
+
+    if let Ok(id) = proc_id {
+        let _ = mount("/proc", proc_fs_id, id);
+    }
+    if let Ok(id) = dev_id {
+        let _ = mount("/dev", dev_fs_id, id);
+    }
+    if let Ok(id) = sys_id {
+        let _ = mount("/sys", sys_fs_id, id);
+    }
+
+    println!("[vfs] Virtual filesystems mounted: /proc, /dev, /sys");
 }

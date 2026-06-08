@@ -1,43 +1,43 @@
-//! GIC-400 (GICv2) Interrupt Controller driver for BCM2712
+//! GIC-400 (GICv2) Interrupt Controller driver
 //!
-//! Memory map (from bcm2712.dtsi, offset from 0x10_0000_0000):
-//!   GICD: 0x7FFF_9000 (4KB)
-//!   GICC: 0x7FFFA000 (8KB)
-//!   GICH: 0x7FFFC000 (8KB)
-//!   GICV: 0x7FFFE000 (8KB)
-
-/// SoC peripheral base offset (from device tree: ranges = <0x00 0x10 0x0000_0000>)
-const SOC_BASE: u64 = 0x10_0000_0000;
+//! Pi 5 (BCM2712): GICD at 0x10_7FFF_9000, GICC at 0x10_7FFF_A000
+//! QEMU raspi4b:   GICD at 0xFF841000, GICC at 0xFF842000
 
 /// GIC Distributor base address
-const GICD_BASE: u64 = SOC_BASE + 0x7FFF_9000;
+#[cfg(not(feature = "qemu"))]
+const GICD_BASE: u64 = 0x10_7FFF_9000;
+#[cfg(feature = "qemu")]
+const GICD_BASE: u64 = 0xFF84_1000;
 
 /// GIC CPU Interface base address
-const GICC_BASE: u64 = SOC_BASE + 0x7FFFA000;
+#[cfg(not(feature = "qemu"))]
+const GICC_BASE: u64 = 0x10_7FFF_A000;
+#[cfg(feature = "qemu")]
+const GICC_BASE: u64 = 0xFF84_2000;
 
 // ---- GICD (Distributor) Register Offsets ----
-const GICD_CTLR: u64 = GICD_BASE + 0x000;    // Control Register
-const GICD_TYPER: u64 = GICD_BASE + 0x004;   // Type Register
+const GICD_CTLR: u64 = GICD_BASE;
+const GICD_TYPER: u64 = GICD_BASE + 0x004; // Type Register
 const GICD_IGROUPR: u64 = GICD_BASE + 0x080; // Interrupt Group
 const GICD_ISENABLER: u64 = GICD_BASE + 0x100; // Interrupt Set-Enable
 const GICD_ICENABLER: u64 = GICD_BASE + 0x180; // Interrupt Clear-Enable
-const GICD_ISPENDR: u64 = GICD_BASE + 0x200;   // Interrupt Set-Pending
-const GICD_ICPENDR: u64 = GICD_BASE + 0x280;   // Interrupt Clear-Pending
-const GICD_ISACTIVER: u64 = GICD_BASE + 0x300;  // Interrupt Set-Active
-const GICD_ICACTIVER: u64 = GICD_BASE + 0x380;  // Interrupt Clear-Active
+const GICD_ISPENDR: u64 = GICD_BASE + 0x200; // Interrupt Set-Pending
+const GICD_ICPENDR: u64 = GICD_BASE + 0x280; // Interrupt Clear-Pending
+const GICD_ISACTIVER: u64 = GICD_BASE + 0x300; // Interrupt Set-Active
+const GICD_ICACTIVER: u64 = GICD_BASE + 0x380; // Interrupt Clear-Active
 const GICD_IPRIORITYR: u64 = GICD_BASE + 0x400; // Interrupt Priority
-const GICD_ITARGETSR: u64 = GICD_BASE + 0x800;  // Interrupt Targets
-const GICD_ICFGR: u64 = GICD_BASE + 0xC00;      // Interrupt Configuration
-const GICD_SGIR: u64 = GICD_BASE + 0xF00;       // Software Generated Interrupt
+const GICD_ITARGETSR: u64 = GICD_BASE + 0x800; // Interrupt Targets
+const GICD_ICFGR: u64 = GICD_BASE + 0xC00; // Interrupt Configuration
+const GICD_SGIR: u64 = GICD_BASE + 0xF00; // Software Generated Interrupt
 
 // ---- GICC (CPU Interface) Register Offsets ----
-const GICC_CTLR: u64 = GICC_BASE + 0x000;    // Control Register
-const GICC_PMR: u64 = GICC_BASE + 0x004;     // Priority Mask Register
-const GICC_BPR: u64 = GICC_BASE + 0x008;     // Binary Point Register
-const GICC_IAR: u64 = GICC_BASE + 0x00C;     // Interrupt Acknowledge Register
-const GICC_EOIR: u64 = GICC_BASE + 0x010;    // End of Interrupt Register
-const GICC_RPR: u64 = GICC_BASE + 0x014;     // Running Priority Register
-const GICC_HPPIR: u64 = GICC_BASE + 0x018;   // Highest Pending Interrupt Register
+const GICC_CTLR: u64 = GICC_BASE;
+const GICC_PMR: u64 = GICC_BASE + 0x004; // Priority Mask Register
+const GICC_BPR: u64 = GICC_BASE + 0x008; // Binary Point Register
+const GICC_IAR: u64 = GICC_BASE + 0x00C; // Interrupt Acknowledge Register
+const GICC_EOIR: u64 = GICC_BASE + 0x010; // End of Interrupt Register
+const GICC_RPR: u64 = GICC_BASE + 0x014; // Running Priority Register
+const GICC_HPPIR: u64 = GICC_BASE + 0x018; // Highest Pending Interrupt Register
 
 pub struct Gic;
 
@@ -62,14 +62,14 @@ impl Gic {
         // Set all SPIs to default priority (0x80 = mid priority)
         // GICD_IPRIORITYR: 8 bits per IRQ, 4 IRQs per register (32 bits)
         for i in (32..num_irqs).step_by(4) {
-            let reg = GICD_IPRIORITYR + ((i as u64) * 1);
+            let reg = GICD_IPRIORITYR + (i as u64);
             Self::write32(reg, 0x80808080);
         }
 
         // Route all SPIs to core 0 (target mask = 0b0001)
         // GICD_ITARGETSR: 8 bits per IRQ, 4 IRQs per register
         for i in (32..num_irqs).step_by(4) {
-            let reg = GICD_ITARGETSR + ((i as u64) * 1);
+            let reg = GICD_ITARGETSR + (i as u64);
             Self::write32(reg, 0x01010101); // All target core 0
         }
 

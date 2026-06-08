@@ -53,13 +53,13 @@ pub fn set_pin_mode(pin: u8, mode: PinMode) {
 
     // Read the current value
     let mut val = unsafe { core::ptr::read_volatile(reg as *const u32) };
-    
+
     // Clear the bits for this pin
     val &= !mask;
-    
+
     // Set the new mode
     val |= (mode as u32) << shift;
-    
+
     // Write back
     unsafe { core::ptr::write_volatile(reg as *mut u32, val) };
 }
@@ -109,26 +109,26 @@ pub fn set_pull(pin: u8, pull: PullMode) {
 
     // Set the pull mode
     unsafe { core::ptr::write_volatile(GPPUD as *mut u32, pull as u32) };
-    
+
     // Wait for the control signal to be set
     crate::arch::cpu::nop();
     crate::arch::cpu::nop();
     crate::arch::cpu::nop();
     crate::arch::cpu::nop();
     crate::arch::cpu::nop();
-    
+
     // Clock the pin
     let reg = if pin < 32 { GPPUDCLK0 } else { GPPUDCLK1 };
     let bit = if pin < 32 { pin } else { pin - 32 };
     unsafe { core::ptr::write_volatile(reg as *mut u32, 1 << bit) };
-    
+
     // Wait for the control signal to be set
     crate::arch::cpu::nop();
     crate::arch::cpu::nop();
     crate::arch::cpu::nop();
     crate::arch::cpu::nop();
     crate::arch::cpu::nop();
-    
+
     // Clear the control signal
     unsafe { core::ptr::write_volatile(GPPUD as *mut u32, 0) };
     unsafe { core::ptr::write_volatile(reg as *mut u32, 0) };

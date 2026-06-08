@@ -14,7 +14,6 @@
 
 use crate::display::fb::FramebufferInfo;
 use crate::display::graphics;
-use crate::display::console::WHITE;
 use crate::wm::theme;
 
 // ─── Widget Types ──────────────────────────────────────────────────────
@@ -55,7 +54,10 @@ pub struct Button {
 
 impl Button {
     pub const ZERO: Button = Button {
-        x: 0, y: 0, w: 100, h: 28,
+        x: 0,
+        y: 0,
+        w: 100,
+        h: 28,
         text: [0u8; MAX_TEXT],
         text_len: 0,
         state: WidgetState::Normal,
@@ -119,7 +121,8 @@ pub struct Label {
 
 impl Label {
     pub const ZERO: Label = Label {
-        x: 0, y: 0,
+        x: 0,
+        y: 0,
         text: [0u8; MAX_TEXT],
         text_len: 0,
         dim: false,
@@ -137,7 +140,11 @@ impl Label {
 
     pub fn draw(&self, fb: &FramebufferInfo, offset_x: u32, offset_y: u32, bg_color: u32) {
         let theme = theme::current();
-        let color = if self.dim { theme.label_text_dim } else { theme.label_text };
+        let color = if self.dim {
+            theme.label_text_dim
+        } else {
+            theme.label_text
+        };
         let px = offset_x + self.x;
         let py = offset_y + self.y;
         if self.text_len > 0 {
@@ -162,7 +169,10 @@ pub struct TextInput {
 
 impl TextInput {
     pub const ZERO: TextInput = TextInput {
-        x: 0, y: 0, w: 200, h: 28,
+        x: 0,
+        y: 0,
+        w: 200,
+        h: 28,
         text: [0u8; MAX_TEXT],
         text_len: 0,
         cursor_pos: 0,
@@ -183,7 +193,9 @@ impl TextInput {
 
     /// Insert a character at cursor position
     pub fn insert_char(&mut self, c: u8) {
-        if self.text_len >= MAX_TEXT - 1 { return; }
+        if self.text_len >= MAX_TEXT - 1 {
+            return;
+        }
         // Shift characters right
         for i in (self.cursor_pos..self.text_len).rev() {
             self.text[i + 1] = self.text[i];
@@ -195,7 +207,9 @@ impl TextInput {
 
     /// Delete character before cursor (backspace)
     pub fn backspace(&mut self) {
-        if self.cursor_pos == 0 { return; }
+        if self.cursor_pos == 0 {
+            return;
+        }
         for i in self.cursor_pos..self.text_len {
             self.text[i - 1] = self.text[i];
         }
@@ -222,7 +236,14 @@ impl TextInput {
         if self.text_len > 0 {
             let visible = &self.text[self.scroll_offset as usize..self.text_len];
             let visible_str = core::str::from_utf8(visible).unwrap_or("");
-            graphics::draw_text(fb, px + 4, py + 4, visible_str, theme.input_text, theme.input_bg);
+            graphics::draw_text(
+                fb,
+                px + 4,
+                py + 4,
+                visible_str,
+                theme.input_text,
+                theme.input_bg,
+            );
         }
 
         // Cursor (blinking would need timer, so just draw a static line)
@@ -254,7 +275,9 @@ pub struct Checkbox {
 
 impl Checkbox {
     pub const ZERO: Checkbox = Checkbox {
-        x: 0, y: 0, size: 16,
+        x: 0,
+        y: 0,
+        size: 16,
         checked: false,
         label: [0u8; MAX_TEXT],
         label_len: 0,
@@ -276,7 +299,7 @@ impl Checkbox {
 
         // Checkmark if checked
         if self.checked {
-            let half = self.size / 2;
+            let _half = self.size / 2;
             // Draw an "X" inside the box
             for i in 0..self.size {
                 // Diagonal 1
@@ -325,7 +348,10 @@ pub struct ProgressBar {
 
 impl ProgressBar {
     pub const ZERO: ProgressBar = ProgressBar {
-        x: 0, y: 0, w: 200, h: 12,
+        x: 0,
+        y: 0,
+        w: 200,
+        h: 12,
         value: 0,
     };
 
@@ -355,15 +381,20 @@ pub struct ScrollBar {
     pub y: u32,
     pub w: u32,
     pub h: u32,
-    pub thumb_pos: u32,     // 0..=100
-    pub thumb_size: u32,    // percentage of track height
+    pub thumb_pos: u32,  // 0..=100
+    pub thumb_size: u32, // percentage of track height
     pub hovered: bool,
 }
 
 impl ScrollBar {
     pub const ZERO: ScrollBar = ScrollBar {
-        x: 0, y: 0, w: 14, h: 100,
-        thumb_pos: 0, thumb_size: 20, hovered: false,
+        x: 0,
+        y: 0,
+        w: 14,
+        h: 100,
+        thumb_pos: 0,
+        thumb_size: 20,
+        hovered: false,
     };
 
     pub fn draw(&self, fb: &FramebufferInfo, offset_x: u32, offset_y: u32) {
@@ -377,7 +408,11 @@ impl ScrollBar {
         // Thumb
         let thumb_h = self.h * self.thumb_size.min(100) / 100;
         let thumb_y = py + self.h * self.thumb_pos.min(100) / 100;
-        let thumb_color = if self.hovered { theme.scroll_thumb_hover } else { theme.scroll_thumb };
+        let thumb_color = if self.hovered {
+            theme.scroll_thumb_hover
+        } else {
+            theme.scroll_thumb
+        };
         fill_rect(fb, px + 2, thumb_y, self.w - 4, thumb_h, thumb_color);
     }
 
@@ -401,7 +436,10 @@ pub struct Panel {
 
 impl Panel {
     pub const ZERO: Panel = Panel {
-        x: 0, y: 0, w: 200, h: 150,
+        x: 0,
+        y: 0,
+        w: 200,
+        h: 150,
         title: [0u8; MAX_TEXT],
         title_len: 0,
         has_border: true,
@@ -426,7 +464,14 @@ impl Panel {
 
         // Title
         if self.title_len > 0 {
-            graphics::draw_text(fb, px + 6, py + 4, self.title_str(), theme.label_text, theme.panel_bg);
+            graphics::draw_text(
+                fb,
+                px + 6,
+                py + 4,
+                self.title_str(),
+                theme.label_text,
+                theme.panel_bg,
+            );
             // Separator line below title
             fill_rect(fb, px + 4, py + 20, self.w - 8, 1, theme.panel_border);
         }
@@ -481,9 +526,16 @@ impl WidgetTable {
         let id = self.next_id;
         self.next_id += 1;
         let mut btn = Button::ZERO;
-        btn.x = x; btn.y = y; btn.w = w; btn.h = h;
+        btn.x = x;
+        btn.y = y;
+        btn.w = w;
+        btn.h = h;
         btn.set_text(text);
-        self.insert(WidgetEntry { id, kind: WidgetKind::Button(btn), active: true })
+        self.insert(WidgetEntry {
+            id,
+            kind: WidgetKind::Button(btn),
+            active: true,
+        })
     }
 
     /// Add a label and return its ID
@@ -491,9 +543,14 @@ impl WidgetTable {
         let id = self.next_id;
         self.next_id += 1;
         let mut lbl = Label::ZERO;
-        lbl.x = x; lbl.y = y;
+        lbl.x = x;
+        lbl.y = y;
         lbl.set_text(text);
-        self.insert(WidgetEntry { id, kind: WidgetKind::Label(lbl), active: true })
+        self.insert(WidgetEntry {
+            id,
+            kind: WidgetKind::Label(lbl),
+            active: true,
+        })
     }
 
     /// Add a text input and return its ID
@@ -501,8 +558,15 @@ impl WidgetTable {
         let id = self.next_id;
         self.next_id += 1;
         let mut inp = TextInput::ZERO;
-        inp.x = x; inp.y = y; inp.w = w; inp.h = h;
-        self.insert(WidgetEntry { id, kind: WidgetKind::TextInput(inp), active: true })
+        inp.x = x;
+        inp.y = y;
+        inp.w = w;
+        inp.h = h;
+        self.insert(WidgetEntry {
+            id,
+            kind: WidgetKind::TextInput(inp),
+            active: true,
+        })
     }
 
     /// Add a checkbox and return its ID
@@ -510,11 +574,16 @@ impl WidgetTable {
         let id = self.next_id;
         self.next_id += 1;
         let mut cb = Checkbox::ZERO;
-        cb.x = x; cb.y = y;
+        cb.x = x;
+        cb.y = y;
         let len = label.len().min(MAX_TEXT);
         cb.label[..len].copy_from_slice(label.as_bytes());
         cb.label_len = len;
-        self.insert(WidgetEntry { id, kind: WidgetKind::Checkbox(cb), active: true })
+        self.insert(WidgetEntry {
+            id,
+            kind: WidgetKind::Checkbox(cb),
+            active: true,
+        })
     }
 
     /// Add a progress bar and return its ID
@@ -522,8 +591,15 @@ impl WidgetTable {
         let id = self.next_id;
         self.next_id += 1;
         let mut pb = ProgressBar::ZERO;
-        pb.x = x; pb.y = y; pb.w = w; pb.h = h;
-        self.insert(WidgetEntry { id, kind: WidgetKind::ProgressBar(pb), active: true })
+        pb.x = x;
+        pb.y = y;
+        pb.w = w;
+        pb.h = h;
+        self.insert(WidgetEntry {
+            id,
+            kind: WidgetKind::ProgressBar(pb),
+            active: true,
+        })
     }
 
     /// Add a scrollbar and return its ID
@@ -531,8 +607,14 @@ impl WidgetTable {
         let id = self.next_id;
         self.next_id += 1;
         let mut sb = ScrollBar::ZERO;
-        sb.x = x; sb.y = y; sb.h = h;
-        self.insert(WidgetEntry { id, kind: WidgetKind::ScrollBar(sb), active: true })
+        sb.x = x;
+        sb.y = y;
+        sb.h = h;
+        self.insert(WidgetEntry {
+            id,
+            kind: WidgetKind::ScrollBar(sb),
+            active: true,
+        })
     }
 
     /// Add a panel and return its ID
@@ -540,11 +622,18 @@ impl WidgetTable {
         let id = self.next_id;
         self.next_id += 1;
         let mut pnl = Panel::ZERO;
-        pnl.x = x; pnl.y = y; pnl.w = w; pnl.h = h;
+        pnl.x = x;
+        pnl.y = y;
+        pnl.w = w;
+        pnl.h = h;
         let len = title.len().min(MAX_TEXT);
         pnl.title[..len].copy_from_slice(title.as_bytes());
         pnl.title_len = len;
-        self.insert(WidgetEntry { id, kind: WidgetKind::Panel(pnl), active: true })
+        self.insert(WidgetEntry {
+            id,
+            kind: WidgetKind::Panel(pnl),
+            active: true,
+        })
     }
 
     fn insert(&mut self, entry: WidgetEntry) -> Option<WidgetId> {
@@ -589,7 +678,9 @@ impl WidgetTable {
     /// Handle a click at (px, py) relative to the window content area
     pub fn handle_click(&mut self, px: u32, py: u32) -> Option<WidgetId> {
         for i in 0..MAX_WIDGETS {
-            if !self.entries[i].active { continue; }
+            if !self.entries[i].active {
+                continue;
+            }
             match &mut self.entries[i].kind {
                 WidgetKind::Button(b) => {
                     if b.hit_test(px, py) {
@@ -627,6 +718,16 @@ impl WidgetTable {
         None
     }
 
+    /// Get an immutable reference to a widget by ID
+    pub fn get(&self, id: WidgetId) -> Option<&WidgetKind> {
+        for i in 0..MAX_WIDGETS {
+            if self.entries[i].active && self.entries[i].id == id {
+                return Some(&self.entries[i].kind);
+            }
+        }
+        None
+    }
+
     /// Check if a button was clicked and consume the flag
     pub fn was_clicked(&mut self, id: WidgetId) -> bool {
         for i in 0..MAX_WIDGETS {
@@ -650,13 +751,17 @@ impl WidgetTable {
 // ─── Drawing Helpers ───────────────────────────────────────────────────
 
 /// Fill a rectangle with a solid color
-fn fill_rect(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
+pub fn fill_rect(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
     for dy in 0..h {
         let py = y + dy;
-        if py >= fb.height { break; }
+        if py >= fb.height {
+            break;
+        }
         for dx in 0..w {
             let px = x + dx;
-            if px >= fb.width { break; }
+            if px >= fb.width {
+                break;
+            }
             graphics::draw_pixel(fb, px, py, color);
         }
     }
@@ -667,7 +772,9 @@ fn draw_rect_outline(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color
     // Top and bottom
     for dx in 0..w {
         let px = x + dx;
-        if px >= fb.width { break; }
+        if px >= fb.width {
+            break;
+        }
         graphics::draw_pixel(fb, px, y, color);
         if h > 0 {
             graphics::draw_pixel(fb, px, y + h - 1, color);
@@ -676,7 +783,9 @@ fn draw_rect_outline(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color
     // Left and right
     for dy in 0..h {
         let py = y + dy;
-        if py >= fb.height { break; }
+        if py >= fb.height {
+            break;
+        }
         graphics::draw_pixel(fb, x, py, color);
         if w > 0 {
             graphics::draw_pixel(fb, x + w - 1, py, color);

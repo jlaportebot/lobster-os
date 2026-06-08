@@ -7,19 +7,16 @@ use crate::memory::{PhysAddr, VirtAddr};
 use crate::println;
 
 // Re-export PTE flags from mmu for external use
-pub use super::mmu::PTE_KERNEL_DATA;
-pub use super::mmu::PTE_KERNEL_CODE;
-pub use super::mmu::PTE_DEVICE;
-pub use super::mmu::PTE_DEVICE_NG;
-pub use super::mmu::PTE_VALID;
-pub use super::mmu::PTE_PAGE;
-pub use super::mmu::PTE_ACCESS;
-pub use super::mmu::PTE_NG;
-pub use super::mmu::PTE_ISH;
-pub use super::mmu::PTE_OSH;
-pub use super::mmu::MT_NORMAL;
 pub use super::mmu::MT_DEVICE;
 pub use super::mmu::MT_NORMAL_NC;
+pub use super::mmu::PTE_ACCESS;
+pub use super::mmu::PTE_DEVICE;
+pub use super::mmu::PTE_ISH;
+pub use super::mmu::PTE_KERNEL_CODE;
+pub use super::mmu::PTE_KERNEL_DATA;
+pub use super::mmu::PTE_NG;
+pub use super::mmu::PTE_PAGE;
+pub use super::mmu::PTE_VALID;
 
 /// Map a single kernel page (in TTBR1 space)
 ///
@@ -76,7 +73,11 @@ pub fn print_memory_map() {
         for i in 0..NUM_REGIONS {
             if let Some(r) = &KERNEL_MEMORY_MAP[i] {
                 let size_kb = r.size / 1024;
-                let perm = if r.flags & PTE_NG != 0 { "user" } else { "kern" };
+                let perm = if r.flags & PTE_NG != 0 {
+                    "user"
+                } else {
+                    "kern"
+                };
                 let cache = if r.flags & MT_DEVICE != 0 {
                     "device"
                 } else if r.flags & MT_NORMAL_NC != 0 {
@@ -84,14 +85,16 @@ pub fn print_memory_map() {
                 } else {
                     "cached"
                 };
-                println!("  {:20} {:#018x}..{:#018x} → {:#010x} ({} KB, {}, {})",
-                         r.name,
-                         r.virt_start.0,
-                         r.virt_start.0 + r.size,
-                         r.phys_start.0,
-                         size_kb,
-                         perm,
-                         cache);
+                println!(
+                    "  {:20} {:#018x}..{:#018x} → {:#010x} ({} KB, {}, {})",
+                    r.name,
+                    r.virt_start.0,
+                    r.virt_start.0 + r.size,
+                    r.phys_start.0,
+                    size_kb,
+                    perm,
+                    cache
+                );
             }
         }
     }

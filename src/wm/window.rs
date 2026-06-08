@@ -4,15 +4,11 @@
 //! The window manager tracks focus, stacking order, and routes input
 //! events to the correct window.
 
-use crate::display::fb::FramebufferInfo;
-use crate::display::graphics;
-use crate::display::console::WHITE;
-use crate::wm::compositor;
-use crate::wm::theme;
 use crate::println;
+use crate::wm::compositor;
 
 /// Maximum number of windows
-const MAX_WINDOWS: usize = 32;
+const MAX_WINDOWS: usize = 8;
 
 /// Title bar height in pixels
 const TITLE_BAR_H: u32 = 24;
@@ -36,6 +32,11 @@ pub enum WinState {
     Maximized,
 }
 
+/// Wrapper for raw pointer that implements Send (content buffer is only accessed with lock held)
+pub struct ContentPtr(*mut u32);
+unsafe impl Send for ContentPtr {}
+unsafe impl Sync for ContentPtr {}
+
 /// Window structure
 pub struct Window {
     pub id: u32,
@@ -54,22 +55,39 @@ pub struct Window {
     pub client_w: u32,
     pub client_h: u32,
     /// Content buffer (pixel data for the client area)
-    pub content: *mut u32,
+    pub content: ContentPtr,
     pub content_size: usize,
 }
 
 impl Window {
     const ZERO: Window = Window {
-        id: 0, x: 0, y: 0, w: 0, h: 0,
+        id: 0,
+        x: 0,
+        y: 0,
+        w: 0,
+        h: 0,
         state: WinState::Normal,
         title: [0u8; 64],
         title_len: 0,
         focused: false,
         active: false,
-        client_x: 0, client_y: 0, client_w: 0, client_h: 0,
-        content: core::ptr::null_mut(),
+        client_x: 0,
+        client_y: 0,
+        client_w: 0,
+        client_h: 0,
+        content: ContentPtr(core::ptr::null_mut()),
         content_size: 0,
     };
+
+    /// Get the content pointer as *mut u32
+    pub fn content_ptr(&self) -> *mut u32 {
+        self.content.0
+    }
+
+    /// Set the content pointer
+    pub fn set_content_ptr(&mut self, ptr: *mut u32) {
+        self.content = ContentPtr(ptr);
+    }
 
     /// Get the title as a string slice
     pub fn title_str(&self) -> &str {
@@ -86,268 +104,328 @@ impl Window {
 
 // ─── Global Window State ───────────────────────────────────────────────
 
-static mut WINDOWS: [Window; MAX_WINDOWS] = [Window::ZERO; MAX_WINDOWS];
-static mut WIN_COUNT: usize = 0;
-static mut NEXT_WIN_ID: u32 = 1;
-static mut FOCUSED_ID: u32 = 0;
+use spin::Mutex;
+
+static WINDOWS: Mutex<[Window; MAX_WINDOWS]> = Mutex::new([Window::ZERO; MAX_WINDOWS]);
+static WIN_COUNT: Mutex<usize> = Mutex::new(0);
+static NEXT_WIN_ID: Mutex<u32> = Mutex::new(1);
+static FOCUSED_ID: Mutex<u32> = Mutex::new(0);
 
 /// Drag state for window moving
-static mut DRAG_WIN_ID: u32 = 0;
-static mut DRAG_START_X: u32 = 0;
-static mut DRAG_START_Y: u32 = 0;
-static mut DRAG_WIN_START_X: u32 = 0;
-static mut DRAG_WIN_START_Y: u32 = 0;
-static mut DRAGGING: bool = false;
+static DRAG_WIN_ID: Mutex<u32> = Mutex::new(0);
+static DRAG_START_X: Mutex<u32> = Mutex::new(0);
+static DRAG_START_Y: Mutex<u32> = Mutex::new(0);
+static DRAG_WIN_START_X: Mutex<u32> = Mutex::new(0);
+static DRAG_WIN_START_Y: Mutex<u32> = Mutex::new(0);
+static DRAGGING: Mutex<bool> = Mutex::new(false);
 
 /// Resize state
-static mut RESIZE_WIN_ID: u32 = 0;
-static mut RESIZE_START_W: u32 = 0;
-static mut RESIZE_START_H: u32 = 0;
-static mut RESIZING: bool = false;
+static RESIZE_WIN_ID: Mutex<u32> = Mutex::new(0);
+static RESIZE_START_W: Mutex<u32> = Mutex::new(0);
+static RESIZE_START_H: Mutex<u32> = Mutex::new(0);
+static RESIZING: Mutex<bool> = Mutex::new(false);
 
 // ─── Initialization ────────────────────────────────────────────────────
 
 /// Initialize the window manager
 pub fn init() {
-    unsafe {
-        WIN_COUNT = 0;
-        NEXT_WIN_ID = 1;
-        FOCUSED_ID = 0;
-        DRAGGING = false;
-        RESIZING = false;
-    }
+    *WIN_COUNT.lock() = 0;
+    *NEXT_WIN_ID.lock() = 1;
+    *FOCUSED_ID.lock() = 0;
+    *DRAGGING.lock() = false;
+    *RESIZING.lock() = false;
 }
 
 // ─── Window Operations ─────────────────────────────────────────────────
 
 /// Create a new window and return its ID
 pub fn create(x: u32, y: u32, w: u32, h: u32, title: &str) -> Option<u32> {
-    unsafe {
-        if WIN_COUNT >= MAX_WINDOWS {
-            println!("[wm] Window table full");
-            return None;
-        }
+    let mut windows = WINDOWS.lock();
+    let mut win_count = WIN_COUNT.lock();
+    let mut next_win_id = NEXT_WIN_ID.lock();
 
-        let id = NEXT_WIN_ID;
-        NEXT_WIN_ID += 1;
-
-        // Find a slot
-        for i in 0..MAX_WINDOWS {
-            if !WINDOWS[i].active {
-                let mut win = Window::ZERO;
-                win.id = id;
-                win.x = x;
-                win.y = y;
-                win.w = w;
-                win.h = h;
-                win.state = WinState::Normal;
-                win.active = true;
-                win.set_title_str(title);
-                win.client_x = x + BORDER_W;
-                win.client_y = y + TITLE_BAR_H;
-                win.client_w = w.saturating_sub(2 * BORDER_W);
-                win.client_h = h.saturating_sub(TITLE_BAR_H + BORDER_W);
-
-                // Allocate content buffer for client area
-                let content_pixels = (win.client_w * win.client_h) as usize;
-                win.content_size = content_pixels * 4;
-                if content_pixels > 0 {
-                    let layout = core::alloc::Layout::from_size_align(win.content_size, 16).unwrap();
-                    let ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
-                        if !ptr.is_null() {
-                            core::ptr::write_bytes(ptr, 0, win.content_size);
-                            win.content = ptr as *mut u32;
-                        }
-                }
-
-                WINDOWS[i] = win;
-                WIN_COUNT += 1;
-
-                // Register with compositor
-                compositor::add_layer(id, x, y, w, h, id);
-
-                // Focus the new window
-                focus(id);
-
-                println!("[wm] Created window id={} '{}'", id, title);
-                return Some(id);
-            }
-        }
-        None
+    if *win_count >= MAX_WINDOWS {
+        println!("[wm] Window table full");
+        return None;
     }
+
+    let id = *next_win_id;
+    *next_win_id += 1;
+
+    // Find a slot
+    for i in 0..MAX_WINDOWS {
+        if !windows[i].active {
+            let mut win = Window::ZERO;
+            win.id = id;
+            win.x = x;
+            win.y = y;
+            win.w = w;
+            win.h = h;
+            win.state = WinState::Normal;
+            win.active = true;
+            win.set_title_str(title);
+            win.client_x = x + BORDER_W;
+            win.client_y = y + TITLE_BAR_H;
+            win.client_w = w.saturating_sub(2 * BORDER_W);
+            win.client_h = h.saturating_sub(TITLE_BAR_H + BORDER_W);
+
+            // Allocate content buffer for client area
+            let content_pixels = (win.client_w * win.client_h) as usize;
+            win.content_size = content_pixels * 4;
+            if content_pixels > 0 {
+                let layout = core::alloc::Layout::from_size_align(win.content_size, 16).unwrap();
+                let ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
+                if !ptr.is_null() {
+                    unsafe { core::ptr::write_bytes(ptr, 0, win.content_size) };
+                    win.set_content_ptr(ptr as *mut u32);
+                }
+            }
+
+            windows[i] = win;
+            *win_count += 1;
+
+            // Register with compositor
+            drop(windows);
+            drop(win_count);
+            drop(next_win_id);
+            compositor::add_layer(id, x, y, w, h, id);
+
+            // Focus the new window
+            focus(id);
+
+            println!("[wm] Created window id={} '{}'", id, title);
+            return Some(id);
+        }
+    }
+    None
 }
 
 /// Destroy a window by ID
 pub fn destroy(id: u32) {
-    unsafe {
+    // Find the window index first
+    let win_idx = {
+        let windows = WINDOWS.lock();
+        let mut found = None;
         for i in 0..MAX_WINDOWS {
-            if WINDOWS[i].active && WINDOWS[i].id == id {
-                // Free content buffer
-                if !WINDOWS[i].content.is_null() && WINDOWS[i].content_size > 0 {
-                        let layout = core::alloc::Layout::from_size_align(WINDOWS[i].content_size, 16).unwrap();
-                        crate::memory::heap::heap_free(WINDOWS[i].content as *mut u8, layout);
-                    }
+            if windows[i].active && windows[i].id == id {
+                found = Some(i);
+                break;
+            }
+        }
+        found
+    };
 
-                    // Remove from compositor
-                compositor::remove_layer(id);
+    let Some(i) = win_idx else { return };
 
-                WINDOWS[i] = Window::ZERO;
-                WIN_COUNT -= 1;
+    // Free content buffer
+    {
+        let windows = WINDOWS.lock();
+        let content_ptr = windows[i].content_ptr();
+        if !content_ptr.is_null() && windows[i].content_size > 0 {
+            let layout = core::alloc::Layout::from_size_align(windows[i].content_size, 16).unwrap();
+            unsafe { crate::memory::heap::heap_free(content_ptr as *mut u8, layout) };
+        }
+    }
 
-                if FOCUSED_ID == id {
-                    FOCUSED_ID = 0;
-                    // Focus the next active window
-                    for j in 0..MAX_WINDOWS {
-                        if WINDOWS[j].active {
-                            focus(WINDOWS[j].id);
-                            break;
-                        }
-                    }
+    // Remove from compositor
+    compositor::remove_layer(id);
+
+    // Clear window and update state
+    let mut next_focus = None;
+    {
+        let mut windows = WINDOWS.lock();
+        let mut win_count = WIN_COUNT.lock();
+        let mut focused_id = FOCUSED_ID.lock();
+
+        windows[i] = Window::ZERO;
+        *win_count -= 1;
+
+        if *focused_id == id {
+            *focused_id = 0;
+            // Find next active window to focus
+            for j in 0..MAX_WINDOWS {
+                if windows[j].active {
+                    next_focus = Some(windows[j].id);
+                    break;
                 }
-                println!("[wm] Destroyed window id={}", id);
-                return;
             }
         }
     }
+
+    if let Some(next_id) = next_focus {
+        focus(next_id);
+    }
+
+    println!("[wm] Destroyed window id={}", id);
 }
 
 /// Focus a window (bring to top, highlight title bar)
 pub fn focus(id: u32) {
-    unsafe {
-        // Unfocus all windows
-        for i in 0..MAX_WINDOWS {
-            WINDOWS[i].focused = false;
-        }
-        // Focus the target
-        for i in 0..MAX_WINDOWS {
-            if WINDOWS[i].active && WINDOWS[i].id == id {
-                WINDOWS[i].focused = true;
-                FOCUSED_ID = id;
-                compositor::raise_layer(id);
-                return;
-            }
+    let mut windows = WINDOWS.lock();
+    let mut focused_id = FOCUSED_ID.lock();
+
+    // Unfocus all windows
+    for i in 0..MAX_WINDOWS {
+        windows[i].focused = false;
+    }
+    // Focus the target
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].id == id {
+            windows[i].focused = true;
+            *focused_id = id;
+            drop(windows);
+            drop(focused_id);
+            compositor::raise_layer(id);
+            return;
         }
     }
 }
 
 /// Get the currently focused window ID
 pub fn focused_id() -> u32 {
-    unsafe { FOCUSED_ID }
+    *FOCUSED_ID.lock()
 }
 
 /// Move a window to a new position
 pub fn move_window(id: u32, x: u32, y: u32) {
-    unsafe {
-        for i in 0..MAX_WINDOWS {
-            if WINDOWS[i].active && WINDOWS[i].id == id {
-                WINDOWS[i].x = x;
-                WINDOWS[i].y = y;
-                WINDOWS[i].client_x = x + BORDER_W;
-                WINDOWS[i].client_y = y + TITLE_BAR_H;
-                compositor::update_layer(id, x, y, WINDOWS[i].w, WINDOWS[i].h);
-                return;
-            }
+    let mut windows = WINDOWS.lock();
+
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].id == id {
+            windows[i].x = x;
+            windows[i].y = y;
+            windows[i].client_x = x + BORDER_W;
+            windows[i].client_y = y + TITLE_BAR_H;
+            let w = windows[i].w;
+            let h = windows[i].h;
+            drop(windows);
+            compositor::update_layer(id, x, y, w, h);
+            return;
         }
     }
 }
 
 /// Resize a window
 pub fn resize(id: u32, w: u32, h: u32) {
-    unsafe {
-        for i in 0..MAX_WINDOWS {
-            if WINDOWS[i].active && WINDOWS[i].id == id {
-                let min_w = 80u32;
-                let min_h = 60u32;
-                if w < min_w || h < min_h { return; }
+    let mut windows = WINDOWS.lock();
 
-                // Free old content buffer
-                if !WINDOWS[i].content.is_null() && WINDOWS[i].content_size > 0 {
-                        let layout = core::alloc::Layout::from_size_align(WINDOWS[i].content_size, 16).unwrap();
-                        crate::memory::heap::heap_free(WINDOWS[i].content as *mut u8, layout);
-                        WINDOWS[i].content = core::ptr::null_mut();
-                    }
-
-                WINDOWS[i].w = w;
-                WINDOWS[i].h = h;
-                WINDOWS[i].client_w = w.saturating_sub(2 * BORDER_W);
-                WINDOWS[i].client_h = h.saturating_sub(TITLE_BAR_H + BORDER_W);
-
-                // Allocate new content buffer
-                let content_pixels = (WINDOWS[i].client_w * WINDOWS[i].client_h) as usize;
-                WINDOWS[i].content_size = content_pixels * 4;
-                if content_pixels > 0 {
-                    let layout = core::alloc::Layout::from_size_align(WINDOWS[i].content_size, 16).unwrap();
-                    let ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
-                        if !ptr.is_null() {
-                            core::ptr::write_bytes(ptr, 0, WINDOWS[i].content_size);
-                            WINDOWS[i].content = ptr as *mut u32;
-                        }
-                }
-
-                compositor::update_layer(id, WINDOWS[i].x, WINDOWS[i].y, w, h);
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].id == id {
+            let min_w = 80u32;
+            let min_h = 60u32;
+            if w < min_w || h < min_h {
                 return;
             }
+
+            // Free old content buffer
+            let old_ptr = windows[i].content_ptr();
+            if !old_ptr.is_null() && windows[i].content_size > 0 {
+                let layout =
+                    core::alloc::Layout::from_size_align(windows[i].content_size, 16).unwrap();
+                unsafe { crate::memory::heap::heap_free(old_ptr as *mut u8, layout) };
+                windows[i].set_content_ptr(core::ptr::null_mut());
+            }
+
+            windows[i].w = w;
+            windows[i].h = h;
+            windows[i].client_w = w.saturating_sub(2 * BORDER_W);
+            windows[i].client_h = h.saturating_sub(TITLE_BAR_H + BORDER_W);
+
+            // Allocate new content buffer
+            let content_pixels = (windows[i].client_w * windows[i].client_h) as usize;
+            windows[i].content_size = content_pixels * 4;
+            if content_pixels > 0 {
+                let layout =
+                    core::alloc::Layout::from_size_align(windows[i].content_size, 16).unwrap();
+                let ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
+                if !ptr.is_null() {
+                    unsafe { core::ptr::write_bytes(ptr, 0, windows[i].content_size) };
+                    windows[i].set_content_ptr(ptr as *mut u32);
+                }
+            }
+
+            let x = windows[i].x;
+            let y = windows[i].y;
+            drop(windows);
+            compositor::update_layer(id, x, y, w, h);
+            return;
         }
     }
 }
 
 /// Minimize a window
 pub fn minimize(id: u32) {
-    unsafe {
-        for i in 0..MAX_WINDOWS {
-            if WINDOWS[i].active && WINDOWS[i].id == id {
-                WINDOWS[i].state = WinState::Minimized;
-                compositor::set_layer_visible(id, false);
-                return;
-            }
+    let mut windows = WINDOWS.lock();
+
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].id == id {
+            windows[i].state = WinState::Minimized;
+            drop(windows);
+            compositor::set_layer_visible(id, false);
+            return;
         }
     }
 }
 
 /// Maximize a window (fill screen)
 pub fn maximize(id: u32) {
-    let fb = compositor::fb_info();
-    unsafe {
-        for i in 0..MAX_WINDOWS {
-            if WINDOWS[i].active && WINDOWS[i].id == id {
-                if WINDOWS[i].state == WinState::Maximized {
-                    // Restore
-                    WINDOWS[i].state = WinState::Normal;
-                    compositor::set_layer_visible(id, true);
-                } else {
-                    WINDOWS[i].state = WinState::Maximized;
-                    resize(id, fb.width, fb.height);
-                    move_window(id, 0, 0);
-                }
-                return;
+    let fb = match compositor::fb_info() {
+        Some(fb) => fb,
+        None => return,
+    };
+
+    let mut windows = WINDOWS.lock();
+
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].id == id {
+            if windows[i].state == WinState::Maximized {
+                // Restore
+                windows[i].state = WinState::Normal;
+                drop(windows);
+                compositor::set_layer_visible(id, true);
+            } else {
+                windows[i].state = WinState::Maximized;
+                drop(windows);
+                resize(id, fb.width, fb.height);
+                move_window(id, 0, 0);
             }
+            return;
         }
     }
 }
 
 /// Set a window's title
 pub fn set_title(id: u32, title: &str) {
-    unsafe {
-        for i in 0..MAX_WINDOWS {
-            if WINDOWS[i].active && WINDOWS[i].id == id {
-                WINDOWS[i].set_title_str(title);
-                compositor::mark_full_redraw();
-                return;
-            }
+    let mut windows = WINDOWS.lock();
+
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].id == id {
+            windows[i].set_title_str(title);
+            drop(windows);
+            compositor::mark_full_redraw();
+            return;
         }
     }
 }
 
 /// Get a window's title (used by compositor for rendering)
+/// Returns a copy of the title in a static buffer (safe for compositor rendering)
 pub fn get_title(id: u32) -> &'static str {
-    unsafe {
-        for i in 0..MAX_WINDOWS {
-            if WINDOWS[i].active && WINDOWS[i].id == id {
-                return WINDOWS[i].title_str();
+    static mut TITLE_BUFFER: [u8; 64] = [0; 64];
+
+    let windows = WINDOWS.lock();
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].id == id {
+            let title = windows[i].title_str();
+            let len = title.len().min(63);
+            unsafe {
+                TITLE_BUFFER[..len].copy_from_slice(&title.as_bytes()[..len]);
+                TITLE_BUFFER[len] = 0;
+                return core::str::from_utf8_unchecked(&TITLE_BUFFER[..len]);
             }
         }
-        ""
     }
+    ""
 }
 
 // ─── Input Event Handling ──────────────────────────────────────────────
@@ -355,14 +433,24 @@ pub fn get_title(id: u32) -> &'static str {
 /// Handle an HID event from the USB subsystem
 pub fn handle_event(evt: crate::usb::hid::HidEvent) {
     match evt {
-        crate::usb::hid::HidEvent::KeyPress { scancode, extended: _ } => {
+        crate::usb::hid::HidEvent::KeyPress {
+            scancode,
+            extended: _,
+        } => {
             handle_keypress(scancode);
         }
-        crate::usb::hid::HidEvent::KeyRelease { scancode: _, extended: _ } => {}
+        crate::usb::hid::HidEvent::KeyRelease {
+            scancode: _,
+            extended: _,
+        } => {}
         crate::usb::hid::HidEvent::MouseMove { dx, dy } => {
             handle_mouse_move(dx, dy);
         }
-        crate::usb::hid::HidEvent::MouseButton { left, right, middle } => {
+        crate::usb::hid::HidEvent::MouseButton {
+            left,
+            right,
+            middle,
+        } => {
             handle_mouse_button(left, right, middle);
         }
     }
@@ -383,12 +471,18 @@ fn handle_keypress(scancode: u8) {
 
 /// Handle mouse movement
 fn handle_mouse_move(dx: i16, dy: i16) {
-    unsafe {
-        if DRAGGING && DRAG_WIN_ID != 0 {
-            let new_x = (DRAG_WIN_START_X as i32 + dx as i32 - DRAG_START_X as i32).max(0) as u32;
-            let new_y = (DRAG_WIN_START_Y as i32 + dy as i32 - DRAG_START_Y as i32).max(0) as u32;
-            move_window(DRAG_WIN_ID, new_x, new_y);
-        }
+    let dragging = *DRAGGING.lock();
+    let drag_win_id = *DRAG_WIN_ID.lock();
+
+    if dragging && drag_win_id != 0 {
+        let drag_start_x = *DRAG_START_X.lock();
+        let drag_start_y = *DRAG_START_Y.lock();
+        let drag_win_start_x = *DRAG_WIN_START_X.lock();
+        let drag_win_start_y = *DRAG_WIN_START_Y.lock();
+
+        let new_x = (drag_win_start_x as i32 + dx as i32 - drag_start_x as i32).max(0) as u32;
+        let new_y = (drag_win_start_y as i32 + dy as i32 - drag_start_y as i32).max(0) as u32;
+        move_window(drag_win_id, new_x, new_y);
     }
 }
 
@@ -399,63 +493,61 @@ fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
     if left {
         // Button pressed — start drag or focus window under cursor
         // For now, just focus the topmost window
-        unsafe {
-            if FOCUSED_ID != 0 {
-                // Begin drag of focused window
-                DRAG_WIN_ID = FOCUSED_ID;
-                // DRAG_START_X/Y would be set from cursor position
-                DRAGGING = true;
-                for i in 0..MAX_WINDOWS {
-                    if WINDOWS[i].active && WINDOWS[i].id == FOCUSED_ID {
-                        DRAG_WIN_START_X = WINDOWS[i].x;
-                        DRAG_WIN_START_Y = WINDOWS[i].y;
-                        break;
-                    }
+        let focused_id = *FOCUSED_ID.lock();
+        if focused_id != 0 {
+            // Begin drag of focused window
+            *DRAG_WIN_ID.lock() = focused_id;
+            // DRAG_START_X/Y would be set from cursor position
+            *DRAGGING.lock() = true;
+            let windows = WINDOWS.lock();
+            for i in 0..MAX_WINDOWS {
+                if windows[i].active && windows[i].id == focused_id {
+                    *DRAG_WIN_START_X.lock() = windows[i].x;
+                    *DRAG_WIN_START_Y.lock() = windows[i].y;
+                    break;
                 }
             }
         }
     } else {
         // Button released — stop drag
-        unsafe {
-            DRAGGING = false;
-            DRAG_WIN_ID = 0;
-        }
+        *DRAGGING.lock() = false;
+        *DRAG_WIN_ID.lock() = 0;
     }
 }
 
 /// Cycle focus to the next window
 fn cycle_focus() {
-    unsafe {
-        let current = FOCUSED_ID;
-        let mut found_current = false;
-        let mut next_id: Option<u32> = None;
+    let windows = WINDOWS.lock();
+    let current = *FOCUSED_ID.lock();
+    let mut found_current = false;
+    let mut next_id: Option<u32> = None;
 
-        // Find the window after the current one
+    // Find the window after the current one
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active {
+            if found_current && next_id.is_none() {
+                next_id = Some(windows[i].id);
+                break;
+            }
+            if windows[i].id == current {
+                found_current = true;
+            }
+        }
+    }
+
+    // Wrap around to first window
+    if next_id.is_none() {
         for i in 0..MAX_WINDOWS {
-            if WINDOWS[i].active {
-                if found_current && next_id.is_none() {
-                    next_id = Some(WINDOWS[i].id);
-                    break;
-                }
-                if WINDOWS[i].id == current {
-                    found_current = true;
-                }
+            if windows[i].active {
+                next_id = Some(windows[i].id);
+                break;
             }
         }
+    }
 
-        // Wrap around to first window
-        if next_id.is_none() {
-            for i in 0..MAX_WINDOWS {
-                if WINDOWS[i].active {
-                    next_id = Some(WINDOWS[i].id);
-                    break;
-                }
-            }
-        }
-
-        if let Some(id) = next_id {
-            focus(id);
-        }
+    drop(windows);
+    if let Some(id) = next_id {
+        focus(id);
     }
 }
 
@@ -463,24 +555,22 @@ fn cycle_focus() {
 
 /// Get the number of active windows
 pub fn count() -> usize {
-    unsafe { WIN_COUNT }
+    *WIN_COUNT.lock()
 }
 
 /// Check if a window exists
 pub fn exists(id: u32) -> bool {
-    unsafe {
-        WINDOWS.iter().any(|w| w.active && w.id == id)
-    }
+    let windows = WINDOWS.lock();
+    windows.iter().any(|w| w.active && w.id == id)
 }
 
 /// Get window info by ID
 pub fn get_info(id: u32) -> Option<(u32, u32, u32, u32)> {
-    unsafe {
-        for i in 0..MAX_WINDOWS {
-            if WINDOWS[i].active && WINDOWS[i].id == id {
-                return Some((WINDOWS[i].x, WINDOWS[i].y, WINDOWS[i].w, WINDOWS[i].h));
-            }
+    let windows = WINDOWS.lock();
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].id == id {
+            return Some((windows[i].x, windows[i].y, windows[i].w, windows[i].h));
         }
-        None
     }
+    None
 }

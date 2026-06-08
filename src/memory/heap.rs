@@ -6,11 +6,7 @@
 //! The heap region is: HEAP_START .. HEAP_START + HEAP_SIZE
 //! We map frames on demand as allocations grow.
 
-use crate::memory::{
-    PAGE_SIZE,
-    HEAP_START, HEAP_SIZE,
-    frame_alloc,
-};
+use crate::memory::{frame_alloc, HEAP_SIZE, HEAP_START, PAGE_SIZE};
 use crate::println;
 
 use core::alloc::{GlobalAlloc, Layout};
@@ -43,12 +39,14 @@ pub unsafe fn init() {
         return;
     }
 
-    println!("[heap] Initializing kernel heap at {:#018x} ({} MB)",
-             HEAP_START, HEAP_SIZE / (1024 * 1024));
+    println!(
+        "[heap] Initializing kernel heap at {:#018x} ({} MB)",
+        HEAP_START,
+        HEAP_SIZE / (1024 * 1024)
+    );
 
     // Map the first page of the heap
-    let first_frame = frame_alloc::allocate_frame()
-        .expect("[heap] No frames available for heap!");
+    let first_frame = frame_alloc::allocate_frame().expect("[heap] No frames available for heap!");
     crate::memory::vmem::map_kernel_page(
         HEAP_START,
         first_frame.0,
@@ -67,7 +65,10 @@ pub unsafe fn init() {
     HEAP_HEAD = head;
     HEAP_INITIALIZED = true;
 
-    println!("[heap] Heap initialized ({} KB first page)", PAGE_SIZE / 1024);
+    println!(
+        "[heap] Heap initialized ({} KB first page)",
+        PAGE_SIZE / 1024
+    );
 }
 
 /// Expand the heap by mapping additional frames
@@ -176,7 +177,9 @@ pub unsafe fn heap_alloc(layout: Layout) -> *mut u8 {
 
 /// Free a heap allocation
 pub unsafe fn heap_free(ptr: *mut u8, _layout: Layout) {
-    if ptr.is_null() { return; }
+    if ptr.is_null() {
+        return;
+    }
 
     // Find the block header (it's right before the data)
     let header = (ptr as usize - HEADER_SIZE) as *mut HeapHeader;
@@ -203,9 +206,10 @@ pub unsafe fn heap_free(ptr: *mut u8, _layout: Layout) {
                     break;
                 }
                 let next = (*current).next;
-                if next.is_null() { break; }
+                if next.is_null() {
+                    break;
+                }
                 // Safe: we just set current.next above
-                current = current; // avoid re-borrow issues
                 break;
             }
         }
@@ -253,8 +257,15 @@ pub fn print_stats() {
         }
 
         let mapped_kb = (HEAP_CURRENT_TOP - HEAP_VIRT_START) / 1024;
-        println!("[heap] Blocks: {} total, {} free, {} used", total_blocks, free_blocks, used_blocks);
-        println!("[heap] Memory: {} KB free, {} KB used, {} KB mapped",
-                 free_bytes / 1024, used_bytes / 1024, mapped_kb);
+        println!(
+            "[heap] Blocks: {} total, {} free, {} used",
+            total_blocks, free_blocks, used_blocks
+        );
+        println!(
+            "[heap] Memory: {} KB free, {} KB used, {} KB mapped",
+            free_bytes / 1024,
+            used_bytes / 1024,
+            mapped_kb
+        );
     }
 }

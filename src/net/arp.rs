@@ -3,10 +3,10 @@
 //! Handles ARP requests and replies, maintains an ARP cache.
 //! No_std compatible - uses only core.
 
-use core::sync::atomic::{AtomicU8, Ordering};
-use crate::net::genet;
-use crate::net::eth::{EthernetFrame, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
 use crate::net::config;
+use crate::net::eth::{EthernetFrame, ETHER_TYPE_ARP};
+use crate::net::genet;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 /// ARP hardware type: Ethernet
 pub const ARP_HW_TYPE_ETH: u16 = 1;
@@ -44,9 +44,11 @@ pub struct ArpEntry {
 }
 
 /// ARP cache - static array of 16 entries
-static mut ARP_CACHE: [ArpEntry; 16] = [
-    ArpEntry { ip: [0, 0, 0, 0], mac: [0, 0, 0, 0, 0, 0], valid: false }; 16
-];
+static mut ARP_CACHE: [ArpEntry; 16] = [ArpEntry {
+    ip: [0, 0, 0, 0],
+    mac: [0, 0, 0, 0, 0, 0],
+    valid: false,
+}; 16];
 static ARP_CACHE_LOCK: AtomicU8 = AtomicU8::new(0);
 
 /// Initialize ARP module
@@ -61,7 +63,10 @@ pub fn init() {
 
 /// Acquire ARP cache lock (simple spinlock)
 fn acquire_lock() {
-    while ARP_CACHE_LOCK.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    while ARP_CACHE_LOCK
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         core::hint::spin_loop();
     }
 }
@@ -126,7 +131,9 @@ pub fn handle_packet(data: &[u8]) {
         return;
     }
 
-    let cfg = config(); let our_mac = cfg.mac_addr; let our_ip = cfg.ip_addr;
+    let cfg = config();
+    let _our_mac = cfg.mac_addr;
+    let our_ip = cfg.ip_addr;
 
     match arp.oper {
         ARP_OPER_REQUEST => {
@@ -138,7 +145,11 @@ pub fn handle_packet(data: &[u8]) {
         }
         ARP_OPER_REPLY => {
             // Cache the ARP reply
-            crate::println!("arp: received reply, caching {:?} -> {:?}", arp.spa, arp.sha);
+            crate::println!(
+                "arp: received reply, caching {:?} -> {:?}",
+                arp.spa,
+                arp.sha
+            );
             acquire_lock();
             for entry in unsafe { ARP_CACHE.iter_mut() } {
                 if !entry.valid || entry.ip == [0, 0, 0, 0] {
@@ -177,7 +188,9 @@ pub fn resolve(ip: [u8; 4]) -> Option<[u8; 6]> {
 
 /// Send an ARP request
 pub fn send_request(target_ip: [u8; 4]) {
-    let cfg = config(); let our_mac = cfg.mac_addr; let our_ip = cfg.ip_addr;
+    let cfg = config();
+    let our_mac = cfg.mac_addr;
+    let our_ip = cfg.ip_addr;
 
     // Build ARP request
     let mut arp_data = [0u8; 28];
@@ -209,7 +222,9 @@ pub fn send_request(target_ip: [u8; 4]) {
 
 /// Send an ARP reply
 pub fn send_reply(target_mac: [u8; 6], target_ip: [u8; 4]) {
-    let cfg = config(); let our_mac = cfg.mac_addr; let our_ip = cfg.ip_addr;
+    let cfg = config();
+    let our_mac = cfg.mac_addr;
+    let our_ip = cfg.ip_addr;
 
     // Build ARP reply
     let mut arp_data = [0u8; 28];
@@ -245,9 +260,16 @@ pub fn dump_cache() {
         if entry.valid {
             crate::println!(
                 "  {}.{}.{}.{} -> {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3],
-                entry.mac[0], entry.mac[1], entry.mac[2],
-                entry.mac[3], entry.mac[4], entry.mac[5]
+                entry.ip[0],
+                entry.ip[1],
+                entry.ip[2],
+                entry.ip[3],
+                entry.mac[0],
+                entry.mac[1],
+                entry.mac[2],
+                entry.mac[3],
+                entry.mac[4],
+                entry.mac[5]
             );
             count += 1;
         }

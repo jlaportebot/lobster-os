@@ -1,7 +1,7 @@
 //! Initial RAM Disk (initrd) loader — cpio newc format
 
-use crate::println;
 use super::vfs::*;
+use crate::println;
 
 /// CPIO newc format magic
 const CPIO_MAGIC: [u8; 6] = *b"070701";
@@ -83,7 +83,8 @@ pub fn load_initrd(base: *const u8, size: usize) -> Result<(), VfsError> {
         }
 
         let name_ptr = unsafe { base.add(name_offset) };
-        let name_bytes = unsafe { core::slice::from_raw_parts(name_ptr, namesize.saturating_sub(1)) };
+        let name_bytes =
+            unsafe { core::slice::from_raw_parts(name_ptr, namesize.saturating_sub(1)) };
         let name = core::str::from_utf8(name_bytes).unwrap_or("<invalid>");
 
         // Check for trailer
@@ -113,7 +114,9 @@ pub fn load_initrd(base: *const u8, size: usize) -> Result<(), VfsError> {
         let mut entry_name = clean_name;
         let mut last_slash = 0usize;
         for (i, b) in clean_name.as_bytes().iter().enumerate() {
-            if *b == b'/' { last_slash = i; }
+            if *b == b'/' {
+                last_slash = i;
+            }
         }
         if last_slash > 0 {
             entry_name = &clean_name[last_slash + 1..];
@@ -137,7 +140,11 @@ pub fn load_initrd(base: *const u8, size: usize) -> Result<(), VfsError> {
 
         file_count += 1;
         if file_count <= 20 {
-            let type_str = if file_type == FileType::Directory { "dir " } else { "file" };
+            let type_str = if file_type == FileType::Directory {
+                "dir "
+            } else {
+                "file"
+            };
             println!("[initrd] {} {} ({} bytes)", type_str, clean_name, filesize);
         }
 

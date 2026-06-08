@@ -9,8 +9,8 @@
 //!   0x0000_0000_7F00_0000  User stack (grows down)
 //!   0x0000_0000_8000_0000  End of user address space
 
-use crate::memory::{PhysAddr, VirtAddr, PAGE_SIZE, phys_to_virt};
 use crate::memory::frame_alloc;
+use crate::memory::{phys_to_virt, PhysAddr, PAGE_SIZE};
 use crate::println;
 
 /// User code region start (in TTBR0 space)
@@ -27,28 +27,30 @@ pub const USER_STACK_SIZE: u64 = 0x0010_0000; // 1MB
 pub const USER_ADDR_LIMIT: u64 = 0x0000_0000_8000_0000;
 
 /// ELF magic number
-const ELF_MAGIC: u32 = 0x464C457F; // "\x7fELF"
+pub const ELF_MAGIC: u32 = 0x464C457F; // "\x7fELF"
 
 /// ELF class (64-bit)
-const ELFCLASS64: u8 = 2;
+pub const ELFCLASS64: u8 = 2;
 
 /// ELF data encoding (little-endian)
-const ELFDATA2LSB: u8 = 1;
+pub const ELFDATA2LSB: u8 = 1;
 
 /// ELF machine type (AArch64)
-const EM_AARCH64: u16 = 183;
+pub const EM_AARCH64: u16 = 183;
 
 /// ELF type
-const ET_EXEC: u16 = 2;
-const ET_DYN: u16 = 3;
+pub const ET_EXEC: u16 = 2;
+pub const ET_DYN: u16 = 3;
 
 /// ELF segment types
-const PT_LOAD: u32 = 1;
+pub const PT_LOAD: u32 = 1;
+pub const PT_DYNAMIC: u32 = 2;
+pub const PT_INTERP: u32 = 3;
 
 /// ELF segment flags
-const PF_X: u32 = 1;
-const PF_W: u32 = 2;
-const PF_R: u32 = 4;
+pub const PF_X: u32 = 1;
+pub const PF_W: u32 = 2;
+pub const PF_R: u32 = 4;
 
 /// ELF64 file header
 #[repr(C)]
@@ -95,10 +97,51 @@ pub struct LoadResult {
     pub brk_base: u64,
 }
 
+/// Check if an ELF binary has a PT_DYNAMIC segment (i.e., is dynamically linked).
+pub fn is_dynamic(elf_data: &[u8]) -> bool {
+    if elf_data.len() < core::mem::size_of::<Elf64Ehdr>() {
+        return false;
+    }
+    let ehdr = unsafe { &*(elf_data.as_ptr() as *const Elf64Ehdr) };
+
+    for i in 0..ehdr.e_phnum as usize {
+        let phdr_off = ehdr.e_phoff as usize + i * ehdr.e_phentsize as usize;
+        if phdr_off + core::mem::size_of::<Elf64Phdr>() > elf_data.len() {
+            break;
+        }
+        let phdr = unsafe { &*(elf_data.as_ptr().add(phdr_off) as *const Elf64Phdr) };
+        if phdr.p_type == PT_DYNAMIC {
+            return true;
+        }
+    }
+    false
+}
+
+/// Determine the load base for a loaded ELF.
+///
+/// For ET_EXEC (type 2), load_base = 0 (absolute addresses).
+/// For ET_DYN / PIE (type 3), load_base = USER_CODE_START (relocated).
+pub fn load_base_for(elf_data: &[u8]) -> u64 {
+    if elf_data.len() < core::mem::size_of::<Elf64Ehdr>() {
+        return 0;
+    }
+    let ehdr = unsafe { &*(elf_data.as_ptr() as *const Elf64Ehdr) };
+    if ehdr.e_type == ET_DYN {
+        USER_CODE_START
+    } else {
+        0
+    }
+}
+
 /// Verify the ELF header is valid for AArch64
 pub fn verify_header(ehdr: &Elf64Ehdr) -> bool {
     // Check magic
-    let magic = u32::from_le_bytes([ehdr.e_ident[0], ehdr.e_ident[1], ehdr.e_ident[2], ehdr.e_ident[3]]);
+    let magic = u32::from_le_bytes([
+        ehdr.e_ident[0],
+        ehdr.e_ident[1],
+        ehdr.e_ident[2],
+        ehdr.e_ident[3],
+    ]);
     if magic != ELF_MAGIC {
         println!("[elf] Bad magic: {:#010x}", magic);
         return false;
@@ -171,7 +214,7 @@ fn alloc_user_page_table() -> Option<PhysAddr> {
 ///
 /// This walks/creates page tables under the process's TTBR0 root.
 /// Since we're in kernel mode, we access page tables via the direct phys map.
-unsafe fn map_user_page(ttbr0_phys: u64, va: u64, pa: u64, flags: u64) {
+pub unsafe fn map_user_page(ttbr0_phys: u64, va: u64, pa: u64, flags: u64) {
     // We need to walk the user page tables via physical addresses
     // mapped through our direct phys map.
     let phys_map = crate::memory::PHYS_MAP_OFFSET;
@@ -200,9 +243,8 @@ unsafe fn map_user_page(ttbr0_phys: u64, va: u64, pa: u64, flags: u64) {
             }
             crate::arch::cpu::dsb();
 
-            (*table)[idx] = next_frame.0
-                | crate::memory::vmem::PTE_VALID
-                | crate::memory::vmem::PTE_PAGE; // Table descriptor
+            (*table)[idx] =
+                next_frame.0 | crate::memory::vmem::PTE_VALID | crate::memory::vmem::PTE_PAGE; // Table descriptor
 
             table = (phys_map + next_frame.0) as *mut [u64; 512];
         } else if entry & crate::memory::mmu::PTE_TABLE != 0 {
@@ -230,9 +272,7 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
     }
 
     // Parse the ELF header
-    let ehdr = unsafe {
-        &*(elf_data.as_ptr() as *const Elf64Ehdr)
-    };
+    let ehdr = unsafe { &*(elf_data.as_ptr() as *const Elf64Ehdr) };
 
     if !verify_header(ehdr) {
         return Err("Invalid ELF header");
@@ -240,8 +280,10 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
 
     println!("[elf] Valid ELF64 AArch64 executable");
     println!("[elf] Entry point: {:#018x}", ehdr.e_entry);
-    println!("[elf] Program headers: {} (offset={:#x}, size={})",
-        ehdr.e_phnum, ehdr.e_phoff, ehdr.e_phentsize);
+    println!(
+        "[elf] Program headers: {} (offset={:#x}, size={})",
+        ehdr.e_phnum, ehdr.e_phoff, ehdr.e_phentsize
+    );
 
     // Allocate a user page table
     let ttbr0 = alloc_user_page_table().ok_or("Failed to allocate user page table")?;
@@ -257,16 +299,16 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
             continue;
         }
 
-        let phdr = unsafe {
-            &*(elf_data.as_ptr().add(phdr_offset) as *const Elf64Phdr)
-        };
+        let phdr = unsafe { &*(elf_data.as_ptr().add(phdr_offset) as *const Elf64Phdr) };
 
         if phdr.p_type != PT_LOAD {
             continue;
         }
 
-        println!("[elf] LOAD segment {}: vaddr={:#018x} filesz={:#x} memsz={:#x} flags={:#x}",
-            i, phdr.p_vaddr, phdr.p_filesz, phdr.p_memsz, phdr.p_flags);
+        println!(
+            "[elf] LOAD segment {}: vaddr={:#018x} filesz={:#x} memsz={:#x} flags={:#x}",
+            i, phdr.p_vaddr, phdr.p_filesz, phdr.p_memsz, phdr.p_flags
+        );
 
         if phdr.p_vaddr < USER_CODE_START || phdr.p_vaddr >= USER_ADDR_LIMIT {
             println!("[elf] Segment VA {:#018x} out of user range!", phdr.p_vaddr);
@@ -351,13 +393,18 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
             map_user_page(ttbr0.0, va, frame.0, PTE_USER_DATA);
         }
     }
-    println!("[elf] User stack mapped: {:#018x}..{:#018x}", stack_base, USER_STACK_TOP);
+    println!(
+        "[elf] User stack mapped: {:#018x}..{:#018x}",
+        stack_base, USER_STACK_TOP
+    );
 
     // Align brk_base to page boundary
     let brk_base = (highest_addr + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
 
-    println!("[elf] Load complete! entry={:#018x} ttbr0={:#010x} brk={:#018x}",
-        ehdr.e_entry, ttbr0.0, brk_base);
+    println!(
+        "[elf] Load complete! entry={:#018x} ttbr0={:#010x} brk={:#018x}",
+        ehdr.e_entry, ttbr0.0, brk_base
+    );
 
     Ok(LoadResult {
         entry_point: ehdr.e_entry,
@@ -406,7 +453,6 @@ pub fn build_hello_elf() -> &'static [u8] {
         0x00, 0x00, // e_shentsize = 0
         0x00, 0x00, // e_shnum = 0
         0x00, 0x00, // e_shstrndx = 0
-
         // === Program Header (56 bytes) ===
         0x01, 0x00, 0x00, 0x00, // p_type = PT_LOAD
         0x05, 0x00, 0x00, 0x00, // p_flags = PF_R | PF_X
@@ -416,7 +462,6 @@ pub fn build_hello_elf() -> &'static [u8] {
         0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_filesz = 49
         0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_memsz = 49
         0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, // p_align = 0x10000
-
         // === Code (32 bytes = 8 instructions) ===
         0x28, 0x00, 0x80, 0xD2, // mov x8, #1
         0x20, 0x00, 0x80, 0xD2, // mov x0, #1
@@ -426,7 +471,6 @@ pub fn build_hello_elf() -> &'static [u8] {
         0x08, 0x00, 0x80, 0xD2, // mov x8, #0
         0x00, 0x00, 0x80, 0xD2, // mov x0, #0
         0x01, 0x00, 0x00, 0xD4, // svc #0
-
         // === Message (17 bytes) ===
         0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x66, 0x72, // "Hello fr"
         0x6f, 0x6d, 0x20, 0x45, 0x4c, 0x30, 0x21, 0x0a, // "om EL0!\n"
@@ -502,26 +546,20 @@ pub fn build_hello_elf_into(buf: &mut [u8]) -> usize {
 
     // Write ELF header
     unsafe {
-        let ehdr_bytes = core::slice::from_raw_parts(
-            &ehdr as *const Elf64Ehdr as *const u8,
-            ehdr_size,
-        );
+        let ehdr_bytes =
+            core::slice::from_raw_parts(&ehdr as *const Elf64Ehdr as *const u8, ehdr_size);
         buf[..ehdr_size].copy_from_slice(ehdr_bytes);
     }
 
     // Write program header
     unsafe {
-        let phdr_bytes = core::slice::from_raw_parts(
-            &phdr as *const Elf64Phdr as *const u8,
-            phdr_size,
-        );
+        let phdr_bytes =
+            core::slice::from_raw_parts(&phdr as *const Elf64Phdr as *const u8, phdr_size);
         buf[ehdr_size..load_offset].copy_from_slice(phdr_bytes);
     }
 
     // Write code
-    let code_bytes = unsafe {
-        core::slice::from_raw_parts(code.as_ptr() as *const u8, code_size)
-    };
+    let code_bytes = unsafe { core::slice::from_raw_parts(code.as_ptr() as *const u8, code_size) };
     buf[load_offset..load_offset + code_size].copy_from_slice(code_bytes);
 
     // Write message

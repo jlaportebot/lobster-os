@@ -10,8 +10,8 @@
 //! - Link status polling
 //! - Scatter-gather DMA support
 
+use crate::memory::{phys_to_virt, virt_to_phys, VirtAddr};
 use crate::println;
-use crate::memory::{PhysAddr, VirtAddr, phys_to_virt, virt_to_phys};
 
 // ─── GENET MMIO offsets ────────────────────────────────────────────
 // Full register map for BCM27ETv5
@@ -92,9 +92,9 @@ pub struct DmaDesc {
 }
 
 /// TX descriptor flags
-const TX_DESC_SOP: u32 = 1 << 31;  // Start of packet
-const TX_DESC_EOP: u32 = 1 << 30;  // End of packet
-const TX_DESC_CRC: u32 = 1 << 29;  // Append CRC
+const TX_DESC_SOP: u32 = 1 << 31; // Start of packet
+const TX_DESC_EOP: u32 = 1 << 30; // End of packet
+const TX_DESC_CRC: u32 = 1 << 29; // Append CRC
 const TX_DESC_QTAG: u32 = 1 << 24; // Insert Q-tag
 
 /// RX descriptor flags
@@ -169,7 +169,9 @@ impl Genet {
     pub unsafe fn init(&mut self) -> Result<(), &'static str> {
         // Map GENET base via the device mapping region
         // For now we use the physical address directly through phys_to_virt
-        self.base = crate::memory::DEVICE_MAP_START.wrapping_add(GENET_BASE_PHYS).wrapping_sub(0x10_0000_0000);
+        self.base = crate::memory::DEVICE_MAP_START
+            .wrapping_add(GENET_BASE_PHYS)
+            .wrapping_sub(0x10_0000_0000);
 
         println!("[genet] Base VA: {:#018x}", self.base);
 
@@ -192,21 +194,30 @@ impl Genet {
         // If MAC is all zeros, generate a locally-administered one
         if self.mac_addr == [0; 6] {
             self.mac_addr = [0x02, 0x00, 0x00, 0x00, 0x5B, 0xC0];
-            self.reg32_write(UMAC_MAC0,
-                (self.mac_addr[2] as u32) << 24 |
-                (self.mac_addr[3] as u32) << 16 |
-                (self.mac_addr[4] as u32) << 8 |
-                (self.mac_addr[5] as u32));
-            self.reg32_write(UMAC_MAC1,
-                (self.mac_addr[0] as u32) << 8 |
-                (self.mac_addr[1] as u32));
+            self.reg32_write(
+                UMAC_MAC0,
+                (self.mac_addr[2] as u32) << 24
+                    | (self.mac_addr[3] as u32) << 16
+                    | (self.mac_addr[4] as u32) << 8
+                    | (self.mac_addr[5] as u32),
+            );
+            self.reg32_write(
+                UMAC_MAC1,
+                (self.mac_addr[0] as u32) << 8 | (self.mac_addr[1] as u32),
+            );
             println!("[genet] MAC not set by firmware, using local: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                 self.mac_addr[0], self.mac_addr[1], self.mac_addr[2],
                 self.mac_addr[3], self.mac_addr[4], self.mac_addr[5]);
         } else {
-            println!("[genet] MAC address: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                self.mac_addr[0], self.mac_addr[1], self.mac_addr[2],
-                self.mac_addr[3], self.mac_addr[4], self.mac_addr[5]);
+            println!(
+                "[genet] MAC address: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                self.mac_addr[0],
+                self.mac_addr[1],
+                self.mac_addr[2],
+                self.mac_addr[3],
+                self.mac_addr[4],
+                self.mac_addr[5]
+            );
         }
 
         // 3. Bring up the UMAC
@@ -240,7 +251,7 @@ impl Genet {
         let mut cmd = self.reg32_read(UMAC_CMD);
         cmd |= (1 << 0) |  // TX_EN
                (1 << 1) |  // RX_EN
-               (1 << 4);   // PROMISC (accept all for now)
+               (1 << 4); // PROMISC (accept all for now)
         self.reg32_write(UMAC_CMD, cmd);
 
         // 9. Enable DMA
@@ -258,16 +269,16 @@ impl Genet {
     unsafe fn alloc_dma_rings(&mut self) -> Result<(), &'static str> {
         // Allocate TX descriptor ring (64 descriptors × 16 bytes = 1 KB)
         let tx_desc_size = NUM_TX_DESC * core::mem::size_of::<DmaDesc>();
-        let tx_desc_phys = crate::memory::frame_alloc::allocate_contiguous(
-            (tx_desc_size + 4095) / 4096
-        ).ok_or("Failed to allocate TX descriptor ring")?;
+        let tx_desc_phys =
+            crate::memory::frame_alloc::allocate_contiguous((tx_desc_size + 4095) / 4096)
+                .ok_or("Failed to allocate TX descriptor ring")?;
         self.tx_descs = phys_to_virt(tx_desc_phys);
 
         // Allocate RX descriptor ring
         let rx_desc_size = NUM_RX_DESC * core::mem::size_of::<DmaDesc>();
-        let rx_desc_phys = crate::memory::frame_alloc::allocate_contiguous(
-            (rx_desc_size + 4095) / 4096
-        ).ok_or("Failed to allocate RX descriptor ring")?;
+        let rx_desc_phys =
+            crate::memory::frame_alloc::allocate_contiguous((rx_desc_size + 4095) / 4096)
+                .ok_or("Failed to allocate RX descriptor ring")?;
         self.rx_descs = phys_to_virt(rx_desc_phys);
 
         // Zero out descriptor rings
@@ -276,22 +287,24 @@ impl Genet {
 
         // Allocate TX packet buffers
         for i in 0..NUM_TX_DESC {
-            let buf_phys = crate::memory::frame_alloc::allocate_contiguous(
-                (MAX_FRAME_SIZE + 4095) / 4096
-            ).ok_or("Failed to allocate TX buffer")?;
+            let buf_phys =
+                crate::memory::frame_alloc::allocate_contiguous((MAX_FRAME_SIZE + 4095) / 4096)
+                    .ok_or("Failed to allocate TX buffer")?;
             self.tx_bufs[i] = phys_to_virt(buf_phys);
         }
 
         // Allocate RX packet buffers
         for i in 0..NUM_RX_DESC {
-            let buf_phys = crate::memory::frame_alloc::allocate_contiguous(
-                (MAX_FRAME_SIZE + 4095) / 4096
-            ).ok_or("Failed to allocate RX buffer")?;
+            let buf_phys =
+                crate::memory::frame_alloc::allocate_contiguous((MAX_FRAME_SIZE + 4095) / 4096)
+                    .ok_or("Failed to allocate RX buffer")?;
             self.rx_bufs[i] = phys_to_virt(buf_phys);
         }
 
-        println!("[genet] DMA rings allocated: TX {:#x}, RX {:#x}",
-            self.tx_descs.0, self.rx_descs.0);
+        println!(
+            "[genet] DMA rings allocated: TX {:#x}, RX {:#x}",
+            self.tx_descs.0, self.rx_descs.0
+        );
         Ok(())
     }
 

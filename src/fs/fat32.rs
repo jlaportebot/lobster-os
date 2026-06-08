@@ -1,8 +1,7 @@
 //! FAT32 filesystem driver for block devices
 
-use crate::println;
 use super::vfs::*;
-use super::block_dev::BlockDevice;
+use crate::println;
 
 /// FAT32 BPB (BIOS Parameter Block)
 #[derive(Copy, Clone)]
@@ -102,7 +101,7 @@ pub struct Fat32FileSystem {
     total_clusters: u32,
     cluster_cache: [ClusterCacheEntry; CLUSTER_CACHE_SIZE],
     cache_idx: usize,
-    device_index: usize, // Which block device
+    device_index: usize,  // Which block device
     partition_start: u64, // LBA offset for partition
 }
 
@@ -112,13 +111,13 @@ impl Fat32FileSystem {
     /// Create a new FAT32 filesystem from a block device and partition offset
     pub fn new(device_index: usize, partition_start: u64) -> Result<Self, VfsError> {
         let mut bpb_bytes = [0u8; 512];
-        
+
         // Read BPB from first sector of partition
         read_block_device(device_index, partition_start, &mut bpb_bytes)?;
-        
+
         // Parse BPB
         let bpb = unsafe { &*(bpb_bytes.as_ptr() as *const Fat32Bpb) };
-        
+
         // Validate FAT32 signature
         if bpb.boot_sig != 0x29 && bpb.fs_type[0] != b'F' {
             println!("[fat32] Warning: non-standard BPB signature");
@@ -128,9 +127,11 @@ impl Fat32FileSystem {
         let fat_start = partition_start + bpb.reserved_sectors as u64;
         let fat_size = bpb.fat_size_32 as u64;
         let data_start = fat_start + (bpb.num_fats as u64 * fat_size);
-        let root_dir_sectors = ((bpb.root_entry_count as u64 * 32) + bytes_per_sector - 1) / bytes_per_sector;
+        let root_dir_sectors =
+            ((bpb.root_entry_count as u64 * 32) + bytes_per_sector - 1) / bytes_per_sector;
         let total_data_sectors = if bpb.total_sectors_32 != 0 {
-            bpb.total_sectors_32 as u64 - (bpb.reserved_sectors as u64 + bpb.num_fats as u64 * fat_size + root_dir_sectors)
+            bpb.total_sectors_32 as u64
+                - (bpb.reserved_sectors as u64 + bpb.num_fats as u64 * fat_size + root_dir_sectors)
         } else {
             0
         };
@@ -139,10 +140,16 @@ impl Fat32FileSystem {
 
         println!("[fat32] Bytes/sector: {}", bytes_per_sector);
         println!("[fat32] Sectors/cluster: {}", sectors_per_cluster);
-        println!("[fat32] Reserved sectors: {}", unsafe { core::ptr::addr_of!((*bpb).reserved_sectors).read_unaligned() });
+        println!("[fat32] Reserved sectors: {}", unsafe {
+            core::ptr::addr_of!((*bpb).reserved_sectors).read_unaligned()
+        });
         println!("[fat32] Number of FATs: {}", bpb.num_fats);
-        println!("[fat32] FAT size: {} sectors", unsafe { core::ptr::addr_of!((*bpb).fat_size_32).read_unaligned() });
-        println!("[fat32] Root cluster: {}", unsafe { core::ptr::addr_of!((*bpb).root_cluster).read_unaligned() });
+        println!("[fat32] FAT size: {} sectors", unsafe {
+            core::ptr::addr_of!((*bpb).fat_size_32).read_unaligned()
+        });
+        println!("[fat32] Root cluster: {}", unsafe {
+            core::ptr::addr_of!((*bpb).root_cluster).read_unaligned()
+        });
         println!("[fat32] Total clusters: {}", total_clusters);
         println!("[fat32] Data start sector: {}", data_start);
 
@@ -255,18 +262,18 @@ impl Fat32FileSystem {
                 if buf_start < skip_bytes {
                     continue; // Skip this sector
                 }
-                
+
                 let src_start = if skip_bytes > buf_start {
                     (skip_bytes - buf_start) as usize
                 } else {
                     0
                 };
-                
+
                 let to_copy = (512 - src_start).min(buf.len() - bytes_read);
                 if to_copy == 0 {
                     break;
                 }
-                
+
                 buf[bytes_read..bytes_read + to_copy]
                     .copy_from_slice(&sector_buf[src_start..src_start + to_copy]);
                 bytes_read += to_copy;
@@ -294,12 +301,16 @@ impl Fat32FileSystem {
         let mut entries = [DirEntry::empty(); MAX_DIR_ENTRIES];
         let mut entry_count = 0usize;
         let mut current_cluster = cluster;
-        let cluster_size = self.bpb.sectors_per_cluster as usize * self.bpb.bytes_per_sector as usize;
-        let mut lfn_name = [0u16; 256];
-        let mut lfn_len = 0usize;
+        let _cluster_size =
+            self.bpb.sectors_per_cluster as usize * self.bpb.bytes_per_sector as usize;
+        let _lfn_name = [0u16; 256];
+        let mut _lfn_len = 0usize;
 
         loop {
-            if Self::is_eoc(current_cluster) || current_cluster == 0 || entry_count >= MAX_DIR_ENTRIES {
+            if Self::is_eoc(current_cluster)
+                || current_cluster == 0
+                || entry_count >= MAX_DIR_ENTRIES
+            {
                 break;
             }
 
@@ -313,10 +324,10 @@ impl Fat32FileSystem {
                     if entry_count >= MAX_DIR_ENTRIES {
                         break;
                     }
-                    
+
                     let offset = entry_idx * 32;
                     let raw = &sector_buf[offset..offset + 32];
-                    
+
                     // Check for end of directory
                     if raw[0] == 0x00 {
                         return Ok(entries);
@@ -325,8 +336,8 @@ impl Fat32FileSystem {
                         continue; // Deleted entry
                     }
 
-                    let first_byte = raw[0];
-                    
+                    let _first_byte = raw[0];
+
                     // Check if LFN entry
                     if raw[11] == ATTR_LFN {
                         let lfn = unsafe { &*(raw.as_ptr() as *const LfnDirEntry) };
@@ -335,24 +346,23 @@ impl Fat32FileSystem {
                             continue;
                         }
                         // Extract name parts (simplified)
-                        lfn_len = 0;
                         // In real implementation, combine LFN parts
                         continue;
                     }
 
                     // Regular 8.3 entry
                     let dir_entry = unsafe { &*(raw.as_ptr() as *const Fat32DirEntry) };
-                    
+
                     if dir_entry.attributes & ATTR_VOLUME_ID != 0 {
                         continue; // Skip volume label
                     }
 
                     let is_dir = dir_entry.attributes & ATTR_DIRECTORY != 0;
-                    
+
                     // Convert 8.3 name to string
                     let mut name_buf = [0u8; 13];
                     let mut name_len = 0usize;
-                    
+
                     // Copy name part (8 chars)
                     for i in 0..8 {
                         if dir_entry.name[i] == b' ' {
@@ -361,7 +371,7 @@ impl Fat32FileSystem {
                         name_buf[name_len] = dir_entry.name[i];
                         name_len += 1;
                     }
-                    
+
                     // Copy extension (3 chars)
                     if dir_entry.name[8] != b' ' {
                         name_buf[name_len] = b'.';
@@ -375,7 +385,7 @@ impl Fat32FileSystem {
                         }
                     }
 
-                    let first_cluster = ((dir_entry.first_cluster_high as u32) << 16) 
+                    let first_cluster = ((dir_entry.first_cluster_high as u32) << 16)
                         | dir_entry.first_cluster_low as u32;
 
                     entries[entry_count].name[..name_len].copy_from_slice(&name_buf[..name_len]);
@@ -410,7 +420,11 @@ impl Fat32FileSystem {
 }
 
 /// Helper: read from block device (simplified)
-fn read_block_device(device_index: usize, sector: u64, buf: &mut [u8; 512]) -> Result<(), VfsError> {
+fn read_block_device(
+    device_index: usize,
+    sector: u64,
+    buf: &mut [u8; 512],
+) -> Result<(), VfsError> {
     // In real implementation, call block_dev module
     // For now, return zeros
     buf.fill(0);
@@ -423,30 +437,30 @@ pub fn mount(device_index: usize, partition_start: u64, mount_path: &str) -> Res
     let fs = Fat32FileSystem::new(device_index, partition_start)?;
     let root_cluster = fs.bpb.root_cluster;
     let fs_id = fs.id();
-    
+
     unsafe {
         FAT32_INSTANCE = Some(fs);
     }
-    
+
     // Read root directory and populate VFS
     let root_entries = if let Some(ref fs) = unsafe { FAT32_INSTANCE.as_ref() } {
         fs.read_dir(root_cluster)?
     } else {
         return Err(VfsError::IOError);
     };
-    
+
     // Create mount point in VFS
     let mount_inode = alloc_node(mount_path.trim_start_matches('/'), FileType::Directory, 0)?;
-    
+
     for entry in &root_entries[..] {
         if entry.name_len == 0 {
             break;
         }
         let _ = alloc_node(entry.name_str(), entry.file_type, mount_inode);
     }
-    
+
     crate::fs::vfs::mount(mount_path, fs_id, root_cluster as u64)?;
-    
+
     println!("[fat32] Mounted at {}", mount_path);
     Ok(())
 }
