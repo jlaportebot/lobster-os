@@ -2391,7 +2391,8 @@ impl PtyObj {
             return 0;
         }
         let len = available.min(buf.len());
-        buf[..len].copy_from_slice(&self.master_buffer[self.master_read_pos..self.master_read_pos + len]);
+        buf[..len]
+            .copy_from_slice(&self.master_buffer[self.master_read_pos..self.master_read_pos + len]);
         self.master_read_pos += len;
         if self.master_read_pos == self.master_write_pos {
             self.master_read_pos = 0;
@@ -2407,7 +2408,8 @@ impl PtyObj {
             return 0;
         }
         let len = available.min(buf.len());
-        self.master_buffer[self.master_write_pos..self.master_write_pos + len].copy_from_slice(&buf[..len]);
+        self.master_buffer[self.master_write_pos..self.master_write_pos + len]
+            .copy_from_slice(&buf[..len]);
         self.master_write_pos += len;
         len
     }
@@ -2419,7 +2421,8 @@ impl PtyObj {
             return 0;
         }
         let len = available.min(buf.len());
-        buf[..len].copy_from_slice(&self.slave_buffer[self.slave_read_pos..self.slave_read_pos + len]);
+        buf[..len]
+            .copy_from_slice(&self.slave_buffer[self.slave_read_pos..self.slave_read_pos + len]);
         self.slave_read_pos += len;
         if self.slave_read_pos == self.slave_write_pos {
             self.slave_read_pos = 0;
@@ -2435,7 +2438,8 @@ impl PtyObj {
             return 0;
         }
         let len = available.min(buf.len());
-        self.slave_buffer[self.slave_write_pos..self.slave_write_pos + len].copy_from_slice(&buf[..len]);
+        self.slave_buffer[self.slave_write_pos..self.slave_write_pos + len]
+            .copy_from_slice(&buf[..len]);
         self.slave_write_pos += len;
         len
     }
@@ -2544,7 +2548,6 @@ pub fn pty_close(idx: usize, is_master: bool) {
 
 /// PTY IOCTL for window size, etc.
 pub fn pty_ioctl(idx: usize, cmd: u64, arg: u64) -> i64 {
-    use crate::sched;
     if let Some(pty) = get_pty(idx) {
         match cmd {
             // TIOCGWINSZ - get window size
@@ -2554,9 +2557,7 @@ pub fn pty_ioctl(idx: usize, cmd: u64, arg: u64) -> i64 {
                 0
             }
             // TIOCSWINSZ - set window size
-            0x5414 => {
-                0
-            }
+            0x5414 => 0,
             // TIOCGPGRP - get process group
             0x540F => {
                 // arg is pointer to pid_t

@@ -356,18 +356,18 @@ pub fn sigreturn() -> Result<(), &'static str> {
     // We need to read the frame from user stack and restore registers
     unsafe {
         if let Some(ref mut task) = TASK_TABLE[task_idx] {
-            let sp = task.regs.sp;
-            
+            let _sp = task.regs.sp;
+
             // Read the sigreturn frame from user stack
-            // Frame layout (simplified): 
+            // Frame layout (simplified):
             // x0-x30, sp, elr, spsr
             // For now, just return success - a full implementation would restore all registers
             // from the user stack frame
-            
+
             // TODO: Read frame from user stack at sp and restore task.regs
             // For now, just return OK
         }
     }
-    
+
     Ok(())
 }

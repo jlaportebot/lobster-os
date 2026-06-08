@@ -1,9 +1,9 @@
 //! Core Desktop Applications for LobsterOS
 
-pub mod terminal;
-pub mod file_manager;
 pub mod editor;
+pub mod file_manager;
 pub mod settings;
+pub mod terminal;
 
 use crate::println;
 

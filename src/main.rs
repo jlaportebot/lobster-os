@@ -48,8 +48,8 @@
 )]
 extern crate alloc;
 
-mod arch;
 mod apps;
+mod arch;
 mod console;
 mod display;
 mod drivers;
@@ -404,7 +404,10 @@ pub unsafe extern "C" fn kernel_init(dtb_ptr: u64) -> ! {
         // Attempt auto-connect to saved networks
         println!("[wifi] Attempting auto-connect to saved networks...");
         if let Err(e) = drivers::wifi::auto_connect() {
-            println!("[wifi] Auto-connect: {:?} (will wait for manual connect)", e);
+            println!(
+                "[wifi] Auto-connect: {:?} (will wait for manual connect)",
+                e
+            );
         }
 
         // Network

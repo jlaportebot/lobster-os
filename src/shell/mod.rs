@@ -440,7 +440,7 @@ pub fn run_with_pty(pty_slave_fd: Option<usize>) -> ! {
                 // Read from UART
                 serial_input::read_line(&mut line_buf)
             };
-            
+
             if len > 0 {
                 // Convert to str
                 let cmd_str = core::str::from_utf8(&line_buf[..len]).unwrap_or("");

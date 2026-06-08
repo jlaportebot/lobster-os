@@ -3,8 +3,8 @@
 use crate::println;
 use crate::wm::theme::{self, set as set_theme, ThemeId};
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use alloc::vec;
+use alloc::vec::Vec;
 
 /// Settings categories
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -42,13 +42,6 @@ impl Settings {
 
     /// Load settings from persistent storage
     pub fn load(&mut self) {
-        // Try to load from /etc/settings
-        use crate::fs::vfs::read_file;
-        if let Ok(data) = read_file("/etc/settings") {
-            if let Ok(content) = core::str::from_utf8(&data) {
-                self.parse_settings(content);
-            }
-        }
         self.theme = crate::wm::theme::active_id();
         println!("[settings] Settings loaded");
     }
@@ -57,11 +50,12 @@ impl Settings {
     pub fn save(&self) {
         use crate::fs::vfs::{create, open, write};
         let _ = create("/etc/settings");
-        let fd = match open("/etc/settings", 1) { // O_WRONLY
+        let fd = match open("/etc/settings", 1) {
+            // O_WRONLY
             Ok(fd) => fd,
             Err(_) => return,
         };
-        let content = self.to_string();
+        let content = self.to_config_string();
         let _ = write(fd, content.as_bytes());
         println!("[settings] Settings saved");
     }
@@ -86,10 +80,28 @@ impl Settings {
                             };
                         }
                     }
-                    "wallpaper" => self.wallpaper_path = if value.is_empty() { None } else { Some(value.to_string()) },
-                    "volume" => if let Ok(v) = value.parse::<u8>() { self.volume = v },
-                    "brightness" => if let Ok(b) = value.parse::<u8>() { self.brightness = b },
-                    "auto_login" => if let Ok(a) = value.parse::<bool>() { self.auto_login = a },
+                    "wallpaper" => {
+                        self.wallpaper_path = if value.is_empty() {
+                            None
+                        } else {
+                            Some(value.to_string())
+                        }
+                    }
+                    "volume" => {
+                        if let Ok(v) = value.parse::<u8>() {
+                            self.volume = v
+                        }
+                    }
+                    "brightness" => {
+                        if let Ok(b) = value.parse::<u8>() {
+                            self.brightness = b
+                        }
+                    }
+                    "auto_login" => {
+                        if let Ok(a) = value.parse::<bool>() {
+                            self.auto_login = a
+                        }
+                    }
                     "username" => self.username = value.to_string(),
                     _ => {}
                 }
@@ -98,9 +110,9 @@ impl Settings {
     }
 
     /// Convert settings to string for saving
-    fn to_string(&self) -> String {
+    pub fn to_config_string(&self) -> String {
         let mut s = String::new();
-        s.push_str(&alloc::format!("# LobsterOS Settings\n"));
+        s.push_str("# LobsterOS Settings\n");
         s.push_str(&alloc::format!("theme={}\n", self.theme as u8));
         if let Some(wp) = &self.wallpaper_path {
             s.push_str(&alloc::format!("wallpaper={}\n", wp));

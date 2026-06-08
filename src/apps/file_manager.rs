@@ -35,7 +35,7 @@ impl FileManager {
     pub fn refresh(&mut self) {
         self.entries.clear();
         self.selected_index = 0;
-        
+
         match list_dir(&self.current_path) {
             Ok(entries) => {
                 for entry in entries {
@@ -68,7 +68,7 @@ impl FileManager {
 
         // Normalize path
         let normalized = normalize_path(&new_path);
-        
+
         // Check if it's a directory
         match list_dir(&normalized) {
             Ok(_) => {
@@ -84,9 +84,17 @@ impl FileManager {
     /// Go to parent directory
     pub fn cd_up(&mut self) {
         if self.current_path != "/" {
-            let parent = self.current_path.rsplit_once('/').map(|(parent, _)| {
-                if parent.is_empty() { "/".to_string() } else { parent.to_string() }
-            }).unwrap_or("/".to_string());
+            let parent = self
+                .current_path
+                .rsplit_once('/')
+                .map(|(parent, _)| {
+                    if parent.is_empty() {
+                        "/".to_string()
+                    } else {
+                        parent.to_string()
+                    }
+                })
+                .unwrap_or("/".to_string());
             self.current_path = parent;
             self.refresh();
         }
@@ -123,7 +131,7 @@ impl FileManager {
         } else {
             None
         };
-        
+
         if let Some(name) = entry_name {
             self.cd(&name);
         }
@@ -148,7 +156,8 @@ impl FileManager {
             alloc::format!("{}/{}", self.current_path, name)
         };
         let _ = create(&path);
-        let fd = match open(&path, 1) { // O_WRONLY | O_CREAT
+        let fd = match open(&path, 1) {
+            // O_WRONLY | O_CREAT
             Ok(fd) => fd,
             Err(_) => return Err("Failed to create file"),
         };
@@ -170,7 +179,7 @@ impl FileManager {
                 self.refresh();
                 Ok(())
             }
-            Err(e) => Err("Failed to create directory"),
+            Err(_) => Err("Failed to create directory"),
         }
     }
 
@@ -228,13 +237,19 @@ fn normalize_path(path: &str) -> String {
     for component in path.split('/') {
         match component {
             "" | "." => {}
-            ".." => { parts.pop(); }
-            _ => { parts.push(component); }
+            ".." => {
+                parts.pop();
+            }
+            _ => {
+                parts.push(component);
+            }
         }
     }
     let mut result = alloc::string::String::from("/");
     for (i, part) in parts.iter().enumerate() {
-        if i > 0 { result.push('/'); }
+        if i > 0 {
+            result.push('/');
+        }
         result.push_str(part);
     }
     result

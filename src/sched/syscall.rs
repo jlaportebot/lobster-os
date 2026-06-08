@@ -610,11 +610,11 @@ fn sys_sigaction(sig: u32, handler: u64) -> u64 {
 fn sys_rt_sigreturn() -> u64 {
     use crate::sched::signal::sigreturn;
     let pid = crate::sched::current_pid();
-    let task_idx = match crate::sched::find_task_index(pid) {
+    let _task_idx = match crate::sched::find_task_index(pid) {
         Some(i) => i,
         None => return u64::MAX,
     };
-    
+
     // Call sigreturn to restore the trap frame
     match sigreturn() {
         Ok(()) => 0,

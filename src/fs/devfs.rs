@@ -163,19 +163,21 @@ fn dev_urandom_write(buf: *const u8, len: usize) -> usize {
 
 /// /dev/ptmx ioctl — handle TIOCSPTLCK (lock/unlock pt), TIOCGPTN (get PTY number)
 /// Returns 0 on success, negative errno on error
-fn dev_ptmx_ioctl(cmd: u64, arg: u64) -> i64 {
+fn dev_ptmx_ioctl(cmd: u64, _arg: u64) -> i64 {
     // TIOCSPTLCK (0x40045431) - lock/unlock slave PTY
     // TIOCGPTN (0x80045430) - get PTY number
     // TIOCSPTLCK is used to unlock the slave PTY after opening ptmx
     // TIOCGPTN returns the PTY number for the slave device path
-    
+
     match cmd {
-        0x40045431 => { // TIOCSPTLCK
+        0x40045431 => {
+            // TIOCSPTLCK
             // arg is pointer to int (lock value: 0=unlock, 1=lock)
             // We always succeed - the IPC layer handles locking
             0
         }
-        0x80045430 => { // TIOCGPTN
+        0x80045430 => {
+            // TIOCGPTN
             // arg is pointer to int to store PTY number
             // For now, return a fixed number - in real impl, allocate a new PTY
             // The actual PTY allocation happens in ipc::pty_open()

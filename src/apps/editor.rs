@@ -42,12 +42,12 @@ impl Editor {
         use crate::fs::vfs::read_file;
         let content = read_file(path).map_err(|_| "Failed to read file")?;
         let content_str = core::str::from_utf8(&content).map_err(|_| "Invalid UTF-8")?;
-        
+
         self.buffer.clear();
         for line in content_str.lines() {
             self.buffer.push(line.to_string());
         }
-        
+
         self.cursor_x = 0;
         self.cursor_y = 0;
         self.filename = Some(path.to_string());
@@ -63,7 +63,8 @@ impl Editor {
         // Write to file using VFS
         use crate::fs::vfs::{create, open, write};
         let _ = create(path);
-        let fd = match open(path, 1) { // O_WRONLY
+        let fd = match open(path, 1) {
+            // O_WRONLY
             Ok(fd) => fd,
             Err(_) => return Err("Failed to open file for writing"),
         };
@@ -113,7 +114,7 @@ impl Editor {
             self.cursor_x = 0;
             return;
         }
-        
+
         let current = &self.buffer[self.cursor_y];
         let rest = current[self.cursor_x..].to_string();
         self.buffer[self.cursor_y].truncate(self.cursor_x);

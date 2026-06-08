@@ -3,12 +3,9 @@
 //! Opens /dev/ptmx to get a PTY master, spawns a shell on the slave side,
 //! reads shell output from master, sends keyboard input to master.
 
-use crate::fs::vfs::{close, open};
-use crate::ipc::{pty_master_read, pty_master_write, pty_slave_read, pty_slave_write};
+use crate::ipc::{pty_master_read, pty_master_write};
 use crate::println;
 use crate::wm::widget::{WidgetId, WidgetTable};
-use crate::sched;
-use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -92,10 +89,8 @@ impl Terminal {
         unsafe {
             SHELL_PTY_SLAVE_FD = Some(slave_fd);
         }
-        let shell_pid = crate::sched::create_kernel_task(
-            shell_task_entry,
-            crate::sched::Priority::Normal,
-        );
+        let shell_pid =
+            crate::sched::create_kernel_task(shell_task_entry, crate::sched::Priority::Normal);
 
         if let Some(pid) = shell_pid {
             println!("[terminal] Spawned shell on PTY as PID {}", pid);
@@ -112,7 +107,7 @@ impl Terminal {
         Ok(())
     }
 
-/// Initialize the terminal widget in the WM
+    /// Initialize the terminal widget in the WM
     pub fn init_widget(&mut self, registry: &mut WidgetTable, x: u32, y: u32, w: u32, h: u32) {
         self.width = w / 8;
         self.height = h / 16;
@@ -156,9 +151,9 @@ impl Terminal {
                 b'\x08' => self.backspace(), // Backspace
                 b'\t' => self.tab(),
                 b'\x1b' => { // ESC - start of escape sequence
-                    // We need to parse the full escape sequence
-                    // For simplicity, collect until we have a complete sequence
-                    // In a real implementation, use the VT100 parser
+                     // We need to parse the full escape sequence
+                     // For simplicity, collect until we have a complete sequence
+                     // In a real implementation, use the VT100 parser
                 }
                 c if c >= 32 && c <= 126 => self.put_char(c as char),
                 _ => {}
@@ -272,13 +267,15 @@ impl Terminal {
             b'\n' | b'\r' => {
                 self.send_input(b"\r\n");
             }
-            b'\x08' | b'\x7f' => { // Backspace/DEL
+            b'\x08' | b'\x7f' => {
+                // Backspace/DEL
                 self.send_input(b"\x7f");
             }
             b'\t' => {
                 self.send_input(b"\t");
             }
-            b'\x1b' => { // ESC - start of escape sequence
+            b'\x1b' => {
+                // ESC - start of escape sequence
                 self.send_input(b"\x1b");
             }
             c if c >= 32 && c <= 126 => {
@@ -354,7 +351,14 @@ impl Terminal {
                         let cx = px + 4 + (self.cursor_col as u32 * char_width);
                         let cy = py + 4 + (self.cursor_row as u32 * line_height);
                         // Draw cursor block
-                        crate::wm::widget::fill_rect(fb, cx, cy, char_width, line_height, theme.input_text);
+                        crate::wm::widget::fill_rect(
+                            fb,
+                            cx,
+                            cy,
+                            char_width,
+                            line_height,
+                            theme.input_text,
+                        );
                     }
                 }
             }

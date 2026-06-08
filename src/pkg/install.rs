@@ -6,10 +6,10 @@ use crate::pkg::package::{
     LOBPKG_VERSION,
 };
 use crate::pkg::repo::verify_checksum;
+use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use alloc::format;
 
 /// Installation target paths
 pub const INSTALL_PREFIX: &str = "/usr";
@@ -120,7 +120,9 @@ impl PackageDatabase {
                 let explicit = parts[4] == "1";
 
                 // Create minimal installed package entry
-                use crate::pkg::package::{InstalledPackage, Package, PackageMetadata, PackageArch};
+                use crate::pkg::package::{
+                    InstalledPackage, Package, PackageArch, PackageMetadata,
+                };
                 let meta = PackageMetadata {
                     name: name.to_string(),
                     version: version.to_string(),
@@ -140,6 +142,7 @@ impl PackageDatabase {
                     install_script: None,
                     remove_script: None,
                     config_files: Vec::new(),
+                    download_url: String::new(),
                 };
                 let pkg = Package {
                     metadata: meta,
@@ -156,14 +159,15 @@ impl PackageDatabase {
 
     /// Save database to disk
     pub fn save(&self) -> Result<(), InstallError> {
-        use crate::fs::vfs::{create_dir, create, open, write};
+        use crate::fs::vfs::{create, create_dir, open, write};
 
         // Ensure parent directory exists
         let _ = create_dir("/var/lib/pkg");
 
         // Create or open the database file
         let _ = create(PKG_DB_PATH);
-        let fd = match open(PKG_DB_PATH, 1) { // O_WRONLY
+        let fd = match open(PKG_DB_PATH, 1) {
+            // O_WRONLY
             Ok(fd) => fd,
             Err(e) => {
                 crate::println!("[pkg] Failed to open database for writing: {:?}", e);
@@ -571,6 +575,7 @@ fn parse_package(data: &[u8]) -> Result<Package, InstallError> {
             gid,
             size,
             checksum,
+            data: Vec::new(),
             is_config,
             is_symlink,
             symlink_target,
@@ -634,7 +639,7 @@ fn read_metadata(data: &[u8]) -> Result<(usize, PackageMetadata), InstallError> 
         "aarch64" => PackageArch::Aarch64,
         "armv7" => PackageArch::Armv7,
         "x86_64" => PackageArch::X86_64,
-        _ => PackageArch::All,
+        _ => PackageArch::Any,
     };
     let description = read_string(data, &mut offset)?;
     let maintainer = read_string(data, &mut offset)?;
@@ -846,13 +851,14 @@ fn read_metadata(data: &[u8]) -> Result<(usize, PackageMetadata), InstallError> 
             install_script,
             remove_script,
             config_files,
+            download_url: String::new(),
         },
     ))
 }
 
 /// Extract package files to filesystem
 fn extract_package(pkg: &Package) -> Result<(), InstallError> {
-    use crate::fs::vfs::{create_dir, create, write};
+    use crate::fs::vfs::{create, create_dir, write};
 
     // Track created directories to avoid redundant mkdir calls
     let mut created_dirs = alloc::collections::BTreeSet::new();
@@ -866,7 +872,7 @@ fn extract_package(pkg: &Package) -> Result<(), InstallError> {
                 continue;
             }
             if parent_path.is_empty() {
-                parent_path.push_str("/");
+                parent_path.push('/');
             } else {
                 parent_path.push('/');
             }

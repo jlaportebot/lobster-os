@@ -3,7 +3,6 @@
 use crate::pkg::package::{PackageArch, RepoPackage, RepositoryIndex};
 use alloc::format;
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
 
 /// Repository configuration
@@ -85,8 +84,7 @@ impl RepositoryManager {
         let index_url = format!("{}/index.json", repo.url);
         crate::println!("[pkg] Updating repository index from {}", index_url);
 
-        let response = crate::net::http::http_get(&index_url)
-            .ok_or(RepoError::NetworkError)?;
+        let response = crate::net::http::http_get(&index_url).ok_or(RepoError::NetworkError)?;
 
         if response.status_code != 200 {
             crate::println!("[pkg] HTTP error: {}", response.status_code);
@@ -98,7 +96,8 @@ impl RepositoryManager {
             .map_err(|_| RepoError::ParseError)?;
 
         // Parse JSON - simple manual parsing for no_std
-        let mut index = parse_repository_index(json_data, &repo.name, &repo.url)?;
+        let mut index =
+            parse_repository_index(json_data, &repo.name.to_string(), &repo.url.to_string())?;
 
         index.timestamp = crate::arch::timer::Timer::uptime_ms();
 
@@ -199,13 +198,17 @@ pub fn verify_checksum(data: &[u8], expected: &[u8; 32]) -> bool {
 ///   ]
 /// }
 fn parse_repository_index(json: &str, name: &str, url: &str) -> Result<RepositoryIndex, RepoError> {
-    let mut index = RepositoryIndex::new(name, url);
+    let mut index = RepositoryIndex::new(name.to_string(), url.to_string());
 
     // Very simple JSON parser for the specific format we expect
     // Look for "packages": [ ... ]
     let packages_start = json.find("\"packages\"").ok_or(RepoError::ParseError)?;
-    let array_start = json[packages_start..].find('[').ok_or(RepoError::ParseError)? + packages_start;
-    let array_end = find_matching_bracket(&json[array_start..]).ok_or(RepoError::ParseError)? + array_start;
+    let array_start = json[packages_start..]
+        .find('[')
+        .ok_or(RepoError::ParseError)?
+        + packages_start;
+    let array_end =
+        find_matching_bracket(&json[array_start..]).ok_or(RepoError::ParseError)? + array_start;
 
     let packages_json = &json[array_start + 1..array_end];
 
@@ -218,7 +221,9 @@ fn parse_repository_index(json: &str, name: &str, url: &str) -> Result<Repositor
             break;
         }
         let obj_start = obj_start.unwrap() + pos;
-        let obj_end = find_matching_brace(&packages_json[obj_start..]).ok_or(RepoError::ParseError)? + obj_start;
+        let obj_end = find_matching_brace(&packages_json[obj_start..])
+            .ok_or(RepoError::ParseError)?
+            + obj_start;
 
         let obj_json = &packages_json[obj_start..obj_end + 1];
         if let Some(pkg) = parse_repo_package(obj_json) {
@@ -233,19 +238,75 @@ fn parse_repository_index(json: &str, name: &str, url: &str) -> Result<Repositor
 
 /// Parse a single RepoPackage from JSON object
 fn parse_repo_package(json: &str) -> Option<RepoPackage> {
-    // Extract fields using simple string search
+    // Simple JSON field extractor for no_std
     let get_field = |json: &str, field: &str| -> Option<String> {
-        let pattern = format!("\"{}\"", field);
-        let start = json.find(&pattern)? + pattern.len();
-        let colon = json[start..].find(':')? + start + 1;
-        let value_start = json[colon..].chars().skip_while(|c| c.is_whitespace()).collect::<String>();
-        // This is very simplified - in reality need proper JSON parsing
-        None
+        let search = alloc::format!("\"{}\"", field);
+        let start = json.find(&search)?;
+        let colon = json[start..].find(':')? + start;
+        let value_start = colon + 1;
+        let value_part = &json[value_start..].trim_start();
+
+        if value_part.starts_with('"') {
+            // String value
+            let end = value_part[1..].find('"')? + 1;
+            Some(value_part[1..end].to_string())
+        } else if value_part.starts_with('[') {
+            // Array - for dependencies, return empty for now
+            Some(String::new())
+        } else {
+            // Number or boolean
+            let end = value_part
+                .find(|c: char| [',', '}', ']'].contains(&c))
+                .unwrap_or(value_part.len());
+            Some(value_part[..end].trim().to_string())
+        }
     };
 
-    // For now, return None to indicate parsing not fully implemented
-    // The mock data in RepositoryManager::new() will be used as fallback
-    None
+    let name = get_field(json, "name")?;
+    let version = get_field(json, "version")?;
+    let arch_str = get_field(json, "arch").unwrap_or_else(|| "aarch64".to_string());
+    let arch = match arch_str.as_str() {
+        "aarch64" => PackageArch::Aarch64,
+        "x86_64" => PackageArch::X86_64,
+        "armv7" => PackageArch::Armv7,
+        "riscv64" => PackageArch::Riscv64,
+        _ => PackageArch::Any,
+    };
+    let description = get_field(json, "description").unwrap_or_default();
+    let dependencies = get_field(json, "dependencies")
+        .map(|s| {
+            s.split(',')
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    let size = get_field(json, "size")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    // Parse checksum hex string
+    let checksum_str = get_field(json, "checksum").unwrap_or_default();
+    let mut checksum = [0u8; 32];
+    if checksum_str.len() == 64 {
+        for i in 0..32 {
+            let byte_str = &checksum_str[i * 2..i * 2 + 2];
+            checksum[i] = u8::from_str_radix(byte_str, 16).ok()?;
+        }
+    }
+
+    let download_url = get_field(json, "download_url").unwrap_or_default();
+
+    Some(RepoPackage {
+        name,
+        version,
+        arch,
+        description,
+        dependencies,
+        size,
+        checksum,
+        download_url,
+    })
 }
 
 /// Find matching closing bracket for array
