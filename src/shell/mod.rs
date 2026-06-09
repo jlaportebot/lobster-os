@@ -13,6 +13,7 @@
 
 use crate::drivers::serial_input;
 use crate::drivers::uart::Uart10;
+use alloc::vec::Vec;
 
 /// Shell prompt string
 const PROMPT: &str = "lobster> ";
@@ -909,6 +910,9 @@ fn cmd_help() {
     Uart10::puts(" run <path|demo> Run ELF binary as user process\r\n");
     Uart10::puts(" svc <list|start|stop|restart|reset|deps> Service mgmt\r\n");
     Uart10::puts(" runlevel [get|set <N>] Show/set runlevel\r\n");
+    Uart10::puts(
+        " pkg <update|search|install|remove|list|info|repo|install-multi> Package mgmt\r\n",
+    );
     Uart10::puts(" reboot Reboot the system\r\n");
     Uart10::puts(" halt / shutdown Halt the system\r\n");
     Uart10::puts(" panic Trigger a kernel panic (TEST!)\r\n");
@@ -2111,8 +2115,192 @@ fn cmd_pkg(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                 }
             }
         }
+        "repo" => {
+            if argc < 3 {
+                Uart10::puts(
+                    "Usage: pkg repo <add|remove|list|set-key|enable|disable|priority> [args]\r\n",
+                );
+                return 1;
+            }
+            match crate::pkg::install::Installer::new() {
+                Ok(mut installer) => {
+                    // Load saved repo config first
+                    let _ = installer.repo_manager().load_config();
+                    let result: Result<(), crate::pkg::repo::RepoError> = match args[2] {
+                        "add" => {
+                            if argc < 5 {
+                                Uart10::puts("Usage: pkg repo add <name> <url>\r\n");
+                                Err(crate::pkg::repo::RepoError::ParseError)
+                            } else {
+                                let name = args[3];
+                                let url = args[4];
+                                let config = crate::pkg::repo::RepositoryConfig::new(name, url);
+                                installer.repo_manager().add_repo(config);
+                                installer.repo_manager().save_config()
+                            }
+                        }
+                        "remove" => {
+                            if argc < 4 {
+                                Uart10::puts("Usage: pkg repo remove <name>\r\n");
+                                Err(crate::pkg::repo::RepoError::ParseError)
+                            } else {
+                                let name = args[3];
+                                if installer.repo_manager().remove_repo(name) {
+                                    installer.repo_manager().save_config()
+                                } else {
+                                    Uart10::puts("Repository not found\r\n");
+                                    Err(crate::pkg::repo::RepoError::NotFound)
+                                }
+                            }
+                        }
+                        "list" => {
+                            let repos = installer.repo_manager().list_repos();
+                            if repos.is_empty() {
+                                Uart10::puts("No repositories configured.\r\n");
+                            } else {
+                                Uart10::puts("Configured repositories:\r\n");
+                                for repo in repos {
+                                    let key_status = if repo.public_key.is_some() {
+                                        "key: yes"
+                                    } else {
+                                        "key: no"
+                                    };
+                                    crate::println!(
+                                        "  {} {} (priority: {}, verify: {}, {})",
+                                        repo.name,
+                                        if repo.enabled {
+                                            "[enabled]"
+                                        } else {
+                                            "[disabled]"
+                                        },
+                                        repo.priority,
+                                        if repo.verify_signatures { "yes" } else { "no" },
+                                        key_status
+                                    );
+                                    crate::println!("    URL: {}", repo.url);
+                                }
+                            }
+                            Ok(())
+                        }
+                        "set-key" => {
+                            if argc < 5 {
+                                Uart10::puts("Usage: pkg repo set-key <name> <key_hex>\r\n");
+                                Err(crate::pkg::repo::RepoError::ParseError)
+                            } else {
+                                let name = args[3];
+                                let key_hex = args[4];
+                                if let Some(repo) = installer.repo_manager().get_repo_mut(name) {
+                                    match repo.set_public_key(key_hex) {
+                                        Ok(()) => installer.repo_manager().save_config(),
+                                        Err(_) => {
+                                            Uart10::puts("Invalid key format (must be 64 hex characters)\r\n");
+                                            Err(crate::pkg::repo::RepoError::SignatureError)
+                                        }
+                                    }
+                                } else {
+                                    Uart10::puts("Repository not found\r\n");
+                                    Err(crate::pkg::repo::RepoError::NotFound)
+                                }
+                            }
+                        }
+                        "enable" => {
+                            if argc < 4 {
+                                Uart10::puts("Usage: pkg repo enable <name>\r\n");
+                                Err(crate::pkg::repo::RepoError::ParseError)
+                            } else if let Some(repo) =
+                                installer.repo_manager().get_repo_mut(args[3])
+                            {
+                                repo.enabled = true;
+                                installer.repo_manager().save_config()
+                            } else {
+                                Uart10::puts("Repository not found\r\n");
+                                Err(crate::pkg::repo::RepoError::NotFound)
+                            }
+                        }
+                        "disable" => {
+                            if argc < 4 {
+                                Uart10::puts("Usage: pkg repo disable <name>\r\n");
+                                Err(crate::pkg::repo::RepoError::ParseError)
+                            } else if let Some(repo) =
+                                installer.repo_manager().get_repo_mut(args[3])
+                            {
+                                repo.enabled = false;
+                                installer.repo_manager().save_config()
+                            } else {
+                                Uart10::puts("Repository not found\r\n");
+                                Err(crate::pkg::repo::RepoError::NotFound)
+                            }
+                        }
+                        "priority" => {
+                            if argc < 5 {
+                                Uart10::puts("Usage: pkg repo priority <name> <priority>\r\n");
+                                Err(crate::pkg::repo::RepoError::ParseError)
+                            } else if let Some(repo) =
+                                installer.repo_manager().get_repo_mut(args[3])
+                            {
+                                match args[4].parse::<i32>() {
+                                    Ok(p) => {
+                                        repo.priority = p;
+                                        installer.repo_manager().save_config()
+                                    }
+                                    Err(_) => {
+                                        Uart10::puts("Invalid priority (must be integer)\r\n");
+                                        Err(crate::pkg::repo::RepoError::ParseError)
+                                    }
+                                }
+                            } else {
+                                Uart10::puts("Repository not found\r\n");
+                                Err(crate::pkg::repo::RepoError::NotFound)
+                            }
+                        }
+                        _ => {
+                            Uart10::puts("Usage: pkg repo <add|remove|list|set-key|enable|disable|priority> [args]\r\n");
+                            Err(crate::pkg::repo::RepoError::ParseError)
+                        }
+                    };
+                    match result {
+                        Ok(()) => 0,
+                        Err(e) => {
+                            crate::println!("pkg repo command failed: {:?}", e);
+                            1
+                        }
+                    }
+                }
+                Err(e) => {
+                    crate::println!("Failed to initialize package manager: {:?}", e);
+                    1
+                }
+            }
+        }
+        "install-multi" => {
+            if argc < 3 {
+                Uart10::puts("Usage: pkg install-multi <pkg1> [pkg2] ...\r\n");
+                return 1;
+            }
+            let pkg_names: Vec<&str> = args[2..argc].to_vec();
+            match crate::pkg::install::Installer::new() {
+                Ok(mut installer) => {
+                    match crate::pkg::install::install_transaction(&mut installer, &pkg_names) {
+                        Ok(()) => {
+                            crate::println!("All packages installed successfully.");
+                            0
+                        }
+                        Err(e) => {
+                            crate::println!("pkg install-multi failed: {:?}", e);
+                            1
+                        }
+                    }
+                }
+                Err(e) => {
+                    crate::println!("Failed to initialize package manager: {:?}", e);
+                    1
+                }
+            }
+        }
         _ => {
-            Uart10::puts("Usage: pkg <update|search|install|remove|list|info> [args]\r\n");
+            Uart10::puts(
+                "Usage: pkg <update|search|install|remove|list|info|repo|install-multi> [args]\r\n",
+            );
             1
         }
     }
