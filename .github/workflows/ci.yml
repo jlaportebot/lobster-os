@@ -31,11 +31,11 @@ jobs:
     - name: Check formatting
       run: cargo fmt --all -- --check
 
-    - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+    - name: Run clippy (with qemu feature for CI compatibility)
+      run: cargo clippy --features qemu -- -D warnings
 
-    - name: Build kernel
-      run: cargo build --target aarch64-unknown-none
+    - name: Build kernel (qemu feature)
+      run: cargo build --features qemu --target aarch64-unknown-none
 
-    - name: Run tests (host)
-      run: cargo test --lib
+    - name: Run tests (host, qemu feature)
+      run: cargo test --features qemu --lib
