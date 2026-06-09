@@ -1,6 +1,7 @@
 //! Terminal screen buffer - 2D cell grid
 
-use crate::display::console::{WHITE, BLACK, RED, GREEN, BLUE, CYAN, YELLOW, MAGENTA};
+use crate::display::console::{BLACK, BLUE, CYAN, GREEN, MAGENTA, RED, WHITE, YELLOW};
+use alloc::string::String;
 
 /// Character cell in the terminal screen
 #[derive(Clone, Copy, Debug)]
@@ -43,20 +44,42 @@ pub fn sgr_attr_from(params: &[u8]) -> (u32, u32, bool, bool, bool) {
     let mut i = 0;
     while i < params.len() {
         match params[i] {
-            0 => { fg = WHITE; bg = BLACK; bold = false; underline = false; blink = false; }
+            0 => {
+                fg = WHITE;
+                bg = BLACK;
+                bold = false;
+                underline = false;
+                blink = false;
+            }
             1 => bold = true,
             4 => underline = true,
             5 => blink = true,
-            30..=37 => fg = match params[i] {
-                30 => BLACK, 31 => RED, 32 => GREEN, 33 => YELLOW,
-                34 => BLUE, 35 => MAGENTA, 36 => CYAN, 37 => WHITE,
-                _ => WHITE,
-            },
-            40..=47 => bg = match params[i] {
-                40 => BLACK, 41 => RED, 42 => GREEN, 43 => YELLOW,
-                44 => BLUE, 45 => MAGENTA, 46 => CYAN, 47 => WHITE,
-                _ => BLACK,
-            },
+            30..=37 => {
+                fg = match params[i] {
+                    30 => BLACK,
+                    31 => RED,
+                    32 => GREEN,
+                    33 => YELLOW,
+                    34 => BLUE,
+                    35 => MAGENTA,
+                    36 => CYAN,
+                    37 => WHITE,
+                    _ => WHITE,
+                }
+            }
+            40..=47 => {
+                bg = match params[i] {
+                    40 => BLACK,
+                    41 => RED,
+                    42 => GREEN,
+                    43 => YELLOW,
+                    44 => BLUE,
+                    45 => MAGENTA,
+                    46 => CYAN,
+                    47 => WHITE,
+                    _ => BLACK,
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -126,7 +149,12 @@ impl ScreenBuffer {
     pub fn clear_from_cursor(&mut self) {
         // Clear to end of screen
         for r in self.cursor_row..self.rows {
-            for c in if r == self.cursor_row { self.cursor_col } else { 0 }..self.cols {
+            for c in if r == self.cursor_row {
+                self.cursor_col
+            } else {
+                0
+            }..self.cols
+            {
                 self.cells[r][c] = Cell::new();
             }
         }
@@ -135,7 +163,11 @@ impl ScreenBuffer {
 
     pub fn clear_to_cursor(&mut self) {
         for r in 0..=self.cursor_row {
-            for c in 0..(if r == self.cursor_row { self.cursor_col + 1 } else { self.cols }) {
+            for c in 0..(if r == self.cursor_row {
+                self.cursor_col + 1
+            } else {
+                self.cols
+            }) {
                 self.cells[r][c] = Cell::new();
             }
         }
@@ -188,21 +220,20 @@ impl ScreenBuffer {
         self.cursor_col = 0;
     }
 
-    pub fn get_row(&self, row: usize) -> &dyn std::fmt::Display {
-        &CellRowView { screen: self, row }
+    /// Clear the screen (alias for clear_all)
+    pub fn clear(&mut self) {
+        self.clear_all();
     }
-}
 
-struct CellRowView<'a> {
-    screen: &'a ScreenBuffer,
-    row: usize,
-}
-
-impl<'a> std::fmt::Display for CellRowView<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for c in 0..self.screen.cols {
-            write!(f, "{}", self.screen.cells[self.row][c].ch)?;
+    /// Get a row as a string
+    pub fn get_row_string(&self, row: usize) -> String {
+        if row >= self.rows {
+            return String::new();
         }
-        Ok(())
+        let mut s = String::new();
+        for c in 0..self.cols {
+            s.push(self.cells[row][c].ch);
+        }
+        s
     }
 }

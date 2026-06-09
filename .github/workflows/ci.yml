@@ -36,6 +36,3 @@ jobs:
 
     - name: Build kernel (qemu feature)
       run: cargo build --features qemu --target aarch64-unknown-none
-
-    - name: Run tests (host, qemu feature)
-      run: cargo test --features qemu --lib

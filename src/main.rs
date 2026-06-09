@@ -57,7 +57,6 @@ mod dtb;
 mod fs;
 mod ipc;
 mod memory;
-#[cfg(not(feature = "qemu"))]
 mod net;
 mod panic_handler;
 mod pkg;
@@ -66,9 +65,8 @@ mod security;
 mod shell;
 mod smp;
 mod sync;
-#[cfg(not(feature = "qemu"))]
+mod terminal;
 mod usb;
-#[cfg(not(feature = "qemu"))]
 mod wm;
 
 use core::arch::global_asm;

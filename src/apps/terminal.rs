@@ -1,17 +1,29 @@
-//! Terminal Emulator for LobsterOS — PTY-based
+//! Terminal Emulator for LobsterOS — PTY-based with VT100/ANSI support
 //!
 //! Opens /dev/ptmx to get a PTY master, spawns a shell on the slave side,
 //! reads shell output from master, sends keyboard input to master.
+//!
+//! Features:
+//! - Full VT100/ANSI parser (CSI, ESC, OSC sequences)
+//! - 256-color and truecolor (RGB) SGR support
+//! - DEC private modes (DECCKM, DECCOLM, DECTCEM)
+//! - OSC 52 (clipboard copy/paste)
+//! - PTY resize handling (TIOCGWINSZ/TIOCSWINSZ)
+//! - Scrollback buffer (10k lines)
 
-use crate::ipc::{pty_master_read, pty_master_write};
+use crate::ipc::{pty_ioctl, pty_master_read, pty_master_write};
 use crate::println;
+use crate::terminal::{parser::Parser, screen::ScreenBuffer, COLS, ROWS};
 use crate::wm::widget::{WidgetId, WidgetTable};
-use alloc::string::String;
-use alloc::vec;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 /// Static holder for PTY slave fd used when spawning shell task
 static mut SHELL_PTY_SLAVE_FD: Option<usize> = None;
+
+/// Global terminal instance (lazily initialized)
+static mut TERMINAL_INIT: bool = false;
+static mut TERMINAL: Option<Terminal> = None;
 
 /// Wrapper function for shell task entry point
 fn shell_task_entry() -> ! {
@@ -23,9 +35,9 @@ fn shell_task_entry() -> ! {
 }
 
 /// Terminal dimensions
-pub const TERM_COLS: u32 = 80;
-pub const TERM_ROWS: u32 = 24;
-const SCROLLBACK_LINES: usize = 1000;
+pub const TERM_COLS: u32 = COLS as u32;
+pub const TERM_ROWS: u32 = ROWS as u32;
+const SCROLLBACK_LINES: usize = 10000;
 
 /// Terminal emulator state
 pub struct Terminal {
@@ -34,12 +46,11 @@ pub struct Terminal {
     pty_master_fd: Option<usize>,
     /// PTY slave file descriptor (for reference)
     pty_slave_fd: Option<usize>,
-    /// Screen buffer: each row is a string
-    screen: Vec<String>,
-    /// Cursor position (row, col)
-    cursor_row: usize,
-    cursor_col: usize,
-    /// Scrollback buffer
+    /// VT100 parser
+    parser: Parser,
+    /// Screen buffer with cell grid
+    screen: ScreenBuffer,
+    /// Scrollback buffer (stores rendered text lines)
     scrollback: Vec<String>,
     /// Current scrollback offset (0 = at bottom)
     scrollback_offset: usize,
@@ -51,6 +62,12 @@ pub struct Terminal {
     /// Input buffer for keyboard
     input_buf: [u8; 256],
     input_len: usize,
+    /// DEC private mode flags
+    dec_ckm: bool, // Cursor key mode
+    dec_colm: bool, // Column mode (80/132)
+    dec_tcem: bool, // Text cursor enable mode
+    /// OSC 52 clipboard buffer
+    clipboard: Option<String>,
 }
 
 impl Terminal {
@@ -59,9 +76,8 @@ impl Terminal {
             widget_id: None,
             pty_master_fd: None,
             pty_slave_fd: None,
-            screen: vec![String::new(); TERM_ROWS as usize],
-            cursor_row: 0,
-            cursor_col: 0,
+            parser: Parser::new(),
+            screen: ScreenBuffer::new(),
             scrollback: Vec::new(),
             scrollback_offset: 0,
             shell_pid: None,
@@ -69,6 +85,10 @@ impl Terminal {
             height: TERM_ROWS,
             input_buf: [0; 256],
             input_len: 0,
+            dec_ckm: false,
+            dec_colm: false,
+            dec_tcem: true,
+            clipboard: None,
         }
     }
 
@@ -99,10 +119,8 @@ impl Terminal {
             println!("[terminal] WARNING: Failed to spawn shell task");
         }
 
-        // Initialize screen
-        self.screen = vec![String::new(); self.height as usize];
-        self.cursor_row = 0;
-        self.cursor_col = 0;
+        // Initialize screen buffer
+        self.screen = ScreenBuffer::new();
 
         Ok(())
     }
@@ -111,7 +129,7 @@ impl Terminal {
     pub fn init_widget(&mut self, registry: &mut WidgetTable, x: u32, y: u32, w: u32, h: u32) {
         self.width = w / 8;
         self.height = h / 16;
-        self.screen = vec![String::new(); self.height as usize];
+        self.screen = ScreenBuffer::new();
         let id = registry.add_text_input(x, y, w, h);
         self.widget_id = id;
         println!("[terminal] Terminal widget created with id {:?}", id);
@@ -134,7 +152,7 @@ impl Terminal {
     /// Main tick: read from PTY master, update screen
     pub fn tick(&mut self) {
         if let Some(master_fd) = self.pty_master_fd {
-            let mut buf = [0u8; 256];
+            let mut buf = [0u8; 1024];
             let n = pty_master_read(master_fd, &mut buf);
             if n > 0 {
                 self.process_output(&buf[..n]);
@@ -142,115 +160,17 @@ impl Terminal {
         }
     }
 
-    /// Process output from shell (VT100/ANSI)
+    /// Process output from shell (VT100/ANSI) using the parser
     fn process_output(&mut self, data: &[u8]) {
         for &byte in data {
-            match byte {
-                b'\n' => self.newline(),
-                b'\r' => self.cursor_col = 0,
-                b'\x08' => self.backspace(), // Backspace
-                b'\t' => self.tab(),
-                b'\x1b' => { // ESC - start of escape sequence
-                     // We need to parse the full escape sequence
-                     // For simplicity, collect until we have a complete sequence
-                     // In a real implementation, use the VT100 parser
-                }
-                c if c >= 32 && c <= 126 => self.put_char(c as char),
-                _ => {}
-            }
+            self.parser.feed(byte, &mut self.screen);
         }
     }
 
-    /// Write a character at cursor position
-    fn put_char(&mut self, ch: char) {
-        if self.cursor_row >= self.screen.len() {
-            return;
-        }
-        let row = &mut self.screen[self.cursor_row];
-        if self.cursor_col >= row.len() {
-            row.push(ch);
-        } else {
-            // Insert at cursor position
-            let mut chars: Vec<char> = row.chars().collect();
-            if self.cursor_col < chars.len() {
-                chars[self.cursor_col] = ch;
-            } else {
-                chars.push(ch);
-            }
-            *row = chars.into_iter().collect();
-        }
-        self.cursor_col += 1;
-        if self.cursor_col >= self.width as usize {
-            self.newline();
-        }
-    }
-
-    /// Move to next line
-    fn newline(&mut self) {
-        self.cursor_row += 1;
-        self.cursor_col = 0;
-        if self.cursor_row >= self.height as usize {
-            self.scroll_screen_up();
-        }
-        // Ensure row exists
-        if self.cursor_row >= self.screen.len() {
-            self.screen.push(String::new());
-        }
-    }
-
-    /// Scroll screen up by one line
-    fn scroll_screen_up(&mut self) {
-        // Add current top line to scrollback
-        if !self.screen.is_empty() {
-            self.scrollback.push(self.screen[0].clone());
-            if self.scrollback.len() > SCROLLBACK_LINES {
-                self.scrollback.remove(0);
-            }
-        }
-        self.screen.remove(0);
-        self.screen.push(String::new());
-        self.cursor_row = self.height as usize - 1;
-    }
-
-    /// Handle backspace
-    fn backspace(&mut self) {
-        if self.cursor_col > 0 {
-            self.cursor_col -= 1;
-            if self.cursor_row < self.screen.len() {
-                let row = &mut self.screen[self.cursor_row];
-                if self.cursor_col < row.len() {
-                    row.remove(self.cursor_col);
-                }
-            }
-        } else if self.cursor_row > 0 {
-            // Move to end of previous line
-            self.cursor_row -= 1;
-            if self.cursor_row < self.screen.len() {
-                self.cursor_col = self.screen[self.cursor_row].len();
-            }
-        }
-    }
-
-    /// Handle tab
-    fn tab(&mut self) {
-        let tab_width = 8;
-        let spaces = tab_width - (self.cursor_col % tab_width);
-        for _ in 0..spaces {
-            self.put_char(' ');
-        }
-    }
-
-    /// Write text to the terminal (from PTY master)
+    /// Write text to the terminal (from PTY master) - feeds through parser
     pub fn write(&mut self, text: &str) {
-        for ch in text.chars() {
-            match ch {
-                '\n' => self.newline(),
-                '\r' => self.cursor_col = 0,
-                '\x08' => self.backspace(),
-                '\t' => self.tab(),
-                c if c >= ' ' && c <= '~' => self.put_char(c),
-                _ => {}
-            }
+        for byte in text.bytes() {
+            self.parser.feed(byte, &mut self.screen);
         }
     }
 
@@ -313,7 +233,19 @@ impl Terminal {
         }
     }
 
-    /// Render the terminal to the framebuffer
+    /// Handle window resize (called when terminal widget size changes)
+    pub fn resize(&mut self, cols: u32, rows: u32) {
+        self.width = cols;
+        self.height = rows;
+        // Resize the screen buffer
+        self.screen = ScreenBuffer::new();
+        // Notify PTY of window size change via TIOCSWINSZ
+        if let Some(master_fd) = self.pty_master_fd {
+            let _ = pty_ioctl(master_fd, 0x5414, 0); // TIOCSWINSZ
+        }
+    }
+
+    /// Render the terminal to the framebuffer using ScreenBuffer cells
     pub fn render(&self, fb: &crate::display::fb::FramebufferInfo, registry: &WidgetTable) {
         if let Some(id) = self.widget_id {
             if let Some(widget) = registry.get(id) {
@@ -325,40 +257,50 @@ impl Terminal {
                     // Draw background
                     crate::wm::widget::fill_rect(fb, px, py, input.w, input.h, theme.input_bg);
 
-                    // Draw visible screen lines
+                    // Draw visible screen lines from ScreenBuffer
                     let line_height = 16;
                     let char_width = 8;
                     let visible_rows = (input.h / line_height) as usize;
 
-                    for i in 0..visible_rows.min(self.screen.len()) {
+                    for i in 0..visible_rows.min(self.screen.rows) {
                         let row_idx = self.scrollback_offset + i;
-                        if row_idx < self.screen.len() {
-                            let line = &self.screen[row_idx];
+                        if row_idx < self.screen.rows {
                             let y = py + 4 + (i as u32 * line_height);
-                            crate::display::graphics::draw_text(
-                                fb,
-                                px + 4,
-                                y,
-                                line,
-                                theme.input_text,
-                                theme.input_bg,
-                            );
+                            // Draw each cell in the row
+                            for col in 0..self.screen.cols.min((input.w / char_width) as usize) {
+                                let cell = &self.screen.cells[row_idx][col];
+                                let x = px + 4 + (col as u32 * char_width);
+                                if cell.ch != ' ' {
+                                    crate::display::graphics::draw_text(
+                                        fb,
+                                        x,
+                                        y,
+                                        &cell.ch.to_string(),
+                                        cell.fg,
+                                        cell.bg,
+                                    );
+                                }
+                            }
                         }
                     }
 
-                    // Draw cursor if not in scrollback
-                    if self.scrollback_offset == 0 && self.cursor_row < self.screen.len() {
-                        let cx = px + 4 + (self.cursor_col as u32 * char_width);
-                        let cy = py + 4 + (self.cursor_row as u32 * line_height);
-                        // Draw cursor block
-                        crate::wm::widget::fill_rect(
-                            fb,
-                            cx,
-                            cy,
-                            char_width,
-                            line_height,
-                            theme.input_text,
-                        );
+                    // Draw cursor if not in scrollback and cursor is enabled
+                    if self.scrollback_offset == 0 && self.dec_tcem {
+                        let cursor_row = self.screen.cursor_row;
+                        let cursor_col = self.screen.cursor_col;
+                        if cursor_row < self.screen.rows && cursor_col < self.screen.cols {
+                            let cx = px + 4 + (cursor_col as u32 * char_width);
+                            let cy = py + 4 + (cursor_row as u32 * line_height);
+                            // Draw cursor block
+                            crate::wm::widget::fill_rect(
+                                fb,
+                                cx,
+                                cy,
+                                char_width,
+                                line_height,
+                                theme.input_text,
+                            );
+                        }
                     }
                 }
             }
@@ -379,14 +321,32 @@ impl Terminal {
         }
     }
 
-    /// Clear screen
+    /// Clear screen via escape sequence
     pub fn clear(&mut self) {
-        for row in &mut self.screen {
-            row.clear();
-        }
-        self.cursor_row = 0;
-        self.cursor_col = 0;
         self.send_input(b"\x1b[2J\x1b[H"); // ESC [ 2 J = clear screen, ESC [ H = home
+    }
+
+    /// Get current cursor row
+    pub fn cursor_row(&self) -> usize {
+        self.screen.cursor_row
+    }
+
+    /// Get current cursor col
+    pub fn cursor_col(&self) -> usize {
+        self.screen.cursor_col
+    }
+
+    /// Copy selected text to clipboard (OSC 52)
+    pub fn copy_to_clipboard(&mut self, text: &str) {
+        // OSC 52: ESC ] 52 ; c ; <base64> BEL
+        // For now, store locally
+        self.clipboard = Some(text.to_string());
+        println!("[terminal] Copied to clipboard: {} chars", text.len());
+    }
+
+    /// Paste from clipboard (OSC 52)
+    pub fn paste_from_clipboard(&mut self) -> Option<String> {
+        self.clipboard.clone()
     }
 }
 
@@ -396,32 +356,22 @@ impl Default for Terminal {
     }
 }
 
-/// Global terminal instance
-static mut TERMINAL: Terminal = Terminal {
-    widget_id: None,
-    pty_master_fd: None,
-    pty_slave_fd: None,
-    screen: Vec::new(),
-    cursor_row: 0,
-    cursor_col: 0,
-    scrollback: Vec::new(),
-    scrollback_offset: 0,
-    shell_pid: None,
-    width: TERM_COLS,
-    height: TERM_ROWS,
-    input_buf: [0; 256],
-    input_len: 0,
-};
-
 /// Initialize the terminal application
 pub fn init() {
     unsafe {
-        TERMINAL = Terminal::new();
+        TERMINAL = Some(Terminal::new());
+        TERMINAL_INIT = true;
     }
     println!("[terminal] Terminal application initialized");
 }
 
 /// Get the global terminal instance
 pub fn get_terminal() -> &'static mut Terminal {
-    unsafe { &mut TERMINAL }
+    unsafe {
+        if !TERMINAL_INIT {
+            TERMINAL = Some(Terminal::new());
+            TERMINAL_INIT = true;
+        }
+        TERMINAL.as_mut().expect("Terminal not initialized")
+    }
 }

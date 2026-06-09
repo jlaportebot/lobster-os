@@ -9,8 +9,6 @@ pub mod parser;
 pub mod screen;
 
 use crate::usb::hid;
-use crate::println;
-use core::fmt::Write;
 
 /// Terminal dimensions (columns x rows)
 pub const COLS: usize = 80;
@@ -20,7 +18,7 @@ pub const ROWS: usize = 25;
 pub struct Terminal {
     pub parser: parser::Parser,
     pub screen: screen::ScreenBuffer,
-    input_buf: [u8; 1024],  // Raw input buffer
+    input_buf: [u8; 1024], // Raw input buffer
     input_len: usize,
 }
 
@@ -43,32 +41,32 @@ impl Terminal {
     pub fn on_keypress(&mut self, scancode: u8, shift: bool, ctrl: bool, alt: bool) {
         // Convert scancode to ASCII or control sequence
         let ch = hid::scancode_to_ascii(scancode, shift);
-        
+
         // Handle special keys
         if ctrl {
             match ch {
-                Some('a') => self.send_key(0x01),  // Ctrl+A
-                Some('c') => self.send_key(0x03),  // Ctrl+C (SIGINT)
-                Some('d') => self.send_key(0x04),  // Ctrl+D (EOF)
+                Some('a') => self.send_key(0x01), // Ctrl+A
+                Some('c') => self.send_key(0x03), // Ctrl+C (SIGINT)
+                Some('d') => self.send_key(0x04), // Ctrl+D (EOF)
                 Some('l') => {
                     self.screen.clear();
                     self.screen.cursor_home();
-                },  // Ctrl+L (clear)
+                } // Ctrl+L (clear)
                 _ => {}
             }
         } else if alt {
             // Alt+key combinations
             match scancode {
-                0x2B => self.cycle_focus(),  // Alt+Tab
+                0x2B => self.cycle_focus(), // Alt+Tab
                 _ => {}
             }
         } else {
             // Regular character input
             if let Some(c) = ch {
                 match c {
-                    '\n' | '\r' => self.send_key(0x0A),  // Enter (LF)
-                    '\x7F' | '\x08' => self.send_key(0x7F),  // Backspace (DEL)
-                    '\t' => self.send_key(0x09),  // Tab
+                    '\n' | '\r' => self.send_key(0x0A),     // Enter (LF)
+                    '\x7F' | '\x08' => self.send_key(0x7F), // Backspace (DEL)
+                    '\t' => self.send_key(0x09),            // Tab
                     c if c >= ' ' && c <= '~' => {
                         self.send_byte(c as u8);
                     }

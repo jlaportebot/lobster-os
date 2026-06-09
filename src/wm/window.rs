@@ -516,7 +516,7 @@ fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
 }
 
 /// Cycle focus to the next window
-fn cycle_focus() {
+pub fn cycle_focus() {
     let windows = WINDOWS.lock();
     let current = *FOCUSED_ID.lock();
     let mut found_current = false;
