@@ -1958,7 +1958,7 @@ fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
 /// Package manager command
 fn cmd_pkg(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     if argc < 2 {
-        Uart10::puts("Usage: pkg <update|search|install|remove|list|info> [args]\r\n");
+        Uart10::puts("Usage: pkg <update|upgrade|search|install|remove|list|info> [args]\r\n");
         return 1;
     }
     match args[1] {
@@ -1973,6 +1973,25 @@ fn cmd_pkg(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                     }
                     Err(e) => {
                         crate::println!("pkg update failed: {:?}", e);
+                        1
+                    }
+                },
+                Err(e) => {
+                    crate::println!("Failed to initialize package manager: {:?}", e);
+                    1
+                }
+            }
+        }
+        "upgrade" => {
+            Uart10::puts("Upgrading packages...\r\n");
+            match crate::pkg::install::Installer::new() {
+                Ok(mut installer) => match installer.upgrade() {
+                    Ok(()) => {
+                        Uart10::puts("Upgrade complete.\r\n");
+                        0
+                    }
+                    Err(e) => {
+                        crate::println!("pkg upgrade failed: {:?}", e);
                         1
                     }
                 },

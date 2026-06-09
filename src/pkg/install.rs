@@ -381,6 +381,44 @@ impl Installer {
         Ok(())
     }
 
+    /// Upgrade all installed packages to latest versions
+    pub fn upgrade(&mut self) -> Result<(), InstallError> {
+        // First update all repository indices
+        self.update()?;
+
+        let installed: alloc::vec::Vec<InstalledPackage> =
+            self.db.list_installed().into_iter().cloned().collect();
+        let mut upgraded = 0;
+
+        for pkg in installed {
+            // Find latest version in repositories
+            if let Some((_repo, repo_pkg)) = self.repo_manager.find_package(&pkg.metadata.name) {
+                // Compare versions (simple string comparison for now)
+                if repo_pkg.version != pkg.metadata.version {
+                    crate::println!(
+                        "[pkg] Upgrading {} from {} to {}",
+                        pkg.metadata.name,
+                        pkg.metadata.version,
+                        repo_pkg.version
+                    );
+                    // Remove old version
+                    self.remove(&pkg.metadata.name)?;
+                    // Install new version
+                    self.install(&pkg.metadata.name)?;
+                    upgraded += 1;
+                }
+            }
+        }
+
+        if upgraded > 0 {
+            crate::println!("[pkg] Upgraded {} package(s)", upgraded);
+        } else {
+            crate::println!("[pkg] All packages are up to date");
+        }
+
+        Ok(())
+    }
+
     /// Search packages
     pub fn search(&self, query: &str) -> Vec<(&str, &crate::pkg::package::RepoPackage)> {
         self.repo_manager.search(query)

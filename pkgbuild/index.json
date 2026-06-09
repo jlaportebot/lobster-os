@@ -1,0 +1,16 @@
+{
+  "name": "lobsteros",
+  "url": "https://packages.lobsteros.org",
+  "packages": [
+    {
+      "name": "hello",
+      "version": "1.0.0",
+      "arch": "aarch64",
+      "description": "Simple hello world package for LobsterOS",
+      "dependencies": [],
+      "size": 99,
+      "checksum": "f8eb191be38e6b3d1d2203e64e3ac478adef7ef1e96be81ba9c54bf57abc071d",
+      "download_url": "https://packages.lobsteros.org/hello-1.0.0-aarch64.lobpkg"
+    }
+  ]
+}

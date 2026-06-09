@@ -1,0 +1,19 @@
+[package]
+name = "lobster-pkgbuild"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sha2 = "0.10"
+toml = "0.8"
+walkdir = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[[bin]]
+name = "pkgbuild"
+path = "pkgbuild.rs"
+
+[[bin]]
+name = "genindex"
+path = "genindex.rs"

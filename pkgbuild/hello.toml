@@ -1,0 +1,21 @@
+name = "hello"
+version = "1.0.0"
+arch = "aarch64"
+description = "Simple hello world package for LobsterOS"
+maintainer = "LobsterOS Team <team@lobsteros.org>"
+license = "MIT"
+homepage = "https://lobsteros.org"
+dependencies = []
+provides = ["hello"]
+conflicts = []
+replaces = []
+install_script = """
+#!/bin/sh
+echo "hello package installed successfully"
+"""
+remove_script = """
+#!/bin/sh
+echo "hello package removed"
+"""
+config_files = ["/etc/hello.conf"]
+download_url = "https://packages.lobsteros.org/hello-1.0.0-aarch64.lobpkg"
