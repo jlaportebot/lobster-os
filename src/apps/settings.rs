@@ -5,7 +5,6 @@ mod settings_impl {
     use crate::println;
     use crate::wm::theme::{self, set as set_theme, ThemeId};
     use alloc::string::{String, ToString};
-    use alloc::vec;
     use alloc::vec::Vec;
 
     /// Settings categories

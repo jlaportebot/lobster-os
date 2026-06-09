@@ -6,7 +6,6 @@ use crate::pkg::package::{
     LOBPKG_VERSION,
 };
 use crate::pkg::repo::verify_checksum;
-use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -102,54 +101,22 @@ impl PackageDatabase {
             Err(_) => return Ok(db), // No database file yet, return empty
         };
 
-        // Parse JSON database
-        // For simplicity, we'll use a simple format:
-        // Each line: name|version|arch|install_time|explicit|path1|path2|...
-        // In a real implementation, use proper JSON
+        // Parse database using from_db_string format
         let content = core::str::from_utf8(&data).unwrap_or("");
         for line in content.lines() {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let parts: Vec<&str> = line.split('|').collect();
-            if parts.len() >= 5 {
-                let name = parts[0];
-                let version = parts[1];
-                let _arch = parts[2];
-                let install_time = parts[3].parse().unwrap_or(0);
-                let explicit = parts[4] == "1";
-
-                // Create minimal installed package entry
-                use crate::pkg::package::{
-                    InstalledPackage, Package, PackageArch, PackageMetadata,
+            if let Some(installed) = InstalledPackage::from_db_string(line) {
+                // Determine if explicit from the database (field 5 in to_db_string is explicit as 0/1)
+                // Actually from_db_string already parses explicit from field 4 (0-indexed)
+                // We need to determine explicit from the line - let's check if it's in the format
+                let parts: Vec<&str> = line.split('|').collect();
+                let explicit = if parts.len() > 4 {
+                    parts[4] == "1"
+                } else {
+                    true // default to explicit for backward compatibility
                 };
-                let meta = PackageMetadata {
-                    name: name.to_string(),
-                    version: version.to_string(),
-                    arch: PackageArch::Aarch64,
-                    description: String::new(),
-                    maintainer: String::new(),
-                    license: String::new(),
-                    homepage: String::new(),
-                    dependencies: Vec::new(),
-                    provides: Vec::new(),
-                    conflicts: Vec::new(),
-                    replaces: Vec::new(),
-                    size: 0,
-                    download_size: 0,
-                    checksum: [0; 32],
-                    build_timestamp: 0,
-                    install_script: None,
-                    remove_script: None,
-                    config_files: Vec::new(),
-                    download_url: String::new(),
-                };
-                let pkg = Package {
-                    metadata: meta,
-                    files: Vec::new(),
-                    file_data: Vec::new(),
-                };
-                let installed = InstalledPackage::from_package(pkg, install_time);
                 db.add(installed, explicit);
             }
         }
@@ -175,18 +142,13 @@ impl PackageDatabase {
             }
         };
 
-        // Build database content (simple text format)
+        // Build database content using to_db_string format (includes file paths)
         let mut content = String::new();
         content.push_str("# LobsterOS package database\n");
-        content.push_str("# Format: name|version|arch|install_time|explicit\n");
+        content.push_str("# Format: name|version|arch|install_time|explicit|description|dependencies|size|checksum|download_url|files\n");
         for entry in &self.entries {
-            content.push_str(&format!(
-                "{}|{}|aarch64|{}|{}\n",
-                entry.package.metadata.name,
-                entry.package.metadata.version,
-                entry.package.install_time,
-                if entry.explicit { "1" } else { "0" }
-            ));
+            content.push_str(&entry.package.to_db_string());
+            content.push('\n');
         }
 
         // Write to file
@@ -863,6 +825,9 @@ fn extract_package(pkg: &Package) -> Result<(), InstallError> {
     // Track created directories to avoid redundant mkdir calls
     let mut created_dirs = alloc::collections::BTreeSet::new();
 
+    // Track offset into file_data for each file
+    let mut data_offset = 0usize;
+
     for file in &pkg.files {
         // Create parent directories
         let path = &file.path;
@@ -898,12 +863,19 @@ fn extract_package(pkg: &Package) -> Result<(), InstallError> {
             }
         };
 
-        // For now, we don't have per-file data separation in file_data
-        // In a real implementation, file_data would contain concatenated file contents
-        // with known offsets/sizes. For this stub, we write empty files.
-        // The actual file data extraction would need the package format to support
-        // individual file data sections.
-        let _ = write(fd.try_into().unwrap(), &[]);
+        // Extract file data from concatenated file_data
+        let file_size = file.size as usize;
+        if data_offset + file_size <= pkg.file_data.len() {
+            let file_data = &pkg.file_data[data_offset..data_offset + file_size];
+            let _ = write(fd.try_into().unwrap(), file_data);
+            data_offset += file_size;
+        } else {
+            crate::println!(
+                "[pkg] Warning: file_data too short for {}, writing empty",
+                path
+            );
+            let _ = write(fd.try_into().unwrap(), &[]);
+        }
 
         // Set permissions (would use chmod syscall when available)
         // let _ = crate::fs::vfs::chmod(path, file.mode);
@@ -982,6 +954,187 @@ fn run_script(script: &str) -> Result<(), InstallError> {
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+/// Topological sort for package dependencies
+/// Returns packages in installation order (dependencies first)
+fn topological_sort(
+    packages: &[(String, crate::pkg::package::RepoPackage)],
+) -> Result<Vec<(String, crate::pkg::package::RepoPackage)>, InstallError> {
+    use alloc::collections::{BTreeMap, VecDeque};
+
+    // Build adjacency list and in-degree count
+    let mut adj: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut in_degree: BTreeMap<String, usize> = BTreeMap::new();
+    let mut pkg_map: BTreeMap<String, (String, crate::pkg::package::RepoPackage)> = BTreeMap::new();
+
+    // Initialize all packages
+    for (repo, pkg) in packages {
+        let name = pkg.name.clone();
+        pkg_map.insert(name.clone(), (repo.clone(), pkg.clone()));
+        adj.entry(name.clone()).or_default();
+        in_degree.entry(name).or_insert(0);
+    }
+
+    // Build edges
+    for (_repo, pkg) in packages {
+        let name = pkg.name.clone();
+        for dep in &pkg.dependencies {
+            if pkg_map.contains_key(dep) {
+                adj.entry(dep.clone()).or_default().push(name.clone());
+                *in_degree.entry(name.clone()).or_insert(0) += 1;
+            }
+            // External dependencies (not in this set) are assumed to be already installed
+        }
+    }
+
+    // Kahn's algorithm
+    let mut queue = VecDeque::new();
+    for (name, &deg) in &in_degree {
+        if deg == 0 {
+            queue.push_back(name.clone());
+        }
+    }
+
+    let mut result = Vec::new();
+    while let Some(name) = queue.pop_front() {
+        if let Some((repo, pkg)) = pkg_map.get(&name) {
+            result.push((repo.clone(), pkg.clone()));
+        }
+        if let Some(neighbors) = adj.get(&name) {
+            for neighbor in neighbors {
+                let deg = in_degree.get_mut(neighbor).unwrap();
+                *deg -= 1;
+                if *deg == 0 {
+                    queue.push_back(neighbor.clone());
+                }
+            }
+        }
+    }
+
+    if result.len() != packages.len() {
+        // Cycle detected
+        return Err(InstallError::ConflictDetected);
+    }
+
+    Ok(result)
+}
+
+/// Install multiple packages with atomic transaction (all-or-nothing)
+pub fn install_transaction(
+    installer: &mut Installer,
+    package_names: &[&str],
+) -> Result<(), InstallError> {
+    // First, collect all packages and their dependencies
+    let mut all_packages: Vec<(String, crate::pkg::package::RepoPackage)> = Vec::new();
+    let mut seen = alloc::collections::BTreeSet::new();
+
+    fn collect_deps(
+        installer: &Installer,
+        name: &str,
+        all: &mut Vec<(String, crate::pkg::package::RepoPackage)>,
+        seen: &mut alloc::collections::BTreeSet<String>,
+    ) -> Result<(), InstallError> {
+        if seen.contains(name) {
+            return Ok(());
+        }
+        let (repo, pkg) = installer
+            .repo_manager
+            .find_package(name)
+            .ok_or(InstallError::NotFound)?;
+        if installer.db.is_installed(name) {
+            seen.insert(name.to_string());
+            return Ok(());
+        }
+        seen.insert(name.to_string());
+        for dep in &pkg.dependencies {
+            if !installer.db.is_installed(dep) {
+                collect_deps(installer, dep, all, seen)?;
+            }
+        }
+        all.push((repo.name.clone(), pkg.clone()));
+        Ok(())
+    }
+
+    for name in package_names {
+        collect_deps(installer, name, &mut all_packages, &mut seen)?;
+    }
+
+    // Topologically sort
+    let sorted = topological_sort(&all_packages)?;
+
+    // Track installed packages for rollback
+    let mut installed_in_transaction: Vec<String> = Vec::new();
+
+    // Install in order
+    for (_repo, pkg) in sorted {
+        let name = pkg.name.as_str();
+        if installer.db.is_installed(name) {
+            continue;
+        }
+
+        // Download and verify
+        crate::println!("[pkg] Downloading {} from {}...", name, pkg.download_url);
+        let response = http_get(&pkg.download_url).ok_or(InstallError::DownloadFailed)?;
+
+        if response.status_code != 200 {
+            // Rollback
+            for rolled_back in installed_in_transaction.iter().rev() {
+                let _ = installer.remove(rolled_back);
+            }
+            return Err(InstallError::HttpError(response.status_code));
+        }
+
+        let buffer = response.body[..response.body_len].to_vec();
+
+        if !verify_checksum(&buffer, &pkg.checksum) {
+            // Rollback
+            for rolled_back in installed_in_transaction.iter().rev() {
+                let _ = installer.remove(rolled_back);
+            }
+            return Err(InstallError::ChecksumMismatch);
+        }
+
+        let package = parse_package(&buffer)?;
+
+        if !package.verify() {
+            // Rollback
+            for rolled_back in installed_in_transaction.iter().rev() {
+                let _ = installer.remove(rolled_back);
+            }
+            return Err(InstallError::ChecksumMismatch);
+        }
+
+        // Check for conflicts
+        for conflict in &package.metadata.conflicts {
+            if installer.db.is_installed(conflict) {
+                // Rollback
+                for rolled_back in installed_in_transaction.iter().rev() {
+                    let _ = installer.remove(rolled_back);
+                }
+                return Err(InstallError::ConflictDetected);
+            }
+        }
+
+        // Extract files
+        extract_package(&package)?;
+
+        // Run install script
+        if let Some(script) = &package.metadata.install_script {
+            run_script(script)?;
+        }
+
+        // Add to database
+        let install_time = crate::arch::timer::Timer::uptime_ms();
+        let installed = InstalledPackage::from_package(package, install_time);
+        installer.db.add(installed, true);
+        installed_in_transaction.push(name.to_string());
+
+        // Save database after each package (so we can rollback)
+        installer.db.save()?;
     }
 
     Ok(())

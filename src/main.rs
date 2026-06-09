@@ -337,6 +337,30 @@ pub unsafe extern "C" fn kernel_init(dtb_ptr: u64) -> ! {
     println!("[fs] Initializing /sys...");
     fs::sysfs::init();
 
+    // Initialize package manager directories and default repository
+    println!("[pkg] Initializing package manager directories...");
+    let _ = fs::vfs::create_dir("/var");
+    let _ = fs::vfs::create_dir("/var/lib");
+    let _ = fs::vfs::create_dir("/var/lib/pkg");
+
+    // Initialize default repository (GitHub Pages or local HTTP)
+    crate::pkg::install::Installer::new()
+        .ok()
+        .map(|mut installer| {
+            installer
+                .repo_manager()
+                .add_repo(crate::pkg::repo::RepositoryConfig::new(
+                    "lobsteros",
+                    "https://lobsteros.org/pkg",
+                ));
+            installer
+                .repo_manager()
+                .add_repo(crate::pkg::repo::RepositoryConfig::new(
+                    "local",
+                    "http://localhost:8080/pkg",
+                ));
+        });
+
     // Initialize ext2 driver and probe for root filesystem
     println!("[ext2] Initializing ext2 driver...");
     fs::ext2::init();

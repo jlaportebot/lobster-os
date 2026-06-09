@@ -329,3 +329,199 @@ impl RepositoryIndex {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    #[test]
+    fn test_package_arch_from_str() {
+        assert_eq!(PackageArch::from_str("aarch64"), PackageArch::Aarch64);
+        assert_eq!(PackageArch::from_str("x86_64"), PackageArch::X86_64);
+        assert_eq!(PackageArch::from_str("armv7"), PackageArch::Armv7);
+        assert_eq!(PackageArch::from_str("riscv64"), PackageArch::Riscv64);
+        assert_eq!(PackageArch::from_str("unknown"), PackageArch::Any);
+    }
+
+    #[test]
+    fn test_package_arch_display() {
+        assert_eq!(PackageArch::Aarch64.to_string(), "aarch64");
+        assert_eq!(PackageArch::X86_64.to_string(), "x86_64");
+        assert_eq!(PackageArch::Armv7.to_string(), "armv7");
+        assert_eq!(PackageArch::Riscv64.to_string(), "riscv64");
+        assert_eq!(PackageArch::Any.to_string(), "any");
+    }
+
+    #[test]
+    fn test_package_metadata_new() {
+        let deps = vec!["dep1".to_string(), "dep2".to_string()];
+        let checksum = [0u8; 32];
+        let meta = PackageMetadata::new(
+            "test-pkg".to_string(),
+            "1.0.0".to_string(),
+            PackageArch::Aarch64,
+            "Test package".to_string(),
+            deps.clone(),
+            1024,
+            checksum,
+            "https://example.com/pkg.lobpkg".to_string(),
+        );
+        assert_eq!(meta.name, "test-pkg");
+        assert_eq!(meta.version, "1.0.0");
+        assert_eq!(meta.arch, PackageArch::Aarch64);
+        assert_eq!(meta.description, "Test package");
+        assert_eq!(meta.dependencies, deps);
+        assert_eq!(meta.size, 1024);
+        assert_eq!(meta.checksum, checksum);
+    }
+
+    #[test]
+    fn test_installed_package_to_from_db_string() {
+        let checksum = [0u8; 32];
+        checksum[0] = 0xde;
+        checksum[1] = 0xad;
+        checksum[2] = 0xbe;
+        checksum[3] = 0xef;
+
+        let meta = PackageMetadata::new(
+            "test-pkg".to_string(),
+            "1.0.0".to_string(),
+            PackageArch::Aarch64,
+            "Test package".to_string(),
+            vec!["dep1".to_string()],
+            1024,
+            checksum,
+            "https://example.com/pkg.lobpkg".to_string(),
+        );
+
+        let pkg = Package {
+            metadata: meta.clone(),
+            files: vec![
+                PackageFile {
+                    path: "/usr/bin/test".to_string(),
+                    mode: 0o755,
+                    uid: 0,
+                    gid: 0,
+                    size: 100,
+                    checksum: [0; 32],
+                    data: Vec::new(),
+                    is_config: false,
+                    is_symlink: false,
+                    symlink_target: None,
+                },
+                PackageFile {
+                    path: "/etc/test.conf".to_string(),
+                    mode: 0o644,
+                    uid: 0,
+                    gid: 0,
+                    size: 50,
+                    checksum: [0; 32],
+                    data: Vec::new(),
+                    is_config: true,
+                    is_symlink: false,
+                    symlink_target: None,
+                },
+            ],
+            file_data: Vec::new(),
+        };
+
+        let installed = InstalledPackage::from_package(pkg, 1234567890);
+        let db_string = installed.to_db_string();
+
+        // Parse it back
+        let parsed =
+            InstalledPackage::from_db_string(&db_string).expect("Failed to parse db string");
+
+        assert_eq!(parsed.metadata.name, "test-pkg");
+        assert_eq!(parsed.metadata.version, "1.0.0");
+        assert_eq!(parsed.metadata.arch, PackageArch::Aarch64);
+        assert_eq!(parsed.metadata.description, "Test package");
+        assert_eq!(parsed.metadata.dependencies.len(), 1);
+        assert_eq!(parsed.metadata.dependencies[0], "dep1");
+        assert_eq!(parsed.install_time, 1234567890);
+        assert!(parsed.explicit);
+        assert_eq!(parsed.files.len(), 2);
+        assert_eq!(parsed.files[0].path, "/usr/bin/test");
+        assert_eq!(parsed.files[1].path, "/etc/test.conf");
+        assert!(parsed.files[1].is_config);
+    }
+
+    #[test]
+    fn test_repository_index_search() {
+        let mut index =
+            RepositoryIndex::new("test-repo".to_string(), "https://example.com".to_string());
+        index.add_package(RepoPackage {
+            name: "vim".to_string(),
+            version: "9.0".to_string(),
+            arch: PackageArch::Aarch64,
+            description: "Vi IMproved text editor".to_string(),
+            dependencies: vec![],
+            size: 1024,
+            checksum: [0; 32],
+            download_url: "https://example.com/vim.lobpkg".to_string(),
+        });
+        index.add_package(RepoPackage {
+            name: "coreutils".to_string(),
+            version: "9.4".to_string(),
+            arch: PackageArch::Aarch64,
+            description: "GNU core utilities".to_string(),
+            dependencies: vec![],
+            size: 2048,
+            checksum: [0; 32],
+            download_url: "https://example.com/coreutils.lobpkg".to_string(),
+        });
+
+        let results = index.search("vim");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "vim");
+
+        let results = index.search("editor");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "vim");
+
+        let results = index.search("gnu");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "coreutils");
+
+        let results = index.search("nonexistent");
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_package_verify() {
+        use sha2::{Digest, Sha256};
+
+        let mut hasher = Sha256::new();
+        let file_data = b"test file data";
+        hasher.update(file_data);
+        let checksum: [u8; 32] = hasher.finalize().into();
+
+        let meta = PackageMetadata::new(
+            "test-pkg".to_string(),
+            "1.0.0".to_string(),
+            PackageArch::Aarch64,
+            "Test".to_string(),
+            vec![],
+            file_data.len() as u64,
+            checksum,
+            "https://example.com/pkg.lobpkg".to_string(),
+        );
+
+        let pkg = Package {
+            metadata: meta,
+            files: vec![],
+            file_data: file_data.to_vec(),
+        };
+
+        assert!(pkg.verify());
+
+        // Wrong data should fail
+        let pkg_bad = Package {
+            metadata: pkg.metadata.clone(),
+            files: vec![],
+            file_data: b"wrong data".to_vec(),
+        };
+        assert!(!pkg_bad.verify());
+    }
+}
