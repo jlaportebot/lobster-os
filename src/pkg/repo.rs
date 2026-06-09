@@ -1,9 +1,20 @@
 //! Repository handling for LobsterOS package manager
+//!
+//! Features:
+//! - Repository configuration and management
+//! - HTTP index download with JSON parsing
+//! - Ed25519 signature verification for repository authenticity
 
 use crate::pkg::package::{PackageArch, RepoPackage, RepositoryIndex};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+/// Maximum public key size (Ed25519 = 32 bytes)
+const ED25519_PUBKEY_LEN: usize = 32;
+/// Maximum signature size (Ed25519 = 64 bytes)
+const ED25519_SIG_LEN: usize = 64;
 
 /// Repository configuration
 #[derive(Debug, Clone)]
@@ -13,6 +24,8 @@ pub struct RepositoryConfig {
     pub enabled: bool,
     pub priority: i32,
     pub verify_signatures: bool,
+    /// Ed25519 public key for signature verification (32 bytes, hex-encoded when stored)
+    pub public_key: Option<[u8; ED25519_PUBKEY_LEN]>,
 }
 
 impl RepositoryConfig {
@@ -23,7 +36,35 @@ impl RepositoryConfig {
             enabled: true,
             priority: 0,
             verify_signatures: true,
+            public_key: None,
         }
+    }
+
+    /// Set the Ed25519 public key for signature verification
+    /// Key should be 32 bytes (raw) or 64 hex characters
+    pub fn set_public_key(&mut self, key_hex: &str) -> Result<(), RepoError> {
+        if key_hex.len() != 64 {
+            return Err(RepoError::SignatureError);
+        }
+        let mut key = [0u8; ED25519_PUBKEY_LEN];
+        for i in 0..ED25519_PUBKEY_LEN {
+            let byte_str = &key_hex[i * 2..i * 2 + 2];
+            key[i] = u8::from_str_radix(byte_str, 16).map_err(|_| RepoError::SignatureError)?;
+        }
+        self.public_key = Some(key);
+        Ok(())
+    }
+
+    /// Get the public key as hex string
+    pub fn public_key_hex(&self) -> Option<String> {
+        self.public_key.map(|k| {
+            let mut s = String::with_capacity(64);
+            for &b in &k {
+                use core::fmt::Write;
+                write!(&mut s, "{:02x}", b).ok();
+            }
+            s
+        })
     }
 }
 
@@ -72,6 +113,72 @@ impl RepositoryManager {
         &self.repos
     }
 
+    /// Save repository configuration to VFS
+    pub fn save_config(&self) -> Result<(), RepoError> {
+        use crate::fs::vfs::{create, create_dir, open, write};
+
+        // Ensure config directory exists
+        let _ = create_dir("/etc/pkg");
+
+        // Create or open the config file
+        let _ = create("/etc/pkg/repos.conf");
+        let fd = match open("/etc/pkg/repos.conf", 1) {
+            Ok(fd) => fd,
+            Err(_) => return Err(RepoError::IoError),
+        };
+
+        // Build config content
+        let mut content = String::new();
+        content.push_str("# LobsterOS repository configuration\n");
+        content.push_str("# Format: name|url|enabled|priority|verify_signatures|public_key_hex\n");
+        for repo in &self.repos {
+            let pubkey_hex = repo.public_key_hex().unwrap_or_default();
+            content.push_str(&alloc::format!(
+                "{}|{}|{}|{}|{}|{}\n",
+                repo.name,
+                repo.url,
+                if repo.enabled { "1" } else { "0" },
+                repo.priority,
+                if repo.verify_signatures { "1" } else { "0" },
+                pubkey_hex
+            ));
+        }
+
+        // Write to file
+        write(fd, content.as_bytes());
+        Ok(())
+    }
+
+    /// Load repository configuration from VFS
+    pub fn load_config(&mut self) -> Result<(), RepoError> {
+        use crate::fs::vfs::read_file;
+
+        let data = match read_file("/etc/pkg/repos.conf") {
+            Ok(d) => d,
+            Err(_) => return Ok(()), // No config file yet, return empty
+        };
+
+        let content = core::str::from_utf8(&data).unwrap_or("");
+        for line in content.lines() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.split('|').collect();
+            if parts.len() < 5 {
+                continue;
+            }
+            let mut config = RepositoryConfig::new(parts[0], parts[1]);
+            config.enabled = parts[2] == "1";
+            config.priority = parts[3].parse().unwrap_or(0);
+            config.verify_signatures = parts[4] == "1";
+            if parts.len() >= 6 && !parts[5].is_empty() {
+                let _ = config.set_public_key(parts[5]);
+            }
+            self.add_repo(config);
+        }
+        Ok(())
+    }
+
     /// Update repository index (fetch from remote)
     pub fn update_index(&mut self, name: &str) -> Result<(), RepoError> {
         let repo = self
@@ -91,9 +198,23 @@ impl RepositoryManager {
             return Err(RepoError::HttpError(response.status_code));
         }
 
+        let body = &response.body[..response.body_len];
+
+        // Verify signature if public key is configured
+        if repo.verify_signatures {
+            if let Some(pubkey) = repo.public_key {
+                let json_str = core::str::from_utf8(body).map_err(|_| RepoError::ParseError)?;
+                verify_repository_signature(json_str, &pubkey)?;
+                crate::println!("[pkg] Repository signature verified");
+            } else {
+                crate::println!(
+                    "[pkg] WARNING: verify_signatures=true but no public key configured"
+                );
+            }
+        }
+
         // Parse JSON index
-        let json_data = core::str::from_utf8(&response.body[..response.body_len])
-            .map_err(|_| RepoError::ParseError)?;
+        let json_data = core::str::from_utf8(body).map_err(|_| RepoError::ParseError)?;
 
         // Parse JSON - simple manual parsing for no_std
         let mut index =
@@ -177,6 +298,107 @@ pub fn verify_checksum(data: &[u8], expected: &[u8; 32]) -> bool {
     hasher.update(data);
     let result = hasher.finalize();
     result.as_slice() == expected
+}
+
+/// Verify Ed25519 signature of repository index JSON
+/// Expected JSON format includes a "signature" field at the top level:
+/// {
+///   "name": "repo-name",
+///   "url": "https://...",
+///   "packages": [...],
+///   "signature": "hex-encoded-64-byte-signature"
+/// }
+/// The signature is computed over the canonical JSON without the signature field.
+fn verify_repository_signature(
+    json: &str,
+    pubkey: &[u8; ED25519_PUBKEY_LEN],
+) -> Result<(), RepoError> {
+    // Extract signature field from JSON
+    let sig_field = "\"signature\"";
+    let sig_start = json.find(sig_field).ok_or(RepoError::SignatureError)?;
+    let colon_pos = json[sig_start..]
+        .find(':')
+        .ok_or(RepoError::SignatureError)?
+        + sig_start;
+    let value_start = json[colon_pos + 1..].trim_start();
+
+    if !value_start.starts_with('"') {
+        return Err(RepoError::SignatureError);
+    }
+
+    let sig_end = value_start[1..]
+        .find('"')
+        .ok_or(RepoError::SignatureError)?
+        + 1;
+    let sig_hex = &value_start[1..sig_end];
+
+    if sig_hex.len() != 128 {
+        return Err(RepoError::SignatureError); // 64 bytes = 128 hex chars
+    }
+
+    // Parse signature hex
+    let mut sig_bytes = [0u8; ED25519_SIG_LEN];
+    for i in 0..ED25519_SIG_LEN {
+        let byte_str = &sig_hex[i * 2..i * 2 + 2];
+        sig_bytes[i] = u8::from_str_radix(byte_str, 16).map_err(|_| RepoError::SignatureError)?;
+    }
+
+    // Reconstruct the signed data (JSON without signature field)
+    // Find the signature field position in the original JSON and remove it
+    let signed_data = remove_signature_field(json).ok_or(RepoError::SignatureError)?;
+
+    // Verify signature
+    let verifying_key = VerifyingKey::from_bytes(pubkey).map_err(|_| RepoError::SignatureError)?;
+    let signature = Signature::from_bytes(&sig_bytes);
+
+    verifying_key
+        .verify(signed_data.as_bytes(), &signature)
+        .map_err(|_| RepoError::SignatureError)?;
+
+    Ok(())
+}
+
+/// Remove the "signature" field from JSON for verification
+/// Returns the JSON string without the signature field
+fn remove_signature_field(json: &str) -> Option<String> {
+    let sig_field = "\"signature\"";
+    let sig_start = json.find(sig_field)?;
+    // Find the start of the field (including potential whitespace/comma before)
+    let field_start = sig_start;
+    // Find the end of the value (after the closing quote of the signature value)
+    let colon_pos = json[field_start..].find(':')? + field_start;
+    let value_start = json[colon_pos + 1..].trim_start();
+    if !value_start.starts_with('"') {
+        return None;
+    }
+    let sig_end_rel = value_start[1..].find('"')? + 1;
+    let _value_end =
+        colon_pos + 1 + (value_start.as_ptr() as usize - json.as_ptr() as usize) + sig_end_rel;
+    // Actually, let's do this more carefully with byte offsets
+    let value_part = &json[colon_pos + 1..];
+    let value_trimmed = value_part.trim_start();
+    if !value_trimmed.starts_with('"') {
+        return None;
+    }
+    let quote_end = value_trimmed[1..].find('"')? + 1;
+    let field_end = colon_pos
+        + 1
+        + (value_trimmed.as_ptr() as usize - value_part.as_ptr() as usize)
+        + quote_end
+        + 1;
+
+    // Now we need to find the comma before or after
+    let mut result = String::with_capacity(json.len());
+    result.push_str(&json[..field_start]);
+    // Skip the field, check for trailing comma
+    let after_field = &json[field_end..].trim_start();
+    let after_field = if after_field.starts_with(',') {
+        &after_field[1..]
+    } else {
+        after_field
+    };
+    result.push_str(after_field);
+    Some(result)
 }
 
 /// Simple JSON parser for repository index
