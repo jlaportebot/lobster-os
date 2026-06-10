@@ -47,7 +47,6 @@
 
 use crate::println;
 use crate::sched;
-use core::arch::asm;
 
 /// Syscall numbers
 pub const SYS_EXIT: u64 = 0;
@@ -928,6 +927,3 @@ mod arch_syscalls {
         ret
     }
 }
-
-#[cfg(target_arch = "aarch64")]
-use arch_syscalls::*;
