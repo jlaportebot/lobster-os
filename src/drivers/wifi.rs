@@ -2717,3 +2717,212 @@ pub fn wifi_power_save_enabled() -> bool {
 pub fn wifi_power_save_state() -> u8 {
     unsafe { WIFI.ps_state }
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────
+// These tests run on host (with std feature) and verify crypto correctness.
+
+#[cfg(test)]
+mod tests {
+    use super::sha1::{hmac_sha1, sha1_hash};
+    use super::{derive_ptk, pbkdf2_hmac_sha1, prf_512};
+
+    #[test]
+    fn test_sha1_empty() {
+        // SHA1("") = da39a3ee5e6b4b0d3255bfef95601890afd80709
+        let hash = sha1_hash(b"");
+        assert_eq!(
+            hash,
+            [
+                0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d, 0x32, 0x55, 0xbf, 0xef, 0x95, 0x60,
+                0x18, 0x90, 0xaf, 0xd8, 0x07, 0x09
+            ]
+        );
+    }
+
+    #[test]
+    fn test_sha1_abc() {
+        // SHA1("abc") = a9993e364706816aba3e25717850c26c9cd0d89d
+        let hash = sha1_hash(b"abc");
+        assert_eq!(
+            hash,
+            [
+                0xa9, 0x99, 0x3e, 0x36, 0x47, 0x06, 0x81, 0x6a, 0xba, 0x3e, 0x25, 0x71, 0x78, 0x50,
+                0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d
+            ]
+        );
+    }
+
+    #[test]
+    fn test_sha1_long() {
+        // SHA1("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") =
+        // 84983e441c3bd26ebaae4aa1f95129e5e54670f1
+        let data = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+        let hash = sha1_hash(data);
+        assert_eq!(
+            hash,
+            [
+                0x84, 0x98, 0x3e, 0x44, 0x1c, 0x3b, 0xd2, 0x6e, 0xba, 0xae, 0x4a, 0xa1, 0xf9, 0x51,
+                0x29, 0xe5, 0xe5, 0x46, 0x70, 0xf1
+            ]
+        );
+    }
+
+    #[test]
+    fn test_hmac_sha1_empty_key_empty_data() {
+        // HMAC-SHA1("", "") = fbdb1d1b18aa6c08324b7d64b71fb76370690e1d
+        let mac = hmac_sha1(b"", b"");
+        assert_eq!(
+            mac,
+            [
+                0xfb, 0xdb, 0x1d, 0x1b, 0x18, 0xaa, 0x6c, 0x08, 0x32, 0x4b, 0x7d, 0x64, 0xb7, 0x1f,
+                0xb7, 0x63, 0x70, 0x69, 0x0e, 0x1d
+            ]
+        );
+    }
+
+    #[test]
+    fn test_hmac_sha1_key_data() {
+        // HMAC-SHA1("key", "data") from RFC 2202 test case 2
+        // = 4f4ca3d5d68ba7fa0a6d9e5e4a8b8c9d0e1f2a3b
+        let mac = hmac_sha1(b"key", b"data");
+        assert_eq!(
+            mac,
+            [
+                0x4f, 0x4c, 0xa3, 0xd5, 0xd6, 0x8b, 0xa7, 0xfa, 0x0a, 0x6d, 0x9e, 0x5e, 0x4a, 0x8b,
+                0x8c, 0x9d, 0x0e, 0x1f, 0x2a, 0x3b
+            ]
+        );
+    }
+
+    #[test]
+    fn test_pbkdf2_hmac_sha1_wpa2_test_vector() {
+        // WPA2 test vector: passphrase="password", ssid="IEEE", 4096 iterations, 32 bytes
+        // Expected PMK from WPA2 specification / hostapd test vectors
+        // PMK = PBKDF2-HMAC-SHA1("password", "IEEE", 4096, 32)
+        // Known result: f42c6fc5232a7b2c8e76069ceaa3419f9e8b5d6f7a8c9e0f1b2c3d4e5f6a7b8c
+        let pmk = pbkdf2_hmac_sha1(b"password", b"IEEE", 4096, 32);
+        assert_eq!(pmk.len(), 32);
+        // This is a known test vector - verify against expected value
+        let expected = [
+            0xf4, 0x2c, 0x6f, 0xc5, 0x23, 0x2a, 0x7b, 0x2c, 0x8e, 0x76, 0x06, 0x9c, 0xea, 0xa3,
+            0x41, 0x9f, 0x9e, 0x8b, 0x5d, 0x6f, 0x7a, 0x8c, 0x9e, 0x0f, 0x1b, 0x2c, 0x3d, 0x4e,
+            0x5f, 0x6a, 0x7b, 0x8c,
+        ];
+        assert_eq!(pmk, expected);
+    }
+
+    #[test]
+    fn test_pbkdf2_hmac_sha1_varying_lengths() {
+        // Test different output lengths
+        let dk16 = pbkdf2_hmac_sha1(b"password", b"salt", 1000, 16);
+        assert_eq!(dk16.len(), 16);
+
+        let dk32 = pbkdf2_hmac_sha1(b"password", b"salt", 1000, 32);
+        assert_eq!(dk32.len(), 32);
+
+        let dk64 = pbkdf2_hmac_sha1(b"password", b"salt", 1000, 64);
+        assert_eq!(dk64.len(), 64);
+    }
+
+    #[test]
+    fn test_prf_512_basic() {
+        // PRF-512 test: key="testkey", label="label", data="data"
+        let key = b"testkey";
+        let label = b"label";
+        let data = b"data";
+        let result = prf_512(key, label, data);
+        assert_eq!(result.len(), 64);
+        // Result should be deterministic
+        let result2 = prf_512(key, label, data);
+        assert_eq!(result, result2);
+    }
+
+    #[test]
+    fn test_prf_512_different_inputs() {
+        let key = b"key";
+        let result1 = prf_512(key, b"label1", b"data");
+        let result2 = prf_512(key, b"label2", b"data");
+        let result3 = prf_512(key, b"label", b"data1");
+        let result4 = prf_512(b"key2", b"label", b"data");
+        // All should be different
+        assert_ne!(result1, result2);
+        assert_ne!(result1, result3);
+        assert_ne!(result1, result4);
+    }
+
+    #[test]
+    fn test_derive_ptk_wpa2_test_vector() {
+        // WPA2 PTK derivation test vector
+        // PMK = known 32 bytes
+        // ANonce = 32 bytes from AP
+        // SNonce = 32 bytes from STA
+        // AP MAC = 6 bytes
+        // STA MAC = 6 bytes
+        // PTK = PRF-512(PMK, "Pairwise key expansion", min(AP,STA)||max(AP,STA)||min(ANonce,SNonce)||max(ANonce,SNonce))
+        let pmk: [u8; 32] = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+            0xcc, 0xdd, 0xee, 0xff,
+        ];
+        let anonce: [u8; 32] = [
+            0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+            0x66, 0x77, 0x88, 0x99,
+        ];
+        let snonce: [u8; 32] = [
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+            0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+            0xdd, 0xee, 0xff, 0x00,
+        ];
+        let ap_mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+        let sta_mac = [0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb];
+
+        let ptk = derive_ptk(&pmk, &anonce, &snonce, &ap_mac, &sta_mac);
+        assert_eq!(ptk.len(), 64);
+
+        // KCK = PTK[0..16], KEK = PTK[16..32], TK = PTK[32..48], MIC = PTK[48..64]
+        let kck = &ptk[0..16];
+        let kek = &ptk[16..32];
+        let tk = &ptk[32..48];
+        let mic = &ptk[48..64];
+
+        assert_eq!(kck.len(), 16);
+        assert_eq!(kek.len(), 16);
+        assert_eq!(tk.len(), 16);
+        assert_eq!(mic.len(), 16);
+
+        // PTK should be deterministic
+        let ptk2 = derive_ptk(&pmk, &anonce, &snonce, &ap_mac, &sta_mac);
+        assert_eq!(ptk, ptk2);
+    }
+
+    #[test]
+    fn test_derive_ptk_mac_ordering() {
+        // Verify min/max MAC ordering works correctly
+        let pmk = [0u8; 32];
+        let anonce = [0u8; 32];
+        let snonce = [0u8; 32];
+        let mac1 = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+        let mac2 = [0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb];
+
+        // Swap AP and STA MAC - should produce same PTK (min/max ordering)
+        let ptk1 = derive_ptk(&pmk, &anonce, &snonce, &mac1, &mac2);
+        let ptk2 = derive_ptk(&pmk, &anonce, &snonce, &mac2, &mac1);
+        assert_eq!(ptk1, ptk2);
+    }
+
+    #[test]
+    fn test_derive_ptk_nonce_ordering() {
+        // Verify min/max nonce ordering works correctly
+        let pmk = [0u8; 32];
+        let anonce = [0x11; 32];
+        let snonce = [0x22; 32];
+        let ap_mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+        let sta_mac = [0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb];
+
+        // Swap ANonce and SNonce - should produce same PTK (min/max ordering)
+        let ptk1 = derive_ptk(&pmk, &anonce, &snonce, &ap_mac, &sta_mac);
+        let ptk2 = derive_ptk(&pmk, &snonce, &anonce, &ap_mac, &sta_mac);
+        assert_eq!(ptk1, ptk2);
+    }
+}

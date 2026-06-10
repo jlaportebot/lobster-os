@@ -1022,6 +1022,7 @@ fn cmd_version() {
     Uart10::puts("Scheduler: Round-robin preemptive\r\n");
 }
 
+#[cfg(target_arch = "aarch64")]
 fn cmd_cpu() {
     let midr: u64;
     unsafe {
@@ -1066,6 +1067,11 @@ fn cmd_cpu() {
     }
     let core_id = mpidr & 0xFF;
     crate::println!("Core ID: {} (MPIDR={:#x})", core_id, mpidr);
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn cmd_cpu() {
+    crate::println!("CPU info not available on this architecture");
 }
 
 fn cmd_timer() {
@@ -1899,11 +1905,16 @@ fn cmd_gpu(args: [&str; MAX_ARGS], argc: usize) {
 #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
 fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
     if argc < 2 {
-        Uart10::puts("Usage: wifi <scan|connect|disconnect|status>\r\n");
+        Uart10::puts("Usage: wifi <scan|connect|save|disconnect|status|bg_scan|roam_threshold|power_save|rssi>\r\n");
         Uart10::puts("  wifi scan                    - Scan for available networks\r\n");
         Uart10::puts("  wifi connect <ssid> [pass]   - Connect to network (WPA2/WPA3)\r\n");
+        Uart10::puts("  wifi save <ssid> [pass]      - Save network for auto-connect\r\n");
         Uart10::puts("  wifi disconnect              - Disconnect from current network\r\n");
         Uart10::puts("  wifi status                  - Show connection status\r\n");
+        Uart10::puts("  wifi bg_scan <on|off> [ms]   - Enable/disable background scan\r\n");
+        Uart10::puts("  wifi roam_threshold <db>     - Set roam threshold in dB\r\n");
+        Uart10::puts("  wifi power_save <on|off>     - Enable/disable WMM power save\r\n");
+        Uart10::puts("  wifi rssi                    - Show current AP RSSI\r\n");
         return;
     }
     match args[1] {
@@ -2016,7 +2027,60 @@ fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
                 Uart10::puts("Not connected to any network.\r\n");
             }
         }
-        _ => Uart10::puts("Usage: wifi <scan|connect|save|disconnect|status>\r\n"),
+        "bg_scan" => {
+            if argc < 3 {
+                Uart10::puts("Usage: wifi bg_scan <on|off> [interval_ms]\r\n");
+                return;
+            }
+            let enabled = match args[2] {
+                "on" | "enable" | "true" | "1" => true,
+                "off" | "disable" | "false" | "0" => false,
+                _ => {
+                    Uart10::puts("Invalid value. Use 'on' or 'off'.\r\n");
+                    return;
+                }
+            };
+            crate::drivers::wifi::wifi_enable_background_scan(enabled);
+            if enabled && argc >= 4 {
+                if let Ok(interval) = args[3].parse::<u32>() {
+                    crate::drivers::wifi::wifi_set_bg_scan_interval(interval);
+                }
+            }
+        }
+        "roam_threshold" => {
+            if argc < 3 {
+                Uart10::puts("Usage: wifi roam_threshold <db>\r\n");
+                return;
+            }
+            if let Ok(threshold) = args[2].parse::<i8>() {
+                crate::drivers::wifi::wifi_set_roam_threshold(threshold);
+            } else {
+                Uart10::puts("Invalid threshold value.\r\n");
+            }
+        }
+        "power_save" => {
+            if argc < 3 {
+                Uart10::puts("Usage: wifi power_save <on|off>\r\n");
+                return;
+            }
+            let enabled = match args[2] {
+                "on" | "enable" | "true" | "1" => true,
+                "off" | "disable" | "false" | "0" => false,
+                _ => {
+                    Uart10::puts("Invalid value. Use 'on' or 'off'.\r\n");
+                    return;
+                }
+            };
+            match crate::drivers::wifi::wifi_set_power_save(enabled) {
+                Ok(()) => crate::println!("Power save {}", if enabled { "enabled" } else { "disabled" }),
+                Err(e) => crate::println!("Failed to set power save: {:?}", e),
+            }
+        }
+        "rssi" => {
+            let rssi = crate::drivers::wifi::wifi_current_ap_rssi();
+            crate::println!("Current AP RSSI: {} dBm", rssi);
+        }
+        _ => Uart10::puts("Usage: wifi <scan|connect|save|disconnect|status|bg_scan|roam_threshold|power_save|rssi>\r\n"),
     }
 }
 
