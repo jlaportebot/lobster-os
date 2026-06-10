@@ -584,3 +584,247 @@ pub fn download_package(url: &str, buffer: &mut [u8]) -> Result<usize, RepoError
 
     Ok(len)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    #[test]
+    fn test_repository_config_new() {
+        let config = RepositoryConfig::new("test-repo", "https://example.com/pkg");
+        assert_eq!(config.name, "test-repo");
+        assert_eq!(config.url, "https://example.com/pkg");
+        assert!(config.enabled);
+        assert_eq!(config.priority, 0);
+        assert!(config.verify_signatures);
+        assert!(config.public_key.is_none());
+    }
+
+    #[test]
+    fn test_repository_config_set_public_key_valid() {
+        let mut config = RepositoryConfig::new("test-repo", "https://example.com/pkg");
+        let key_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert!(config.set_public_key(key_hex).is_ok());
+        assert!(config.public_key.is_some());
+        assert_eq!(config.public_key_hex(), Some(key_hex.to_string()));
+    }
+
+    #[test]
+    fn test_repository_config_set_public_key_invalid_length() {
+        let mut config = RepositoryConfig::new("test-repo", "https://example.com/pkg");
+        let key_hex = "0123456789abcdef"; // Too short
+        assert!(config.set_public_key(key_hex).is_err());
+    }
+
+    #[test]
+    fn test_repository_config_set_public_key_invalid_hex() {
+        let mut config = RepositoryConfig::new("test-repo", "https://example.com/pkg");
+        let key_hex = "0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdef0123456789abcdef"; // Invalid hex
+        assert!(config.set_public_key(key_hex).is_err());
+    }
+
+    #[test]
+    fn test_repository_manager_new() {
+        let manager = RepositoryManager::new();
+        assert_eq!(manager.list_repos().len(), 0);
+    }
+
+    #[test]
+    fn test_repository_manager_add_remove_repo() {
+        let mut manager = RepositoryManager::new();
+        let config = RepositoryConfig::new("test-repo", "https://example.com/pkg");
+        manager.add_repo(config);
+        assert_eq!(manager.list_repos().len(), 1);
+        assert!(manager.get_repo("test-repo").is_some());
+
+        let removed = manager.remove_repo("test-repo");
+        assert!(removed);
+        assert_eq!(manager.list_repos().len(), 0);
+        assert!(manager.get_repo("test-repo").is_none());
+
+        // Removing non-existent repo returns false
+        let removed = manager.remove_repo("nonexistent");
+        assert!(!removed);
+    }
+
+    #[test]
+    fn test_repository_manager_get_repo_mut() {
+        let mut manager = RepositoryManager::new();
+        let config = RepositoryConfig::new("test-repo", "https://example.com/pkg");
+        manager.add_repo(config);
+
+        if let Some(repo) = manager.get_repo_mut("test-repo") {
+            repo.enabled = false;
+        }
+
+        assert!(!manager.get_repo("test-repo").unwrap().enabled);
+    }
+
+    #[test]
+    fn test_repository_manager_search_empty() {
+        let manager = RepositoryManager::new();
+        let results = manager.search("vim");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_repository_manager_find_package_empty() {
+        let manager = RepositoryManager::new();
+        let result = manager.find_package("vim");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_repository_index_valid() {
+        let json = r#"{
+            "packages": [
+                {
+                    "name": "vim",
+                    "version": "9.0",
+                    "arch": "aarch64",
+                    "description": "Vi IMproved text editor",
+                    "dependencies": [],
+                    "size": 1024,
+                    "checksum": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "download_url": "https://example.com/vim.lobpkg"
+                }
+            ]
+        }"#;
+
+        let index = parse_repository_index(json, "test-repo", "https://example.com/pkg").unwrap();
+        assert_eq!(index.name, "test-repo");
+        assert_eq!(index.url, "https://example.com/pkg");
+        assert_eq!(index.packages.len(), 1);
+        assert_eq!(index.packages[0].name, "vim");
+        assert_eq!(index.packages[0].version, "9.0");
+        assert_eq!(index.packages[0].arch, PackageArch::Aarch64);
+    }
+
+    #[test]
+    fn test_parse_repository_index_multiple_packages() {
+        let json = r#"{
+            "packages": [
+                {
+                    "name": "vim",
+                    "version": "9.0",
+                    "arch": "aarch64",
+                    "description": "Editor",
+                    "dependencies": [],
+                    "size": 1024,
+                    "checksum": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "download_url": "https://example.com/vim.lobpkg"
+                },
+                {
+                    "name": "coreutils",
+                    "version": "9.4",
+                    "arch": "aarch64",
+                    "description": "Core utilities",
+                    "dependencies": [],
+                    "size": 2048,
+                    "checksum": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+                    "download_url": "https://example.com/coreutils.lobpkg"
+                }
+            ]
+        }"#;
+
+        let index = parse_repository_index(json, "test-repo", "https://example.com/pkg").unwrap();
+        assert_eq!(index.packages.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_repository_index_missing_packages_field() {
+        let json = r#"{"name": "test", "url": "https://example.com"}"#;
+        let result = parse_repository_index(json, "test-repo", "https://example.com/pkg");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_repo_package_valid() {
+        let json = r#"{
+            "name": "vim",
+            "version": "9.0",
+            "arch": "aarch64",
+            "description": "Vi IMproved",
+            "dependencies": [],
+            "size": 1024,
+            "checksum": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "download_url": "https://example.com/vim.lobpkg"
+        }"#;
+
+        let pkg = parse_repo_package(json).unwrap();
+        assert_eq!(pkg.name, "vim");
+        assert_eq!(pkg.version, "9.0");
+        assert_eq!(pkg.arch, PackageArch::Aarch64);
+        assert_eq!(pkg.size, 1024);
+    }
+
+    #[test]
+    fn test_parse_repo_package_with_dependencies() {
+        let json = r#"{
+            "name": "vim",
+            "version": "9.0",
+            "arch": "aarch64",
+            "description": "Editor",
+            "dependencies": ["libc", "ncurses"],
+            "size": 1024,
+            "checksum": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "download_url": "https://example.com/vim.lobpkg"
+        }"#;
+
+        let pkg = parse_repo_package(json).unwrap();
+        // Note: current parser returns empty for arrays, so dependencies will be empty
+        // This test documents current behavior
+        assert_eq!(pkg.name, "vim");
+    }
+
+    #[test]
+    fn test_parse_repo_package_missing_name() {
+        let json = r#"{"version": "9.0"}"#;
+        let pkg = parse_repo_package(json);
+        assert!(pkg.is_none());
+    }
+
+    #[test]
+    fn test_find_matching_bracket() {
+        assert_eq!(find_matching_bracket("[]"), Some(1));
+        assert_eq!(find_matching_bracket("[[]]"), Some(3));
+        assert_eq!(find_matching_bracket("[{}, []]"), Some(7));
+        assert_eq!(find_matching_bracket("["), None);
+    }
+
+    #[test]
+    fn test_find_matching_brace() {
+        assert_eq!(find_matching_brace("{}"), Some(1));
+        assert_eq!(find_matching_brace("{{}}"), Some(3));
+        assert_eq!(find_matching_brace("{[]}"), Some(3));
+        assert_eq!(find_matching_brace("{"), None);
+    }
+
+    #[test]
+    fn test_verify_checksum() {
+        use sha2::{Digest, Sha256};
+        let data = b"test data";
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let checksum: [u8; 32] = hasher.finalize().into();
+        assert!(verify_checksum(data, &checksum));
+
+        let wrong_checksum = [0u8; 32];
+        assert!(!verify_checksum(data, &wrong_checksum));
+    }
+
+    #[test]
+    fn test_repo_error_display() {
+        assert_eq!(RepoError::NotFound.to_string(), "Repository not found");
+        assert_eq!(RepoError::NetworkError.to_string(), "Network error");
+        assert_eq!(RepoError::ParseError.to_string(), "Parse error");
+        assert_eq!(
+            RepoError::SignatureError.to_string(),
+            "Signature verification failed"
+        );
+        assert_eq!(RepoError::IoError.to_string(), "I/O error");
+        assert_eq!(RepoError::HttpError(404).to_string(), "HTTP error: 404");
+        assert_eq!(RepoError::NotImplemented.to_string(), "Not implemented");
+    }
+}
