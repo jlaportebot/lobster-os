@@ -8,6 +8,12 @@
 use crate::arch::interrupt::{
     send_ipi, send_ipi_cpu, IPI_CALL_FUNCTION, IPI_RESCHEDULE, IPI_STOP, IPI_WAKE,
 };
+
+// Architecture-specific IPI vector type
+#[cfg(target_arch = "aarch64")]
+type IpiVector = u32;
+#[cfg(target_arch = "x86_64")]
+type IpiVector = u8;
 use crate::println;
 use crate::smp::CORE_COUNT;
 
@@ -73,7 +79,7 @@ pub fn send_reschedule(target_core: u64) {
     if !crate::smp::is_core_online(target_core as usize) {
         return;
     }
-    send_ipi_cpu(target_core as u8, IPI_RESCHEDULE);
+    send_ipi_cpu(target_core as u8, IPI_RESCHEDULE as IpiVector);
 }
 
 /// Send a reschedule IPI to all other cores
@@ -86,7 +92,7 @@ pub fn broadcast_reschedule() {
         }
     }
     if targets != 0 {
-        send_ipi(targets as u32, IPI_RESCHEDULE, 0); // Fixed delivery
+        send_ipi(targets as u32, IPI_RESCHEDULE as IpiVector, 0); // Fixed delivery
     }
 }
 
@@ -109,7 +115,7 @@ pub fn send_call_function(target_core: u64, callback: IpiCallback) -> bool {
     }
 
     // Send the IPI
-    send_ipi_cpu(target_core as u8, IPI_CALL_FUNCTION);
+    send_ipi_cpu(target_core as u8, IPI_CALL_FUNCTION as IpiVector);
     true
 }
 
@@ -133,7 +139,7 @@ pub fn broadcast_call_function(callback: IpiCallback) -> bool {
     }
 
     if targets != 0 {
-        send_ipi(targets as u32, IPI_CALL_FUNCTION, 0);
+        send_ipi(targets as u32, IPI_CALL_FUNCTION as IpiVector, 0);
     }
     all_ok
 }
@@ -143,7 +149,7 @@ pub fn send_stop(target_core: u64) {
     if target_core >= CORE_COUNT as u64 {
         return;
     }
-    send_ipi_cpu(target_core as u8, IPI_STOP);
+    send_ipi_cpu(target_core as u8, IPI_STOP as IpiVector);
 }
 
 /// Send a wake IPI to a specific core (wake from WFE)
@@ -154,7 +160,7 @@ pub fn send_wake(target_core: u64) {
     if !crate::smp::is_core_online(target_core as usize) {
         return;
     }
-    send_ipi_cpu(target_core as u8, IPI_WAKE);
+    send_ipi_cpu(target_core as u8, IPI_WAKE as IpiVector);
 }
 
 /// Process pending IPI callbacks for a core
