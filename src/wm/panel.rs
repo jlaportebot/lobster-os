@@ -237,7 +237,7 @@ fn draw_button(fb: &FramebufferInfo, btn: &Button, offset_x: u32, offset_y: u32)
 
 fn update_clock(_fb: &FramebufferInfo) {
     unsafe {
-        let now = crate::arch::timer::Timer::uptime_ms();
+        let now = crate::arch::ArchTimer::uptime_ms();
         if now - PANEL_STATE.last_clock_update >= 1000 {
             let secs = now / 1000;
             let mins = secs / 60;
@@ -251,11 +251,14 @@ fn update_clock(_fb: &FramebufferInfo) {
         PANEL_STATE.tray_battery.widget.set_text("🔋100%");
 
         // Update network (placeholder)
+        #[cfg(target_arch = "aarch64")]
         if crate::net::config().ip_addr != [0, 0, 0, 0] {
             PANEL_STATE.tray_network.widget.set_text("📶");
         } else {
             PANEL_STATE.tray_network.widget.set_text("❌");
         }
+        #[cfg(target_arch = "x86_64")]
+        PANEL_STATE.tray_network.widget.set_text("📶");
     }
 }
 

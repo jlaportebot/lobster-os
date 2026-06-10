@@ -388,7 +388,7 @@ pub fn init() {
 
     // Seed PRNG with timer value
     unsafe {
-        PRNG_STATE ^= crate::arch::timer::Timer::system_time_us();
+        PRNG_STATE ^= crate::arch::ArchTimer::system_time_us();
     }
 
     println!(

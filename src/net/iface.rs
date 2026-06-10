@@ -10,7 +10,9 @@
 //! - Lock-free polling model (no mutexes on the hot path)
 //! - Static dispatch via enum (no vtable overhead in #![no_std])
 
+#[cfg(target_arch = "aarch64")]
 use crate::drivers::wifi;
+#[cfg(target_arch = "aarch64")]
 use crate::net::genet;
 use crate::println;
 

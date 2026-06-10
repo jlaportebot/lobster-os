@@ -651,7 +651,7 @@ fn start_service_recursive(idx: usize, depth: usize, visiting: &mut [bool; MAX_S
                     Some(pid) => {
                         inst.pid = pid;
                         inst.state = ServiceState::Running;
-                        inst.started_at_ms = crate::arch::timer::Timer::uptime_ms();
+                        inst.started_at_ms = crate::arch::ArchTimer::uptime_ms();
                         inst.restart_count = 0;
                         inst.next_restart_ms = 0;
                         println!("[init] Started '{}' → PID {}", cfg.name_str(), pid);
@@ -673,7 +673,7 @@ fn start_service_recursive(idx: usize, depth: usize, visiting: &mut [bool; MAX_S
         if is_builtin_service(cfg.name_str()) {
             inst.pid = 0; // kernel thread, no userspace PID
             inst.state = ServiceState::Running;
-            inst.started_at_ms = crate::arch::timer::Timer::uptime_ms();
+            let install_time = crate::arch::ArchTimer::uptime_ms();
             inst.restart_count = 0;
             inst.next_restart_ms = 0;
             println!(
@@ -980,10 +980,12 @@ pub fn switch_runlevel(target: Runlevel) -> bool {
     match target {
         Runlevel::Halt => {
             println!("[init] System halt requested");
+            #[cfg(target_arch = "aarch64")]
             crate::drivers::power::shutdown();
         }
         Runlevel::Reboot => {
             println!("[init] System reboot requested");
+            #[cfg(target_arch = "aarch64")]
             crate::drivers::power::reset();
         }
         _ => {}
@@ -1007,7 +1009,7 @@ pub fn current_runlevel() -> Runlevel {
 /// - Restart crashed services with exponential backoff
 /// - Transition pending restarts
 pub fn tick() {
-    let now_ms = crate::arch::timer::Timer::uptime_ms();
+    let now_ms = crate::arch::ArchTimer::uptime_ms();
 
     unsafe {
         for i in 0..SERVICE_COUNT {

@@ -7,7 +7,9 @@
 //! - RTC wake-on-timer
 //! - Watchdog timer driver
 
+#[cfg(target_arch = "aarch64")]
 use crate::arch::cpu::{disable_irqs, wfe};
+#[cfg(target_arch = "aarch64")]
 use crate::arch::timer::Timer;
 use crate::drivers::mailbox;
 use crate::println;

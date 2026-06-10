@@ -1,13 +1,13 @@
 //! Inter-Processor Interrupt (IPI) subsystem
 //!
 //! Provides:
-//! - IPI sending via GIC SGI (Software Generated Interrupts)
+//! - IPI sending via GIC SGI (ARM64) or LAPIC (x86_64)
 //! - Per-core callback queues for function-call IPIs
 //! - Reschedule IPIs for cross-core task migration
 
-use crate::arch::gic;
+use crate::arch::interrupt::{send_ipi, send_ipi_all, send_ipi_cpu, IPI_CALL_FUNCTION, IPI_RESCHEDULE, IPI_STOP, IPI_WAKE};
 use crate::println;
-use crate::smp::{CORE_COUNT, IPI_CALL_FUNCTION, IPI_RESCHEDULE, IPI_STOP, IPI_WAKE};
+use crate::smp::CORE_COUNT;
 
 /// Maximum pending callbacks per core
 const MAX_PENDING_CALLBACKS: usize = 16;
@@ -72,7 +72,7 @@ pub fn send_reschedule(target_core: u64) {
         return;
     }
     unsafe {
-        gic::Gic::send_sgi(IPI_RESCHEDULE, 1 << target_core as u8);
+        send_ipi_cpu(target_core as u8, IPI_RESCHEDULE);
     }
 }
 
@@ -87,7 +87,7 @@ pub fn broadcast_reschedule() {
     }
     if targets != 0 {
         unsafe {
-            gic::Gic::send_sgi(IPI_RESCHEDULE, targets);
+            send_ipi(targets as u32, IPI_RESCHEDULE, 0); // Fixed delivery
         }
     }
 }
@@ -112,7 +112,7 @@ pub fn send_call_function(target_core: u64, callback: IpiCallback) -> bool {
 
     // Send the IPI
     unsafe {
-        gic::Gic::send_sgi(IPI_CALL_FUNCTION, 1 << target_core as u8);
+        send_ipi_cpu(target_core as u8, IPI_CALL_FUNCTION);
     }
     true
 }
@@ -138,7 +138,7 @@ pub fn broadcast_call_function(callback: IpiCallback) -> bool {
 
     if targets != 0 {
         unsafe {
-            gic::Gic::send_sgi(IPI_CALL_FUNCTION, targets);
+            send_ipi(targets as u32, IPI_CALL_FUNCTION, 0);
         }
     }
     all_ok
@@ -150,7 +150,7 @@ pub fn send_stop(target_core: u64) {
         return;
     }
     unsafe {
-        gic::Gic::send_sgi(IPI_STOP, 1 << target_core as u8);
+        send_ipi_cpu(target_core as u8, IPI_STOP);
     }
 }
 
@@ -163,12 +163,12 @@ pub fn send_wake(target_core: u64) {
         return;
     }
     unsafe {
-        gic::Gic::send_sgi(IPI_WAKE, 1 << target_core as u8);
+        send_ipi_cpu(target_core as u8, IPI_WAKE);
     }
 }
 
 /// Process pending IPI callbacks for a core
-/// Called from handle_irq when an IPI_CALL_FUNCTION SGI arrives
+/// Called from handle_irq when an IPI_CALL_FUNCTION arrives
 pub fn process_pending_callbacks(core_id: usize) {
     unsafe {
         let queue = &mut IPI_QUEUES[core_id];
@@ -190,5 +190,5 @@ pub fn process_pending_callbacks(core_id: usize) {
 
 /// Initialize IPI subsystem
 pub fn init() {
-    println!("[ipi] IPI subsystem initialized (SGIs 0-3 allocated)");
+    println!("[ipi] IPI subsystem initialized");
 }

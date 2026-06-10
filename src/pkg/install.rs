@@ -1,5 +1,6 @@
 //! Package installation logic for LobsterOS
 
+#[cfg(target_arch = "aarch64")]
 use crate::net::http::http_get;
 use crate::pkg::package::{
     InstalledPackage, Package, PackageArch, PackageFile, PackageMetadata, LOBPKG_MAGIC,
@@ -242,6 +243,7 @@ impl Installer {
     }
 
     /// Install a package by name from repository
+    #[cfg(target_arch = "aarch64")]
     pub fn install(&mut self, name: &str) -> Result<(), InstallError> {
         // Check if already installed
         if self.db.is_installed(name) {
@@ -308,7 +310,7 @@ impl Installer {
         }
 
         // Add to database
-        let install_time = crate::arch::timer::Timer::uptime_ms();
+        let install_time = crate::arch::ArchTimer::uptime_ms();
         let installed = InstalledPackage::from_package(package, install_time);
         self.db.add(installed, true);
 
@@ -316,6 +318,12 @@ impl Installer {
         self.db.save()?;
 
         Ok(())
+    }
+
+    /// Install a package by name from repository (x86_64 stub)
+    #[cfg(target_arch = "x86_64")]
+    pub fn install(&mut self, _name: &str) -> Result<(), InstallError> {
+        Err(InstallError::HttpError(0)) // Network not available on x86_64
     }
 
     /// Remove a package
@@ -1166,7 +1174,7 @@ pub fn install_transaction(
         }
 
         // Add to database
-        let install_time = crate::arch::timer::Timer::uptime_ms();
+        let install_time = crate::arch::ArchTimer::uptime_ms();
         let installed = InstalledPackage::from_package(package, install_time);
         installer.db.add(installed, true);
         installed_in_transaction.push(name.to_string());

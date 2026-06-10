@@ -11,7 +11,9 @@
 //! - Variable expansion: $VAR, ${VAR}, $? (last exit code)
 //! - Integrates with scheduler, memory, and process subsystems
 
+#[cfg(target_arch = "aarch64")]
 use crate::drivers::serial_input;
+#[cfg(target_arch = "aarch64")]
 use crate::drivers::uart::Uart10;
 use alloc::vec::Vec;
 
@@ -456,6 +458,7 @@ pub fn run_with_pty(pty_slave_fd: Option<usize>) -> ! {
                     }
                     CmdResult::Reboot => {
                         print_line(pty_slave_fd, "Rebooting...\r\n");
+                        #[cfg(target_arch = "aarch64")]
                         crate::drivers::power::reset();
                     }
                     CmdResult::Ok => {}
@@ -798,9 +801,14 @@ fn run_builtin(
             cmd_gpu(args, argc);
             0
         }
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "wifi" => {
             cmd_wifi(args, argc);
+            0
+        }
+        #[cfg(target_arch = "x86_64")]
+        "wifi" => {
+            Uart10::puts("WiFi not available on x86_64.\r\n");
             0
         }
         "pkg" => {
@@ -925,7 +933,7 @@ fn cmd_clear() {
 }
 
 fn cmd_uptime() {
-    let ms = crate::arch::timer::Timer::uptime_ms();
+    let ms = crate::arch::ArchTimer::uptime_ms();
     let secs = ms / 1000;
     let mins = secs / 60;
     let hrs = mins / 60;
@@ -1061,9 +1069,9 @@ fn cmd_cpu() {
 }
 
 fn cmd_timer() {
-    let freq = crate::arch::timer::Timer::frequency();
-    let uptime = crate::arch::timer::Timer::uptime_ms();
-    let sys_time = crate::arch::timer::Timer::system_time_us();
+    let freq = crate::arch::ArchTimer::frequency();
+    let uptime = crate::arch::ArchTimer::uptime_ms();
+    let sys_time = crate::arch::ArchTimer::system_time_us();
 
     crate::println!("Timer frequency: {} Hz", freq);
     crate::println!("System time: {} us ({} ms)", sys_time, sys_time / 1000);
@@ -1072,6 +1080,7 @@ fn cmd_timer() {
 
 fn cmd_halt() {
     Uart10::puts("System halting...\r\n");
+    #[cfg(target_arch = "aarch64")]
     crate::drivers::power::shutdown();
 }
 
@@ -1177,20 +1186,28 @@ fn cmd_gpio(args: [&str; MAX_ARGS], argc: usize) {
     if argc >= 3 {
         match args[2] {
             "high" => {
+                #[cfg(target_arch = "aarch64")]
                 crate::drivers::gpio::set_pin_mode(pin, crate::drivers::gpio::PinMode::Output);
+                #[cfg(target_arch = "aarch64")]
                 crate::drivers::gpio::set_pin(pin);
                 crate::println!("GPIO {} set HIGH", pin);
             }
             "low" => {
+                #[cfg(target_arch = "aarch64")]
                 crate::drivers::gpio::set_pin_mode(pin, crate::drivers::gpio::PinMode::Output);
+                #[cfg(target_arch = "aarch64")]
                 crate::drivers::gpio::clear_pin(pin);
                 crate::println!("GPIO {} set LOW", pin);
             }
             _ => Uart10::puts("Use 'high' or 'low'\r\n"),
         }
     } else {
+        #[cfg(target_arch = "aarch64")]
         let level = crate::drivers::gpio::read_pin(pin);
+        #[cfg(target_arch = "aarch64")]
         crate::println!("GPIO {} = {}", pin, if level { "HIGH" } else { "LOW" });
+        #[cfg(target_arch = "x86_64")]
+        crate::println!("GPIO {} = (not available on x86_64)", pin);
     }
 }
 
@@ -1351,7 +1368,7 @@ fn parse_ip_addr(s: &str) -> Option<[u8; 4]> {
     }
 }
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
 fn cmd_ifconfig() {
     let cfg = crate::net::config();
     crate::println!("eth0: LobsterOS Network Interface");
@@ -1402,7 +1419,12 @@ fn cmd_ifconfig() {
     );
 }
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(target_arch = "x86_64")]
+fn cmd_ifconfig() {
+    crate::println!("Network interfaces not available on x86_64");
+}
+
+#[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
 fn cmd_ping(args: [&str; MAX_ARGS], argc: usize) {
     if argc < 2 {
         Uart10::puts("Usage: ping <ip>\r\n");
@@ -1422,15 +1444,17 @@ fn cmd_ping(args: [&str; MAX_ARGS], argc: usize) {
         dst[2],
         dst[3]
     );
+    #[cfg(target_arch = "aarch64")]
     crate::net::icmp::send_echo_request(dst, 1);
     // Poll for replies for a few iterations
     for _ in 0..100 {
+        #[cfg(target_arch = "aarch64")]
         crate::net::poll();
     }
     crate::println!("PING done.");
 }
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
 fn cmd_arp(args: [&str; MAX_ARGS], argc: usize) {
     if argc < 2 {
         Uart10::puts("Usage: arp <ip> | arp dump\r\n");
@@ -1455,6 +1479,7 @@ fn cmd_arp(args: [&str; MAX_ARGS], argc: usize) {
         ip[2],
         ip[3]
     );
+    #[cfg(target_arch = "aarch64")]
     match crate::net::arp::resolve(ip) {
         Some(mac) => crate::println!(
             "  -> {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
@@ -1467,9 +1492,11 @@ fn cmd_arp(args: [&str; MAX_ARGS], argc: usize) {
         ),
         None => crate::println!("  -> not in cache (request sent)"),
     }
+    #[cfg(target_arch = "x86_64")]
+    crate::println!("  -> ARP not available on x86_64");
 }
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
 fn cmd_dhcp(args: [&str; MAX_ARGS], argc: usize) {
     if argc < 2 || args[1] == "status" {
         let cfg = crate::net::config();
@@ -1490,6 +1517,7 @@ fn cmd_dhcp(args: [&str; MAX_ARGS], argc: usize) {
         );
         return;
     }
+    #[cfg(target_arch = "aarch64")]
     match args[1] {
         "renew" => {
             Uart10::puts("DHCP: sending discover...\r\n");
@@ -1513,9 +1541,13 @@ fn cmd_dhcp(args: [&str; MAX_ARGS], argc: usize) {
         }
         _ => Uart10::puts("Usage: dhcp [renew|release|status]\r\n"),
     }
+    #[cfg(target_arch = "x86_64")]
+    {
+        Uart10::puts("DHCP not available on x86_64\r\n");
+    }
 }
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
 fn cmd_net(args: [&str; MAX_ARGS], argc: usize) {
     if argc < 2 {
         Uart10::puts("Usage: net <poll|stats>\r\n");
@@ -1561,13 +1593,16 @@ fn cmd_dns(args: [&str; MAX_ARGS], argc: usize) {
     }
     let domain = args[1];
     crate::println!("Resolving {} via DNS...", domain);
+    #[cfg(target_arch = "aarch64")]
     match crate::net::dns::resolve(domain) {
         Some(ip) => crate::println!("{} -> {}.{}.{}.{}", domain, ip[0], ip[1], ip[2], ip[3]),
         None => crate::println!("Failed to resolve {}", domain),
     }
+    #[cfg(target_arch = "x86_64")]
+    crate::println!("DNS not available on x86_64");
 }
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
 fn cmd_wm(args: [&str; MAX_ARGS], argc: usize) {
     if argc < 2 {
         Uart10::puts("Usage: wm <info|theme|composite|wallpaper>\\r\\n");
@@ -1760,29 +1795,41 @@ fn cmd_gpu(args: [&str; MAX_ARGS], argc: usize) {
     }
     match args[1] {
         "info" => {
+            #[cfg(target_arch = "aarch64")]
             let info = crate::drivers::gpu::gpu_info();
             crate::println!("GPU Info:");
+            #[cfg(target_arch = "aarch64")]
             crate::println!(" Firmware: {:#010x}", info.firmware_rev);
+            #[cfg(target_arch = "aarch64")]
             crate::println!(
                 " Board: model={:#x} rev={:#x}",
                 info.board_model,
                 info.board_rev
             );
+            #[cfg(target_arch = "aarch64")]
             crate::println!(
                 " VC mem: {:#x} ({} MB)",
                 info.vc_mem_base,
                 info.vc_mem_size / (1024 * 1024)
             );
+            #[cfg(target_arch = "aarch64")]
             crate::println!(
                 " ARM mem: {:#x} ({} MB)",
                 info.arm_mem_base,
                 info.arm_mem_size / (1024 * 1024)
             );
+            #[cfg(target_arch = "aarch64")]
             crate::println!(" V3D clock: {} MHz", info.v3d_clock / 1_000_000);
+            #[cfg(target_arch = "aarch64")]
             crate::println!(" Core clock: {} MHz", info.core_clock / 1_000_000);
+            #[cfg(target_arch = "x86_64")]
+            crate::println!(" GPU info not available on x86_64");
         }
         "status" => {
+            #[cfg(target_arch = "aarch64")]
             crate::drivers::gpu::print_status();
+            #[cfg(target_arch = "x86_64")]
+            crate::println!(" GPU status not available on x86_64");
         }
         "clock" => {
             if argc < 3 {
@@ -1790,28 +1837,43 @@ fn cmd_gpu(args: [&str; MAX_ARGS], argc: usize) {
                 return;
             }
             match args[2] {
-                "v3d" => crate::println!(
-                    "V3D clock: {} MHz",
-                    crate::drivers::gpu::get_v3d_clock() / 1_000_000
-                ),
-                "core" => crate::println!(
-                    "Core clock: {} MHz",
-                    crate::drivers::gpu::get_core_clock() / 1_000_000
-                ),
-                "pixel" => crate::println!(
-                    "Pixel clock: {} MHz",
-                    crate::drivers::gpu::get_pixel_clock() / 1_000_000
-                ),
-                "emmc" => crate::println!(
-                    "eMMC clock: {} MHz",
-                    crate::drivers::gpu::get_emmc_clock() / 1_000_000
-                ),
+                "v3d" => {
+                    #[cfg(target_arch = "aarch64")]
+                    let clock = crate::drivers::gpu::get_v3d_clock() / 1_000_000;
+                    #[cfg(target_arch = "x86_64")]
+                    let clock = 0;
+                    crate::println!("V3D clock: {} MHz", clock);
+                }
+                "core" => {
+                    #[cfg(target_arch = "aarch64")]
+                    let clock = crate::drivers::gpu::get_core_clock() / 1_000_000;
+                    #[cfg(target_arch = "x86_64")]
+                    let clock = 0;
+                    crate::println!("Core clock: {} MHz", clock);
+                }
+                "pixel" => {
+                    #[cfg(target_arch = "aarch64")]
+                    let clock = crate::drivers::gpu::get_pixel_clock() / 1_000_000;
+                    #[cfg(target_arch = "x86_64")]
+                    let clock = 0;
+                    crate::println!("Pixel clock: {} MHz", clock);
+                }
+                "emmc" => {
+                    #[cfg(target_arch = "aarch64")]
+                    let clock = crate::drivers::gpu::get_emmc_clock() / 1_000_000;
+                    #[cfg(target_arch = "x86_64")]
+                    let clock = 0;
+                    crate::println!("eMMC clock: {} MHz", clock);
+                }
                 _ => Uart10::puts("Unknown clock. Use: v3d, core, pixel, emmc\r\n"),
             }
         }
         "blank" => {
+            #[cfg(target_arch = "aarch64")]
             crate::drivers::gpu::blank_screen(true);
             Uart10::puts("Screen blanked.\r\n");
+            #[cfg(target_arch = "x86_64")]
+            Uart10::puts("Screen blank not available on x86_64.\r\n");
         }
         "mode" => {
             if argc < 5 {
@@ -1821,17 +1883,20 @@ fn cmd_gpu(args: [&str; MAX_ARGS], argc: usize) {
             let w = parse_u32(args[2]).unwrap_or(640);
             let h = parse_u32(args[3]).unwrap_or(480);
             let bpp = parse_u32(args[4]).unwrap_or(32);
+            #[cfg(target_arch = "aarch64")]
             if crate::drivers::gpu::configure_display(w, h, bpp, true) {
                 crate::println!("Mode set: {}x{} @ {}bpp", w, h, bpp);
             } else {
                 Uart10::puts("Failed to set mode.\r\n");
             }
+            #[cfg(target_arch = "x86_64")]
+            Uart10::puts("Display mode not available on x86_64.\r\n");
         }
         _ => Uart10::puts("Usage: gpu <info|status|clock|blank|mode>\r\n"),
     }
 }
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
 fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
     if argc < 2 {
         Uart10::puts("Usage: wifi <scan|connect|disconnect|status>\r\n");
@@ -2538,6 +2603,7 @@ fn cmd_history() -> i32 {
 
 fn cmd_reboot() {
     Uart10::puts("Rebooting...\r\n");
+    #[cfg(target_arch = "aarch64")]
     crate::drivers::power::reset();
 }
 

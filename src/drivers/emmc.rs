@@ -15,7 +15,9 @@
 //! Reference: SD Specification v6.00, BCM2712 ARM Peripherals,
 //! Circle emmc.c (Plan 9 derived)
 
+#[cfg(target_arch = "aarch64")]
 use crate::arch::cpu;
+#[cfg(target_arch = "aarch64")]
 use crate::arch::gic::Gic;
 use crate::fs::block_dev::{BlockDevice, BlockError};
 use crate::memory::{PhysAddr, VirtAddr};

@@ -72,7 +72,11 @@ mod wm;
 use core::arch::global_asm;
 
 // Include boot assembly
+#[cfg(target_arch = "aarch64")]
 global_asm!(include_str!("boot.S"));
+
+#[cfg(target_arch = "x86_64")]
+global_asm!(include_str!("boot_x86_64.S"));
 
 // Linker symbols for kernel boundaries
 extern "C" {
@@ -81,7 +85,8 @@ extern "C" {
     static __bss_end: u64;
 }
 
-/// Kernel entry point — called from boot.S with x0 = DTB pointer
+/// Kernel entry point for AArch64 — called from boot.S with x0 = DTB pointer
+#[cfg(target_arch = "aarch64")]
 #[no_mangle]
 pub unsafe extern "C" fn kernel_init(dtb_ptr: u64) -> ! {
     // 1. UART + Console first

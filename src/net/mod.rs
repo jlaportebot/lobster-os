@@ -1,7 +1,7 @@
 //! Network stack module — TCP/IP for LobsterOS
 //!
 //! Layers:
-//! - genet: BCM2712 GENETv5 Ethernet MAC driver
+//! - genet: BCM2712 GENETv5 Ethernet MAC driver (ARM64 only)
 //! - eth: Ethernet II frame parser/builder
 //! - arp: Address Resolution Protocol (IPv4 over Ethernet)
 //! - ipv4: IPv4 packet parser/builder
@@ -11,17 +11,29 @@
 //! - dhcp: DHCP client for auto-configuration
 //! - socket: Socket API for userspace
 
+#[cfg(target_arch = "aarch64")]
 pub mod arp;
+#[cfg(target_arch = "aarch64")]
 pub mod dhcp;
+#[cfg(target_arch = "aarch64")]
 pub mod dns;
+#[cfg(target_arch = "aarch64")]
 pub mod eth;
+#[cfg(target_arch = "aarch64")]
 pub mod genet;
+#[cfg(target_arch = "aarch64")]
 pub mod http;
+#[cfg(target_arch = "aarch64")]
 pub mod icmp;
+#[cfg(target_arch = "aarch64")]
 pub mod iface;
+#[cfg(target_arch = "aarch64")]
 pub mod ipv4;
+#[cfg(target_arch = "aarch64")]
 pub mod socket;
+#[cfg(target_arch = "aarch64")]
 pub mod tcp;
+#[cfg(target_arch = "aarch64")]
 pub mod udp;
 
 use crate::println;
@@ -95,6 +107,7 @@ pub unsafe fn init() {
     println!("[net] Stack initialized");
 }
 
+#[cfg(target_arch = "aarch64")]
 /// Poll for incoming packets and process them
 pub fn poll() {
     let mut pkt_buf = [0u8; MAX_PACKET_SIZE];
@@ -109,6 +122,7 @@ pub fn poll() {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 /// Process a received Ethernet frame
 fn process_frame(frame: eth::EthernetFrame, data: &[u8]) {
     match frame.ether_type {
@@ -149,21 +163,25 @@ fn process_ipv4(ip_hdr: ipv4::Ipv4Header, data: &[u8]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 /// Get current interface configuration
 pub fn config() -> &'static InterfaceConfig {
     unsafe { &NET_CONFIG }
 }
 
+#[cfg(target_arch = "aarch64")]
 /// Convenience: return (MAC address, IP address) tuple
 pub fn config_mac_ip() -> ([u8; 6], [u8; 4]) {
     unsafe { (NET_CONFIG.mac_addr, NET_CONFIG.ip_addr) }
 }
 
+#[cfg(target_arch = "aarch64")]
 /// Convenience: return MAC address only
 pub fn config_mac() -> [u8; 6] {
     unsafe { NET_CONFIG.mac_addr }
 }
 
+#[cfg(target_arch = "aarch64")]
 /// Set IP address (called by DHCP client)
 pub fn set_ip_addr(addr: [u8; 4]) {
     unsafe {
@@ -171,6 +189,7 @@ pub fn set_ip_addr(addr: [u8; 4]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 /// Set netmask (called by DHCP client)
 pub fn set_netmask(mask: [u8; 4]) {
     unsafe {
@@ -178,6 +197,7 @@ pub fn set_netmask(mask: [u8; 4]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 /// Set gateway (called by DHCP client)
 pub fn set_gateway(gw: [u8; 4]) {
     unsafe {
@@ -185,6 +205,7 @@ pub fn set_gateway(gw: [u8; 4]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 /// Set DNS server (called by DHCP client)
 pub fn set_dns(dns: [u8; 4]) {
     unsafe {
@@ -192,6 +213,7 @@ pub fn set_dns(dns: [u8; 4]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 /// Handle GENET IRQ
 pub fn handle_irq() {
     genet::handle_irq();

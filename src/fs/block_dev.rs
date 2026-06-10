@@ -648,7 +648,7 @@ impl SdCardStatus {
 }
 
 /// Get SD card status from the eMMC driver
-#[cfg(not(feature = "qemu"))]
+#[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
 pub fn sd_card_status() -> SdCardStatus {
     let info = crate::drivers::emmc::card_info();
     SdCardStatus {
@@ -669,7 +669,7 @@ pub fn sd_card_status() -> SdCardStatus {
     }
 }
 
-#[cfg(feature = "qemu")]
+#[cfg(any(feature = "qemu", target_arch = "x86_64"))]
 pub fn sd_card_status() -> SdCardStatus {
     SdCardStatus::empty()
 }
