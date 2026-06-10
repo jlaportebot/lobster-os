@@ -122,7 +122,12 @@ pub unsafe fn init_lapic() {
     // Read version
     let version = lapic_read(LAPIC_VERSION);
     let max_lvt = (version >> 16) & 0xFF;
-    println!("[lapic] LAPIC at {:#x}, version {:#x}, max LVT entries: {}", LAPIC_BASE, version & 0xFF, max_lvt);
+    println!(
+        "[lapic] LAPIC at {:#x}, version {:#x}, max LVT entries: {}",
+        LAPIC_BASE,
+        version & 0xFF,
+        max_lvt
+    );
 
     // Disable legacy PIC (if present) by masking all IRQs
     disable_pic();
@@ -154,7 +159,12 @@ pub unsafe fn init_ioapic() {
     // Read version
     let version = ioapic_read(IOAPIC_VERSION);
     let max_redir = (version >> 16) & 0xFF;
-    println!("[ioapic] I/O APIC at {:#x}, version {:#x}, max redirection entries: {}", IOAPIC_BASE, version & 0xFF, max_redir);
+    println!(
+        "[ioapic] I/O APIC at {:#x}, version {:#x}, max redirection entries: {}",
+        IOAPIC_BASE,
+        version & 0xFF,
+        max_redir
+    );
 
     // Mask all interrupts initially
     for i in 0..=max_redir {
@@ -168,16 +178,23 @@ pub unsafe fn init_ioapic() {
 }
 
 /// Map an IRQ to a vector on a specific CPU
-pub unsafe fn ioapic_set_irq(irq: u8, vector: u8, destination_cpu: u8, delivery_mode: u8, polarity: bool, trigger_mode: bool) {
+pub unsafe fn ioapic_set_irq(
+    irq: u8,
+    vector: u8,
+    destination_cpu: u8,
+    delivery_mode: u8,
+    polarity: bool,
+    trigger_mode: bool,
+) {
     let redir_low = IOAPIC_REDTBL + (irq as u32) * 2;
     let redir_high = redir_low + 1;
 
     let mut low = vector as u32;
-    low |= (delivery_mode & 0x7) << 8;     // Delivery mode
-    low |= (1 << 11);                       // Destination mode: physical
-    low |= (polarity as u32) << 13;         // Polarity (0=high, 1=low)
-    low |= (trigger_mode as u32) << 15;     // Trigger mode (0=edge, 1=level)
-    low |= (1 << 16);                       // Masked (we'll unmask when enabling)
+    low |= (delivery_mode & 0x7) << 8; // Delivery mode
+    low |= (1 << 11); // Destination mode: physical
+    low |= (polarity as u32) << 13; // Polarity (0=high, 1=low)
+    low |= (trigger_mode as u32) << 15; // Trigger mode (0=edge, 1=level)
+    low |= (1 << 16); // Masked (we'll unmask when enabling)
 
     let high = (destination_cpu as u32) << 24; // Destination field
 
@@ -260,7 +277,7 @@ pub unsafe fn init_timer(vector: u8, hz: u32) {
     lvt &= !(0xFF); // Clear vector
     lvt |= vector as u32;
     lvt |= (1 << 17); // Periodic mode
-    // Mask initially
+                      // Mask initially
     lvt |= (1 << 16);
     lapic_write(LAPIC_LVT_TIMER, lvt);
 
@@ -274,7 +291,10 @@ pub unsafe fn init_timer(vector: u8, hz: u32) {
     lvt &= !(1 << 16);
     lapic_write(LAPIC_LVT_TIMER, lvt);
 
-    println!("[lapic] Timer initialized at {} Hz, vector {:#x}", hz, vector);
+    println!(
+        "[lapic] Timer initialized at {} Hz, vector {:#x}",
+        hz, vector
+    );
 }
 
 /// Calibrate LAPIC timer using TSC
@@ -312,7 +332,10 @@ unsafe fn calibrate_timer(hz: u32) {
     lapic_write(LAPIC_TIMER_INIT_COUNT, initial_count);
     LAPIC_TIMER_FREQ.store(hz as u64, Ordering::Relaxed);
 
-    println!("[lapic] Calibrated: TSC delta={}, LAPIC delta={}, initial_count={}", tsc_delta, lapic_delta, initial_count);
+    println!(
+        "[lapic] Calibrated: TSC delta={}, LAPIC delta={}, initial_count={}",
+        tsc_delta, lapic_delta, initial_count
+    );
 }
 
 /// Get LAPIC timer frequency

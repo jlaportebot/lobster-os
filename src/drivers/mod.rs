@@ -1,6 +1,7 @@
 //! Drivers module — hardware peripherals
 //! Drivers module — hardware peripherals
 
+pub mod audio;
 #[cfg(target_arch = "aarch64")]
 pub mod emmc;
 #[cfg(target_arch = "aarch64")]
@@ -23,4 +24,3 @@ pub mod serial_input;
 pub mod uart;
 #[cfg(target_arch = "aarch64")]
 pub mod wifi;
-pub mod audio;

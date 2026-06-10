@@ -5,7 +5,9 @@
 //! - Per-core callback queues for function-call IPIs
 //! - Reschedule IPIs for cross-core task migration
 
-use crate::arch::interrupt::{send_ipi, send_ipi_all, send_ipi_cpu, IPI_CALL_FUNCTION, IPI_RESCHEDULE, IPI_STOP, IPI_WAKE};
+use crate::arch::interrupt::{
+    send_ipi, send_ipi_all, send_ipi_cpu, IPI_CALL_FUNCTION, IPI_RESCHEDULE, IPI_STOP, IPI_WAKE,
+};
 use crate::println;
 use crate::smp::CORE_COUNT;
 

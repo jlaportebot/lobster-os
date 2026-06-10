@@ -13,7 +13,9 @@
 use crate::arch::cpu;
 #[cfg(target_arch = "aarch64")]
 use crate::arch::gic;
-use crate::arch::interrupt::{interrupt_init as init, send_ipi, IPI_RESCHEDULE, IPI_CALL_FUNCTION, IPI_STOP, IPI_WAKE};
+use crate::arch::interrupt::{
+    interrupt_init as init, send_ipi, IPI_CALL_FUNCTION, IPI_RESCHEDULE, IPI_STOP, IPI_WAKE,
+};
 use crate::println;
 use crate::sched::{self, Pid};
 

@@ -6,22 +6,22 @@
 //! - Hardware interrupt handlers (IRQs via LAPIC)
 //! - Syscall entry (syscall/sysret)
 
-use core::arch::global_asm;
 use crate::arch::x86_64::cpu;
-use crate::sched;
 use crate::println;
+use crate::sched;
+use core::arch::global_asm;
 
 /// IDT entry (16 bytes for 64-bit interrupt gate)
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct IdtEntry {
-    offset_low: u16,        // Offset bits 0-15
-    selector: u16,          // Code segment selector
-    ist: u8,                // Interrupt Stack Table index
-    type_attr: u8,          // Gate type, DPL, present
-    offset_mid: u16,        // Offset bits 16-31
-    offset_high: u32,       // Offset bits 32-63
-    reserved: u32,          // Reserved
+    offset_low: u16,  // Offset bits 0-15
+    selector: u16,    // Code segment selector
+    ist: u8,          // Interrupt Stack Table index
+    type_attr: u8,    // Gate type, DPL, present
+    offset_mid: u16,  // Offset bits 16-31
+    offset_high: u32, // Offset bits 32-63
+    reserved: u32,    // Reserved
 }
 
 impl IdtEntry {
@@ -132,26 +132,91 @@ pub unsafe fn init_idt() {
     let idt = &mut IDT;
 
     // Exception handlers (IST=0 for most, IST=1 for double fault)
-    idt.set_handler(vector::DIVIDE_ERROR, handle_divide_error as u64, 0, ist::NORMAL);
+    idt.set_handler(
+        vector::DIVIDE_ERROR,
+        handle_divide_error as u64,
+        0,
+        ist::NORMAL,
+    );
     idt.set_handler(vector::DEBUG, handle_debug as u64, 0, ist::NORMAL);
     idt.set_handler(vector::NMI, handle_nmi as u64, 0, ist::NMI);
     idt.set_handler(vector::BREAKPOINT, handle_breakpoint as u64, 3, ist::NORMAL); // DPL=3 for user breakpoints
     idt.set_handler(vector::OVERFLOW, handle_overflow as u64, 0, ist::NORMAL);
-    idt.set_handler(vector::BOUND_RANGE, handle_bound_range as u64, 0, ist::NORMAL);
-    idt.set_handler(vector::INVALID_OPCODE, handle_invalid_opcode as u64, 0, ist::NORMAL);
-    idt.set_handler(vector::DEVICE_NOT_AVAILABLE, handle_device_not_available as u64, 0, ist::NORMAL);
-    idt.set_handler(vector::DOUBLE_FAULT, handle_double_fault as u64, 0, ist::DOUBLE_FAULT);
-    idt.set_handler(vector::INVALID_TSS, handle_invalid_tss as u64, 0, ist::NORMAL);
-    idt.set_handler(vector::SEGMENT_NOT_PRESENT, handle_segment_not_present as u64, 0, ist::NORMAL);
-    idt.set_handler(vector::STACK_SEGMENT_FAULT, handle_stack_segment_fault as u64, 0, ist::NORMAL);
-    idt.set_handler(vector::GENERAL_PROTECTION, handle_general_protection as u64, 0, ist::NORMAL);
+    idt.set_handler(
+        vector::BOUND_RANGE,
+        handle_bound_range as u64,
+        0,
+        ist::NORMAL,
+    );
+    idt.set_handler(
+        vector::INVALID_OPCODE,
+        handle_invalid_opcode as u64,
+        0,
+        ist::NORMAL,
+    );
+    idt.set_handler(
+        vector::DEVICE_NOT_AVAILABLE,
+        handle_device_not_available as u64,
+        0,
+        ist::NORMAL,
+    );
+    idt.set_handler(
+        vector::DOUBLE_FAULT,
+        handle_double_fault as u64,
+        0,
+        ist::DOUBLE_FAULT,
+    );
+    idt.set_handler(
+        vector::INVALID_TSS,
+        handle_invalid_tss as u64,
+        0,
+        ist::NORMAL,
+    );
+    idt.set_handler(
+        vector::SEGMENT_NOT_PRESENT,
+        handle_segment_not_present as u64,
+        0,
+        ist::NORMAL,
+    );
+    idt.set_handler(
+        vector::STACK_SEGMENT_FAULT,
+        handle_stack_segment_fault as u64,
+        0,
+        ist::NORMAL,
+    );
+    idt.set_handler(
+        vector::GENERAL_PROTECTION,
+        handle_general_protection as u64,
+        0,
+        ist::NORMAL,
+    );
     idt.set_handler(vector::PAGE_FAULT, handle_page_fault as u64, 0, ist::NORMAL);
     idt.set_handler(vector::X87_FPU, handle_x87_fpu as u64, 0, ist::NORMAL);
-    idt.set_handler(vector::ALIGNMENT_CHECK, handle_alignment_check as u64, 0, ist::NORMAL);
-    idt.set_handler(vector::MACHINE_CHECK, handle_machine_check as u64, 0, ist::NORMAL);
+    idt.set_handler(
+        vector::ALIGNMENT_CHECK,
+        handle_alignment_check as u64,
+        0,
+        ist::NORMAL,
+    );
+    idt.set_handler(
+        vector::MACHINE_CHECK,
+        handle_machine_check as u64,
+        0,
+        ist::NORMAL,
+    );
     idt.set_handler(vector::SIMD, handle_simd as u64, 0, ist::NORMAL);
-    idt.set_handler(vector::VIRTUALIZATION, handle_virtualization as u64, 0, ist::NORMAL);
-    idt.set_handler(vector::CONTROL_PROTECTION, handle_control_protection as u64, 0, ist::NORMAL);
+    idt.set_handler(
+        vector::VIRTUALIZATION,
+        handle_virtualization as u64,
+        0,
+        ist::NORMAL,
+    );
+    idt.set_handler(
+        vector::CONTROL_PROTECTION,
+        handle_control_protection as u64,
+        0,
+        ist::NORMAL,
+    );
 
     // Syscall entry (DPL=3 so userspace can call it)
     idt.set_handler(vector::SYSCALL, syscall_entry as u64, 3, ist::NORMAL);
@@ -175,17 +240,28 @@ pub fn idt_mut() -> &'static mut Idt {
 /// Saved register state on exception entry
 #[repr(C)]
 pub struct ExceptionFrame {
-    pub r15: u64, pub r14: u64, pub r13: u64, pub r12: u64,
-    pub r11: u64, pub r10: u64, pub r9: u64, pub r8: u64,
-    pub rsi: u64, pub rdi: u64, pub rbp: u64, pub rbx: u64,
-    pub rdx: u64, pub rcx: u64, pub rax: u64,
-    pub vector: u64,    // Pushed by assembly stub
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub r11: u64,
+    pub r10: u64,
+    pub r9: u64,
+    pub r8: u64,
+    pub rsi: u64,
+    pub rdi: u64,
+    pub rbp: u64,
+    pub rbx: u64,
+    pub rdx: u64,
+    pub rcx: u64,
+    pub rax: u64,
+    pub vector: u64,     // Pushed by assembly stub
     pub error_code: u64, // Pushed by CPU (if applicable)
-    pub rip: u64,       // Return instruction pointer
-    pub cs: u64,        // Code segment
-    pub rflags: u64,    // RFLAGS
-    pub rsp: u64,       // Stack pointer (for privilege change)
-    pub ss: u64,        // Stack segment (for privilege change)
+    pub rip: u64,        // Return instruction pointer
+    pub cs: u64,         // Code segment
+    pub rflags: u64,     // RFLAGS
+    pub rsp: u64,        // Stack pointer (for privilege change)
+    pub ss: u64,         // Stack segment (for privilege change)
 }
 
 // Assembly stubs that save registers and call Rust handlers
@@ -196,19 +272,25 @@ global_asm!(include_str!("exception.S"));
 #[no_mangle]
 pub unsafe extern "C" fn handle_divide_error(frame: *mut ExceptionFrame) {
     println!("[exception] Divide error at RIP={:#x}", (*frame).rip);
-    loop { cpu::wfe(); }
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_debug(frame: *mut ExceptionFrame) {
     println!("[exception] Debug exception at RIP={:#x}", (*frame).rip);
-    loop { cpu::wfe(); }
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_nmi(frame: *mut ExceptionFrame) {
     println!("[exception] NMI at RIP={:#x}", (*frame).rip);
-    loop { cpu::wfe(); }
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
@@ -221,24 +303,36 @@ pub unsafe extern "C" fn handle_breakpoint(frame: *mut ExceptionFrame) {
 #[no_mangle]
 pub unsafe extern "C" fn handle_overflow(frame: *mut ExceptionFrame) {
     println!("[exception] Overflow at RIP={:#x}", (*frame).rip);
-    loop { cpu::wfe(); }
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_bound_range(frame: *mut ExceptionFrame) {
-    println!("[exception] Bound range exceeded at RIP={:#x}", (*frame).rip);
-    loop { cpu::wfe(); }
+    println!(
+        "[exception] Bound range exceeded at RIP={:#x}",
+        (*frame).rip
+    );
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_invalid_opcode(frame: *mut ExceptionFrame) {
     println!("[exception] Invalid opcode at RIP={:#x}", (*frame).rip);
-    loop { cpu::wfe(); }
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_device_not_available(frame: *mut ExceptionFrame) {
-    println!("[exception] Device not available (FPU/SSE) at RIP={:#x}", (*frame).rip);
+    println!(
+        "[exception] Device not available (FPU/SSE) at RIP={:#x}",
+        (*frame).rip
+    );
     // This happens when using FPU/SSE without enabling it
     // Enable it and retry
     enable_fpu();
@@ -247,39 +341,71 @@ pub unsafe extern "C" fn handle_device_not_available(frame: *mut ExceptionFrame)
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_double_fault(frame: *mut ExceptionFrame) {
-    println!("[exception] DOUBLE FAULT at RIP={:#x}, error_code={:#x}", (*frame).rip, (*frame).error_code);
-    loop { cpu::wfe(); }
+    println!(
+        "[exception] DOUBLE FAULT at RIP={:#x}, error_code={:#x}",
+        (*frame).rip,
+        (*frame).error_code
+    );
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_invalid_tss(frame: *mut ExceptionFrame) {
-    println!("[exception] Invalid TSS at RIP={:#x}, error_code={:#x}", (*frame).rip, (*frame).error_code);
-    loop { cpu::wfe(); }
+    println!(
+        "[exception] Invalid TSS at RIP={:#x}, error_code={:#x}",
+        (*frame).rip,
+        (*frame).error_code
+    );
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_segment_not_present(frame: *mut ExceptionFrame) {
-    println!("[exception] Segment not present at RIP={:#x}, error_code={:#x}", (*frame).rip, (*frame).error_code);
-    loop { cpu::wfe(); }
+    println!(
+        "[exception] Segment not present at RIP={:#x}, error_code={:#x}",
+        (*frame).rip,
+        (*frame).error_code
+    );
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_stack_segment_fault(frame: *mut ExceptionFrame) {
-    println!("[exception] Stack segment fault at RIP={:#x}, error_code={:#x}", (*frame).rip, (*frame).error_code);
-    loop { cpu::wfe(); }
+    println!(
+        "[exception] Stack segment fault at RIP={:#x}, error_code={:#x}",
+        (*frame).rip,
+        (*frame).error_code
+    );
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_general_protection(frame: *mut ExceptionFrame) {
-    println!("[exception] General protection fault at RIP={:#x}, error_code={:#x}", (*frame).rip, (*frame).error_code);
-    loop { cpu::wfe(); }
+    println!(
+        "[exception] General protection fault at RIP={:#x}, error_code={:#x}",
+        (*frame).rip,
+        (*frame).error_code
+    );
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_page_fault(frame: *mut ExceptionFrame) {
     let error_code = (*frame).error_code;
     let cr2: u64;
-    unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack, preserves_flags)) };
+    unsafe {
+        core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack, preserves_flags))
+    };
 
     let present = error_code & 1 != 0;
     let write = error_code & 2 != 0;
@@ -289,7 +415,13 @@ pub unsafe extern "C" fn handle_page_fault(frame: *mut ExceptionFrame) {
 
     println!(
         "[exception] Page fault at RIP={:#x} CR2={:#x} (P={} W={} U={} R={} I={})",
-        (*frame).rip, cr2, present, write, user, reserved, instruction_fetch
+        (*frame).rip,
+        cr2,
+        present,
+        write,
+        user,
+        reserved,
+        instruction_fetch
     );
 
     // Try to handle via page fault handler in memory management
@@ -303,37 +435,60 @@ pub unsafe extern "C" fn handle_page_fault(frame: *mut ExceptionFrame) {
 #[no_mangle]
 pub unsafe extern "C" fn handle_x87_fpu(frame: *mut ExceptionFrame) {
     println!("[exception] x87 FPU exception at RIP={:#x}", (*frame).rip);
-    loop { cpu::wfe(); }
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_alignment_check(frame: *mut ExceptionFrame) {
-    println!("[exception] Alignment check at RIP={:#x}, error_code={:#x}", (*frame).rip, (*frame).error_code);
-    loop { cpu::wfe(); }
+    println!(
+        "[exception] Alignment check at RIP={:#x}, error_code={:#x}",
+        (*frame).rip,
+        (*frame).error_code
+    );
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_machine_check(frame: *mut ExceptionFrame) {
     println!("[exception] Machine check at RIP={:#x}", (*frame).rip);
-    loop { cpu::wfe(); }
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_simd(frame: *mut ExceptionFrame) {
     println!("[exception] SIMD exception at RIP={:#x}", (*frame).rip);
-    loop { cpu::wfe(); }
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_virtualization(frame: *mut ExceptionFrame) {
-    println!("[exception] Virtualization exception at RIP={:#x}", (*frame).rip);
-    loop { cpu::wfe(); }
+    println!(
+        "[exception] Virtualization exception at RIP={:#x}",
+        (*frame).rip
+    );
+    loop {
+        cpu::wfe();
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn handle_control_protection(frame: *mut ExceptionFrame) {
-    println!("[exception] Control protection exception at RIP={:#x}, error_code={:#x}", (*frame).rip, (*frame).error_code);
-    loop { cpu::wfe(); }
+    println!(
+        "[exception] Control protection exception at RIP={:#x}, error_code={:#x}",
+        (*frame).rip,
+        (*frame).error_code
+    );
+    loop {
+        cpu::wfe();
+    }
 }
 
 /// Syscall handler entry point (called from assembly via INT 0x80 or SYSCALL)
@@ -368,7 +523,7 @@ pub fn enable_fpu() {
         let mut cr0: u64;
         core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack, preserves_flags));
         cr0 &= !(1 << 2); // Clear EM (bit 2)
-        cr0 |= 1 << 1;    // Set MP (bit 1)
+        cr0 |= 1 << 1; // Set MP (bit 1)
         core::arch::asm!("mov cr0, {}", in(reg) cr0, options(nomem, nostack, preserves_flags));
 
         let mut cr4: u64;
