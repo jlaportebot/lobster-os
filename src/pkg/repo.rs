@@ -589,7 +589,7 @@ pub fn download_package(url: &str, buffer: &mut [u8]) -> Result<usize, RepoError
 mod tests {
     use super::*;
     use alloc::string::ToString;
-    use alloc::{vec, format};
+    use alloc::{format, vec};
 
     #[test]
     fn test_repository_config_new() {

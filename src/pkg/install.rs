@@ -1183,7 +1183,7 @@ mod tests {
     use super::*;
     use crate::pkg::RepoPackage;
     use alloc::string::ToString;
-    use alloc::{vec, format};
+    use alloc::{format, vec};
 
     #[test]
     fn test_install_error_display() {

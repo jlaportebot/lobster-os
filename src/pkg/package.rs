@@ -334,7 +334,7 @@ impl RepositoryIndex {
 mod tests {
     use super::*;
     use alloc::string::ToString;
-    use alloc::{vec, format};
+    use alloc::{format, vec};
 
     #[test]
     fn test_package_arch_from_str() {
