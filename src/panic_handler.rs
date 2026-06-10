@@ -1,7 +1,9 @@
 //! Panic handler for no_std bare-metal kernel
 
+#[cfg(not(feature = "std"))]
 use core::panic::PanicInfo;
 
+#[cfg(not(feature = "std"))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     crate::arch::cpu::disable_irqs();
