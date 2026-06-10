@@ -356,8 +356,17 @@ fn sys_write(fd: i32, buf_ptr: u64, len: usize) -> u64 {
     }
 
     let buf = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, len) };
-    for &byte in buf {
-        crate::drivers::uart::Uart10::putc(byte);
+    #[cfg(target_arch = "aarch64")]
+    {
+        for &byte in buf {
+            crate::drivers::uart::Uart10::putc(byte);
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        for &byte in buf {
+            crate::arch::x86_64::console::serial_putc(byte);
+        }
     }
     len as u64
 }

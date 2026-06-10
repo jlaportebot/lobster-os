@@ -10,6 +10,8 @@
 //! - Link status polling
 //! - Scatter-gather DMA support
 
+#[cfg(target_arch = "aarch64")]
+use crate::arch::gic::Gic;
 use crate::memory::{phys_to_virt, virt_to_phys, VirtAddr};
 use crate::println;
 
@@ -243,9 +245,9 @@ impl Genet {
         self.reg32_write(INTRL0_DEV_CLEAR, !0); // Clear pending
 
         // Enable GENET IRQ in GIC
-        crate::arch::gic::Gic::enable_spi(GENET_SPI);
-        crate::arch::gic::Gic::set_config(GENET_SPI, 0b10); // Edge-triggered
-        crate::arch::gic::Gic::set_priority(GENET_SPI, 0x90);
+        Gic::enable_spi(GENET_SPI);
+        Gic::set_config(GENET_SPI, 0b10); // Edge-triggered
+        Gic::set_priority(GENET_SPI, 0x90);
 
         // 8. Enable TX and RX
         let mut cmd = self.reg32_read(UMAC_CMD);

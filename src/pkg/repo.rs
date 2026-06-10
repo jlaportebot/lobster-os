@@ -180,6 +180,7 @@ impl RepositoryManager {
     }
 
     /// Update repository index (fetch from remote)
+    #[cfg(target_arch = "aarch64")]
     pub fn update_index(&mut self, name: &str) -> Result<(), RepoError> {
         let repo = self
             .repos
@@ -230,6 +231,12 @@ impl RepositoryManager {
         }
 
         Ok(())
+    }
+
+    /// Update repository index (x86_64 stub)
+    #[cfg(target_arch = "x86_64")]
+    pub fn update_index(&mut self, _name: &str) -> Result<(), RepoError> {
+        Err(RepoError::NotImplemented)
     }
 
     /// Get index for a repository
@@ -568,6 +575,7 @@ fn find_matching_brace(s: &str) -> Option<usize> {
 }
 
 /// Download a package file
+#[cfg(target_arch = "aarch64")]
 pub fn download_package(url: &str, buffer: &mut [u8]) -> Result<usize, RepoError> {
     crate::println!("[pkg] Downloading package from {}", url);
 
@@ -583,6 +591,12 @@ pub fn download_package(url: &str, buffer: &mut [u8]) -> Result<usize, RepoError
     buffer[..len].copy_from_slice(&data[..len]);
 
     Ok(len)
+}
+
+/// Download a package file (x86_64 stub)
+#[cfg(target_arch = "x86_64")]
+pub fn download_package(_url: &str, _buffer: &mut [u8]) -> Result<usize, RepoError> {
+    Err(RepoError::NotImplemented)
 }
 
 #[cfg(test)]

@@ -12,7 +12,9 @@
 //! Reference: Circle's emmc.c (Plan 9 derived), BCM2835 ARM Peripherals,
 //! SDIO Specification v3.00.
 
+#[cfg(target_arch = "aarch64")]
 use crate::arch::cpu;
+#[cfg(target_arch = "aarch64")]
 use crate::arch::gic::Gic;
 use crate::memory::{PhysAddr, VirtAddr};
 

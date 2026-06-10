@@ -2,7 +2,7 @@
 //!
 //! Full SMP implementation with:
 //! - Per-core runqueues and scheduling state
-//! - Inter-Processor Interrupts (IPI) via GIC SGIs
+//! - Inter-Processor Interrupts (IPI) via GIC SGIs (ARM64) or LAPIC (x86_64)
 //! - PSCI-style core boot (spin-table method for RPi5)
 //! - Load balancing across cores
 //! - Core-local timer interrupts
@@ -11,7 +11,9 @@
 //! BCM2712: 4x Cortex-A76, Affinity 0-3
 
 use crate::arch::cpu;
+#[cfg(target_arch = "aarch64")]
 use crate::arch::gic;
+use crate::arch::interrupt::{IPI_CALL_FUNCTION, IPI_RESCHEDULE, IPI_STOP, IPI_WAKE};
 use crate::println;
 use crate::sched::{self, Pid};
 
@@ -22,13 +24,8 @@ pub mod runqueue;
 /// Total number of CPU cores on BCM2712
 pub const CORE_COUNT: usize = 4;
 
-/// SGI numbers used for IPI
-/// GICv2 supports SGI 0-15; we allocate specific ones
-pub const IPI_RESCHEDULE: u32 = 0; // Reschedule IPI
-pub const IPI_CALL_FUNCTION: u32 = 1; // Generic function call IPI
-pub const IPI_STOP: u32 = 2; // Stop/halt core IPI
-pub const IPI_WAKE: u32 = 3; // Wake core from WFE
-
+/// SGI/Vector numbers used for IPI — re-exported from arch::interrupt
+/// These are architecture-specific (GIC SGI 0-3 for ARM64, LAPIC vectors 0xE0-0xE3 for x86_64)
 /// Per-core state
 #[repr(C)]
 pub struct CoreLocal {
@@ -200,6 +197,7 @@ fn boot_secondary_core(core_id: u64) {
 
 /// Entry point for secondary cores (called from secondary_core_init in main.rs)
 /// `core_id` is passed from the boot assembly via the C ABI.
+#[cfg(target_arch = "aarch64")]
 pub fn secondary_entry(core_id: u64) -> ! {
     // Set up this core's local state
     unsafe {
@@ -230,6 +228,38 @@ pub fn secondary_entry(core_id: u64) -> ! {
     set_core_online(core_id as usize, true);
 
     println!("[smp] Core {} online (GIC+Timer ready)", core_id);
+
+    // Enable IRQs
+    cpu::enable_irqs();
+
+    // Enter the per-core scheduler loop
+    runqueue::core_scheduler_loop(core_id)
+}
+
+/// x86_64 secondary core entry
+#[cfg(target_arch = "x86_64")]
+pub fn secondary_entry(core_id: u64) -> ! {
+    // Set up this core's local state
+    unsafe {
+        let cl = &mut CORE_LOCAL[core_id as usize];
+        cl.core_id = core_id;
+        cl.mpidr = MPIDR_AFFINITIES[core_id as usize];
+    }
+
+    // Initialize LAPIC CPU interface for this core
+    unsafe {
+        crate::arch::x86_64::lapic::init_lapic();
+    }
+
+    // Enable timer for this core
+    unsafe {
+        crate::arch::x86_64::timer::Timer::init_secondary();
+    }
+
+    // Set core online
+    set_core_online(core_id as usize, true);
+
+    println!("[smp] Core {} online (LAPIC+Timer ready)", core_id);
 
     // Enable IRQs
     cpu::enable_irqs();

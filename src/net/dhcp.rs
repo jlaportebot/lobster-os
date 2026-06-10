@@ -3,10 +3,15 @@
 //! Implements DHCP discover, offer, request, ack (DORA) process.
 //! No_std compatible - uses only core.
 
+#[cfg(target_arch = "aarch64")]
 use crate::net::config;
+#[cfg(target_arch = "aarch64")]
 use crate::net::eth::{EthernetFrame, ETHER_TYPE_IPV4};
+#[cfg(target_arch = "aarch64")]
 use crate::net::genet;
+#[cfg(target_arch = "aarch64")]
 use crate::net::ipv4::{self, IPPROTO_UDP};
+#[cfg(target_arch = "aarch64")]
 use crate::net::udp;
 use alloc::format;
 use alloc::string::String;
