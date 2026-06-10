@@ -25,3 +25,6 @@ fn panic(info: &PanicInfo) -> ! {
         crate::arch::cpu::wfe()
     }
 }
+
+// When std feature is enabled (for host tests), we don't define a panic handler
+// and use std's default panic handler instead.

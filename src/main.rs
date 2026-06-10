@@ -1,5 +1,5 @@
-#![no_std]
-#![no_main]
+#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(feature = "std"), no_main)]
 #![allow(
     dead_code,
     static_mut_refs,
@@ -438,11 +438,18 @@ pub unsafe extern "C" fn kernel_init(dtb_ptr: u64) -> ! {
         }
 
         // Network
-        println!("[net] Initializing network stack...");
-        net::init();
-        println!("[net] Stack ready");
-        net::dns::init();
-        println!("[net] DNS resolver ready");
+        #[cfg(target_arch = "aarch64")]
+        {
+            println!("[net] Initializing network stack...");
+            net::init();
+            println!("[net] Stack ready");
+            net::dns::init();
+            println!("[net] DNS resolver ready");
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            println!("[net] Network stack not available on x86_64 (BCM2712 GENET only)");
+        }
 
         // Window manager
         println!("[wm] Initializing compositor...");
