@@ -1177,3 +1177,420 @@ pub fn install_transaction(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::ToString;
+
+    #[test]
+    fn test_install_error_display() {
+        assert_eq!(
+            InstallError::InvalidPackage.to_string(),
+            "Invalid package format"
+        );
+        assert_eq!(
+            InstallError::ChecksumMismatch.to_string(),
+            "Checksum mismatch"
+        );
+        assert_eq!(
+            InstallError::DependencyMissing.to_string(),
+            "Missing dependency"
+        );
+        assert_eq!(
+            InstallError::ConflictDetected.to_string(),
+            "Package conflict"
+        );
+        assert_eq!(
+            InstallError::InsufficientSpace.to_string(),
+            "Insufficient disk space"
+        );
+        assert_eq!(InstallError::IoError.to_string(), "I/O error");
+        assert_eq!(InstallError::NotImplemented.to_string(), "Not implemented");
+        assert_eq!(
+            InstallError::AlreadyInstalled.to_string(),
+            "Package already installed"
+        );
+        assert_eq!(
+            InstallError::NotInstalled.to_string(),
+            "Package not installed"
+        );
+        assert_eq!(InstallError::NotFound.to_string(), "Package not found");
+        assert_eq!(
+            InstallError::DownloadFailed.to_string(),
+            "Package download failed"
+        );
+        assert_eq!(InstallError::HttpError(404).to_string(), "HTTP error: 404");
+    }
+
+    #[test]
+    fn test_install_error_from_repo_error() {
+        use crate::pkg::repo::RepoError;
+
+        assert_eq!(
+            InstallError::from(RepoError::NotFound),
+            InstallError::NotFound
+        );
+        assert_eq!(
+            InstallError::from(RepoError::NetworkError),
+            InstallError::IoError
+        );
+        assert_eq!(
+            InstallError::from(RepoError::ParseError),
+            InstallError::InvalidPackage
+        );
+        assert_eq!(
+            InstallError::from(RepoError::SignatureError),
+            InstallError::ChecksumMismatch
+        );
+        assert_eq!(
+            InstallError::from(RepoError::IoError),
+            InstallError::IoError
+        );
+        assert_eq!(
+            InstallError::from(RepoError::HttpError(500)),
+            InstallError::HttpError(0)
+        );
+        assert_eq!(
+            InstallError::from(RepoError::NotImplemented),
+            InstallError::NotImplemented
+        );
+    }
+
+    #[test]
+    fn test_db_entry_creation() {
+        let checksum = [0u8; 32];
+        let meta = PackageMetadata::new(
+            "test-pkg".to_string(),
+            "1.0.0".to_string(),
+            PackageArch::Aarch64,
+            "Test package".to_string(),
+            vec![],
+            1024,
+            checksum,
+            "https://example.com/pkg.lobpkg".to_string(),
+        );
+
+        let pkg = Package {
+            metadata: meta.clone(),
+            files: vec![],
+            file_data: vec![],
+        };
+
+        let installed = InstalledPackage::from_package(pkg, 1234567890);
+        let entry = DbEntry {
+            package: installed,
+            explicit: true,
+        };
+
+        assert!(entry.explicit);
+        assert_eq!(entry.package.metadata.name, "test-pkg");
+    }
+
+    #[test]
+    fn test_package_database_new() {
+        let db = PackageDatabase::new();
+        assert_eq!(db.list_installed().len(), 0);
+    }
+
+    #[test]
+    fn test_package_database_is_installed() {
+        let mut db = PackageDatabase::new();
+        assert!(!db.is_installed("test-pkg"));
+
+        let checksum = [0u8; 32];
+        let meta = PackageMetadata::new(
+            "test-pkg".to_string(),
+            "1.0.0".to_string(),
+            PackageArch::Aarch64,
+            "Test package".to_string(),
+            vec![],
+            1024,
+            checksum,
+            "https://example.com/pkg.lobpkg".to_string(),
+        );
+
+        let pkg = Package {
+            metadata: meta,
+            files: vec![],
+            file_data: vec![],
+        };
+
+        let installed = InstalledPackage::from_package(pkg, 1234567890);
+        db.add(installed, true);
+
+        assert!(db.is_installed("test-pkg"));
+    }
+
+    #[test]
+    fn test_package_database_get_installed() {
+        let mut db = PackageDatabase::new();
+        let checksum = [0u8; 32];
+        let meta = PackageMetadata::new(
+            "test-pkg".to_string(),
+            "1.0.0".to_string(),
+            PackageArch::Aarch64,
+            "Test package".to_string(),
+            vec![],
+            1024,
+            checksum,
+            "https://example.com/pkg.lobpkg".to_string(),
+        );
+
+        let pkg = Package {
+            metadata: meta,
+            files: vec![],
+            file_data: vec![],
+        };
+
+        let installed = InstalledPackage::from_package(pkg, 1234567890);
+        db.add(installed, true);
+
+        let retrieved = db.get_installed("test-pkg").unwrap();
+        assert_eq!(retrieved.metadata.name, "test-pkg");
+        assert_eq!(retrieved.metadata.version, "1.0.0");
+    }
+
+    #[test]
+    fn test_package_database_get_installed_nonexistent() {
+        let db = PackageDatabase::new();
+        let result = db.get_installed("nonexistent");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_package_database_list_installed() {
+        let mut db = PackageDatabase::new();
+        let checksum = [0u8; 32];
+
+        for i in 0..3 {
+            let meta = PackageMetadata::new(
+                format!("pkg-{}", i),
+                "1.0.0".to_string(),
+                PackageArch::Aarch64,
+                "Test package".to_string(),
+                vec![],
+                1024,
+                checksum,
+                format!("https://example.com/pkg-{}.lobpkg", i),
+            );
+
+            let pkg = Package {
+                metadata: meta,
+                files: vec![],
+                file_data: vec![],
+            };
+
+            let installed = InstalledPackage::from_package(pkg, 1234567890 + i as u64);
+            db.add(installed, true);
+        }
+
+        let list = db.list_installed();
+        assert_eq!(list.len(), 3);
+    }
+
+    #[test]
+    fn test_package_database_add_remove() {
+        let mut db = PackageDatabase::new();
+        let checksum = [0u8; 32];
+        let meta = PackageMetadata::new(
+            "test-pkg".to_string(),
+            "1.0.0".to_string(),
+            PackageArch::Aarch64,
+            "Test package".to_string(),
+            vec![],
+            1024,
+            checksum,
+            "https://example.com/pkg.lobpkg".to_string(),
+        );
+
+        let pkg = Package {
+            metadata: meta,
+            files: vec![],
+            file_data: vec![],
+        };
+
+        let installed = InstalledPackage::from_package(pkg, 1234567890);
+        db.add(installed.clone(), true);
+
+        assert!(db.is_installed("test-pkg"));
+
+        let removed = db.remove("test-pkg").unwrap();
+        assert_eq!(removed.metadata.name, "test-pkg");
+        assert!(!db.is_installed("test-pkg"));
+
+        // Removing again returns None
+        let removed = db.remove("test-pkg");
+        assert!(removed.is_none());
+    }
+
+    #[test]
+    fn test_package_database_is_explicit() {
+        let mut db = PackageDatabase::new();
+        let checksum = [0u8; 32];
+        let meta = PackageMetadata::new(
+            "test-pkg".to_string(),
+            "1.0.0".to_string(),
+            PackageArch::Aarch64,
+            "Test package".to_string(),
+            vec![],
+            1024,
+            checksum,
+            "https://example.com/pkg.lobpkg".to_string(),
+        );
+
+        let pkg = Package {
+            metadata: meta,
+            files: vec![],
+            file_data: vec![],
+        };
+
+        let installed = InstalledPackage::from_package(pkg, 1234567890);
+        db.add(installed, true);
+
+        assert!(db.is_explicit("test-pkg"));
+
+        // Add a dependency (explicit = false)
+        let dep_meta = PackageMetadata::new(
+            "dep-pkg".to_string(),
+            "1.0.0".to_string(),
+            PackageArch::Aarch64,
+            "Dependency".to_string(),
+            vec![],
+            512,
+            checksum,
+            "https://example.com/dep.lobpkg".to_string(),
+        );
+
+        let dep_pkg = Package {
+            metadata: dep_meta,
+            files: vec![],
+            file_data: vec![],
+        };
+
+        let dep_installed = InstalledPackage::from_package(dep_pkg, 1234567891);
+        db.add(dep_installed, false);
+
+        assert!(!db.is_explicit("dep-pkg"));
+    }
+
+    #[test]
+    fn test_topological_sort_simple() {
+        let packages = vec![
+            (
+                "repo".to_string(),
+                RepoPackage {
+                    name: "pkg-a".to_string(),
+                    version: "1.0".to_string(),
+                    arch: PackageArch::Aarch64,
+                    description: "Package A".to_string(),
+                    dependencies: vec![],
+                    size: 100,
+                    checksum: [0; 32],
+                    download_url: "https://example.com/a.lobpkg".to_string(),
+                },
+            ),
+            (
+                "repo".to_string(),
+                RepoPackage {
+                    name: "pkg-b".to_string(),
+                    version: "1.0".to_string(),
+                    arch: PackageArch::Aarch64,
+                    description: "Package B".to_string(),
+                    dependencies: vec!["pkg-a".to_string()],
+                    size: 100,
+                    checksum: [0; 32],
+                    download_url: "https://example.com/b.lobpkg".to_string(),
+                },
+            ),
+        ];
+
+        let sorted = topological_sort(&packages).unwrap();
+        assert_eq!(sorted.len(), 2);
+        // pkg-a should come before pkg-b (dependency first)
+        assert_eq!(sorted[0].1.name, "pkg-a");
+        assert_eq!(sorted[1].1.name, "pkg-b");
+    }
+
+    #[test]
+    fn test_topological_sort_independent() {
+        let packages = vec![
+            (
+                "repo".to_string(),
+                RepoPackage {
+                    name: "pkg-a".to_string(),
+                    version: "1.0".to_string(),
+                    arch: PackageArch::Aarch64,
+                    description: "Package A".to_string(),
+                    dependencies: vec![],
+                    size: 100,
+                    checksum: [0; 32],
+                    download_url: "https://example.com/a.lobpkg".to_string(),
+                },
+            ),
+            (
+                "repo".to_string(),
+                RepoPackage {
+                    name: "pkg-b".to_string(),
+                    version: "1.0".to_string(),
+                    arch: PackageArch::Aarch64,
+                    description: "Package B".to_string(),
+                    dependencies: vec![],
+                    size: 100,
+                    checksum: [0; 32],
+                    download_url: "https://example.com/b.lobpkg".to_string(),
+                },
+            ),
+        ];
+
+        let sorted = topological_sort(&packages).unwrap();
+        assert_eq!(sorted.len(), 2);
+        // Order of independent packages doesn't matter
+    }
+
+    #[test]
+    fn test_topological_sort_cycle_detection() {
+        let packages = vec![
+            (
+                "repo".to_string(),
+                RepoPackage {
+                    name: "pkg-a".to_string(),
+                    version: "1.0".to_string(),
+                    arch: PackageArch::Aarch64,
+                    description: "Package A".to_string(),
+                    dependencies: vec!["pkg-b".to_string()],
+                    size: 100,
+                    checksum: [0; 32],
+                    download_url: "https://example.com/a.lobpkg".to_string(),
+                },
+            ),
+            (
+                "repo".to_string(),
+                RepoPackage {
+                    name: "pkg-b".to_string(),
+                    version: "1.0".to_string(),
+                    arch: PackageArch::Aarch64,
+                    description: "Package B".to_string(),
+                    dependencies: vec!["pkg-a".to_string()],
+                    size: 100,
+                    checksum: [0; 32],
+                    download_url: "https://example.com/b.lobpkg".to_string(),
+                },
+            ),
+        ];
+
+        let result = topological_sort(&packages);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), InstallError::ConflictDetected);
+    }
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(INSTALL_PREFIX, "/usr");
+        assert_eq!(BIN_DIR, "/usr/bin");
+        assert_eq!(LIB_DIR, "/usr/lib");
+        assert_eq!(ETC_DIR, "/etc");
+        assert_eq!(SHARE_DIR, "/usr/share");
+        assert_eq!(PKG_DB_PATH, "/var/lib/pkg/installed.db");
+    }
+}
