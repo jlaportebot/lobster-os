@@ -673,7 +673,7 @@ fn start_service_recursive(idx: usize, depth: usize, visiting: &mut [bool; MAX_S
         if is_builtin_service(cfg.name_str()) {
             inst.pid = 0; // kernel thread, no userspace PID
             inst.state = ServiceState::Running;
-            let install_time = crate::arch::ArchTimer::uptime_ms();
+            let _install_time = crate::arch::ArchTimer::uptime_ms();
             inst.restart_count = 0;
             inst.next_restart_ms = 0;
             println!(

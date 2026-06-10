@@ -21,7 +21,9 @@ pub mod x86_64 {
 // Common interrupt controller interface
 #[cfg(target_arch = "aarch64")]
 pub mod interrupt {
+    #[allow(unused_imports)]
     pub use crate::arch::gic::Gic;
+    #[allow(unused_imports)]
     pub use crate::arch::gic::Gic as InterruptController;
     // IPI functions from GIC
     pub fn send_ipi(targets: u32, vector: u32, _delivery_mode: u8) {
@@ -79,12 +81,16 @@ pub mod timer_iface {
 
 // Re-exports for current target
 #[cfg(target_arch = "aarch64")]
+#[allow(unused_imports)]
 pub use self::cpu::*;
 #[cfg(target_arch = "aarch64")]
+#[allow(unused_imports)]
 pub use self::exception::*;
 #[cfg(target_arch = "aarch64")]
+#[allow(unused_imports)]
 pub use self::gic::*;
 #[cfg(target_arch = "aarch64")]
+#[allow(unused_imports)]
 pub use self::timer::*;
 
 #[cfg(target_arch = "x86_64")]
@@ -98,6 +104,7 @@ pub use self::x86_64::exception::*;
 
 // SMP uses interrupt controller
 #[cfg(target_arch = "aarch64")]
+#[allow(unused_imports)]
 pub use self::gic::Gic as SmpInterruptController;
 #[cfg(target_arch = "x86_64")]
 pub use self::interrupt::InterruptController as SmpInterruptController;

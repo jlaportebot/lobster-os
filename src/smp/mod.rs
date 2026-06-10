@@ -13,9 +13,7 @@
 use crate::arch::cpu;
 #[cfg(target_arch = "aarch64")]
 use crate::arch::gic;
-use crate::arch::interrupt::{
-    interrupt_init as init, send_ipi, IPI_CALL_FUNCTION, IPI_RESCHEDULE, IPI_STOP, IPI_WAKE,
-};
+use crate::arch::interrupt::{IPI_CALL_FUNCTION, IPI_RESCHEDULE, IPI_STOP, IPI_WAKE};
 use crate::println;
 use crate::sched::{self, Pid};
 
@@ -28,7 +26,6 @@ pub const CORE_COUNT: usize = 4;
 
 /// SGI/Vector numbers used for IPI — re-exported from arch::interrupt
 /// These are architecture-specific (GIC SGI 0-3 for ARM64, LAPIC vectors 0xE0-0xE3 for x86_64)
-
 /// Per-core state
 #[repr(C)]
 pub struct CoreLocal {
