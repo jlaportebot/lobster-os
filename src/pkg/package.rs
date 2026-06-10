@@ -334,6 +334,7 @@ impl RepositoryIndex {
 mod tests {
     use super::*;
     use alloc::string::ToString;
+    use alloc::{format, vec};
 
     #[test]
     fn test_package_arch_from_str() {
@@ -378,7 +379,7 @@ mod tests {
 
     #[test]
     fn test_installed_package_to_from_db_string() {
-        let checksum = [0u8; 32];
+        let mut checksum = [0u8; 32];
         checksum[0] = 0xde;
         checksum[1] = 0xad;
         checksum[2] = 0xbe;

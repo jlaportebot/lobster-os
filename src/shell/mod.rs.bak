@@ -1,0 +1,578 @@
+use crate::drivers::serial_input;
+use crate::drivers::uart::Uart10;
+use alloc::vec::Vec;
+
+/// Shell prompt string
+const PROMPT: &str = "lobster> ";
+
+/// Maximum command line length
+const MAX_CMD_LEN: usize = 512;
+
+/// Maximum number of arguments per command
+const MAX_ARGS: usize = 32;
+
+/// Maximum environment variables
+const MAX_ENV: usize = 32;
+
+/// Maximum name/value length for env vars
+const MAX_ENV_NAME: usize = 16;
+const MAX_ENV_VALUE: usize = 64;
+
+/// Maximum command history entries
+const MAX_HISTORY: usize = 64;
+
+// Command handler result
+enum CmdResult {
+    Ok,
+    Exit,   // Shell should exit
+    Reboot, // System reboot requested
+}
+
+// Environment variable store
+struct EnvVar {
+    name: [u8; MAX_ENV_NAME],
+    name_len: usize,
+    value: [u8; MAX_ENV_VALUE],
+    value_len: usize,
+    exported: bool,
+}
+
+impl EnvVar {
+    const fn new() -> Self {
+        Self {
+            name: [0; MAX_ENV_NAME],
+            name_len: 0,
+            value: [0; MAX_ENV_VALUE],
+            value_len: 0,
+            exported: false,
+        }
+    }
+
+    fn set_name(&mut self, s: &str) {
+        self.name_len = s.len().min(MAX_ENV_NAME);
+        self.name[..self.name_len].copy_from_slice(&s.as_bytes()[..self.name_len]);
+    }
+
+    fn set_value(&mut self, s: &str) {
+        self.value_len = s.len().min(MAX_ENV_VALUE);
+        self.value[..self.value_len].copy_from_slice(&s.as_bytes()[..self.value_len]);
+    }
+
+    fn name_str(&self) -> &str {
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("")
+    }
+
+    fn value_str(&self) -> &str {
+        core::str::0; "no desc"
+    }
+}
+
+// String buffer helper
+struct StringBuf<const N: usize> {
+    buf: [u8; N],
+    len: usize,
+}
+
+impl<const N: usize> StringBuf<N> {
+    const fn new() -> Self {
+        Self {
+            buf: [0; N],
+            len: 0,
+        }
+    }
+
+    fn set(&mut self, s: &str) {
+        self.len = s.len().min(N);
+        self.buf[..self.len].copy_from_slice(&s.as_bytes()[..self.len]);
+    }
+
+    fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
+    }
+}
+
+impl<const N: usize> Clone for StringBuf<N> {
+    fn clone(&self) -> Self {
+        Self {
+            buf: self.buf,
+            len: self.len,
+        }
+    }
+}
+
+// Integer-to-string helpers (no_std, no alloc)
+fn u64_to_str(mut v: u64) -> alloc::string::String {
+    if v == 0 {
+        return alloc::string::0;
+    }
+    let mut buf = [0u8; 20];
+    let mut pos = 20;
+    while v > 0 {
+        pos -= 1;
+        buf[pos] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    pos -= 1;
+    buf[pos] = b'-';
+    alloc::string::String::from(core::str::from_utf8(&buf[pos..]).unwrap_or("0"))
+}
+
+fn i32_to_str(mut v: i32) -> alloc::string::String {
+    if v == 0 {
+        return alloc::string::0;
+    }
+    let neg = v < 0;
+    if neg {
+        v = -v;
+    }
+    let mut buf = [0u8; 12];
+    let mut pos = 12;
+    while v > 0 {
+        pos -= 1;
+        buf[pos] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    if neg {
+        pos -= 1;
+        buf[pos] = b'-';
+    }
+    alloc::string::String::from(core::str::from_utf8(&buf[pos..]).unwrap_or("0"))
+}
+
+/// Process info returned by the scheduler for `ps`
+pub struct ProcInfo {
+    pub pid: u64,
+    pub state: u8,
+    pub priority: u8,
+    pub name: &'static str,
+}
+
+/// Initialize and run the shell (never returns)
+/// If `pty_slave_fd` is Some, use it for I/O instead of UART
+pub fn run() -> ! {
+    run_with_pty(None);
+}
+
+/// Run shell with PTY slave fd for I/O
+pub fn run_with_pty(pty_slave_fd: Option<usize>) -> ! {
+    // Enable serial input with UART RX interrupts
+    unsafe {
+        serial_input::init();
+    }
+
+    // Print welcome banner
+    print_banner();
+
+    // Main shell loop
+    loop {
+        // Print prompt
+        print_prompt(pty_slave_fd);
+
+        // Wait for a complete line
+        loop {
+            // Check if a line is available
+            let mut line_buf = [0u8; MAX_CMD_LEN];
+            let len = if let Some(fd) = pty_slave_fd {
+                // Read from PTY slave
+                read_line_from_pty(fd, &mut line_buf)
+            } else {
+                // Read from UART
+                serial_input::read_line(&mut line_buf)
+            };
+
+            if len > 0 {
+                // Convert to str
+                let cmd_str = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                
+                // Execute the command
+                let result = execute_command(cmd_str.trim());
+                
+                match result {
+                    CmdResult::Exit => {
+                        print_line(pty_slave_fd, "Shell exiting.\r\n");
+                        break;
+                    }
+                    CmdResult::Reboot => {
+                        print_line(pty_slave_fd, "Rebooting...\r\n");
+                        crate::drivers::power::reset();
+                    }
+                    CmdResult::Ok => {}
+                }
+                break;
+            }
+
+            // No line yet — yield CPU or WFE
+            crate::arch::cpu::wfe();
+        }
+    }
+}
+
+/// Print prompt to the appropriate output
+fn print_prompt(pty_slave_fd: Option<usize>) {
+    if let Some(fd) = pty_slave_fd {
+        print_to_pty(fd, PROMPT);
+    } else {
+        Uart10::puts(PROMPT);
+    }
+}
+
+/// Print a line to the appropriate output
+fn print_line(pty_slave_fd: Option<usize>, line: &str) {
+    if let Some(fd) = pty_slave_fd {
+        print_to_pty(fd, line);
+    } else {
+        Uart10::puts(line);
+    }
+}
+
+/// Print to PTY slave fd
+fn print_to_pty(fd: usize, text: &str) {
+    use crate::ipc::pty_slave_write;
+    let bytes = text.as_bytes();
+    let mut written = 0;
+    while written < bytes.len() {
+        let n = pty_slave_write(fd, &bytes[written..]);
+        if n == 0 {
+            break;
+        }
+        written += n;
+    }
+}
+
+/// Print a line to the appropriate output
+fn print_line(pty_slave_fd: Option<usize>, line: &str) {
+    if let Some(fd) = pty_slave_fd {
+        print_to_pty(fd, line);
+    } else {
+        Uart10::puts(line);
+    }
+}
+
+/// Print the welcome banner
+fn print_banner() {
+    Uart10::puts("\r\n");
+    Uart10::puts("  +======================================+\r\n");
+    Uart10::puts("  |       Lobster OS v0.5.0              |\r\n");
+    Uart10::puts("  |   AArch64 Bare-Metal Operating System |\r\n");
+    Uart10::puts("  |        Raspberry Pi 5 / BCM2712       |\r\n");
+    Uart10::puts("  +======================================+\r\n");
+    Uart10::puts("\r\n");
+    Uart10::puts("Type 'help' for a list of commands.\r\n\r\n");
+}
+
+/// Parse and execute a command string (advanced: pipes, redirects, env vars)
+fn execute_command(line: &str) -> CmdResult {
+    if line.is_empty() {
+        return CmdResult::Ok;
+    }
+
+    // 1. Expand environment variables ($VAR, ${VAR}, $?, $$)
+    let mut expanded = [0u8; MAX_CMD_LEN];
+    let expanded_len = expand_vars(line, &mut expanded);
+    let expanded_str = core::str::from_utf8(&expanded[..expanded_len]).unwrap_or("");
+
+    // 2. Check for trailing & (background)
+    let (cmd_line, background) = {
+        let trimmed = expanded_str.trim_end();
+        if trimmed.ends_with('&') {
+            (trimmed[..trimmed.len() - 1].trim_end(), true)
+        } else {
+            (trimmed, false)
+        }
+    };
+
+    // 3. Split into pipeline stages on |
+    let mut stages: [&str; MAX_PIPELINE] = [""; MAX_PIPELINE];
+    let mut stage_count = 0;
+    for part in cmd_line.split('|') {
+        if stage_count >= MAX_PIPELINE {
+            break;
+        }
+        stages[stage_count] = part.trim();
+        stage_count += 1;
+    }
+
+    // 4. For each pipeline stage, parse redirections and args
+    //    (we execute builtins sequentially; pipe data is buffered via IPC pipes)
+    let mut pipe_read_fd: i32 = -1; // Input from previous stage
+
+    for stage_idx in 0..stage_count {
+        let stage_str = stages[stage_idx];
+        if stage_str.is_empty() {
+            continue;
+        }
+
+        // Parse redirections from the stage string
+        let mut stdout_redir = Redirect::None;
+        let mut stdin_redir = Redirect::None;
+        let mut clean_parts: alloc::vec::Vec<&str> = alloc::vec::Vec::new();
+        let tokens: alloc::vec::Vec<&str> = stage_str.split_whitespace().collect();
+        let mut i = 0;
+
+        while i < tokens.len() {
+            let tok = tokens[i];
+            if tok == ">" && i + 1 < tokens.len() {
+                let mut sb = StringBuf::<MAX_REDIRECT_PATH>::new();
+                sb.set(tokens[i + 1]);
+                stdout_redir = Redirect::Write(sb);
+                i += 2;
+            } else if tok == ">>" && i + 1 < tokens.len() {
+                let mut sb = StringBuf::<MAX_REDIRECT_PATH>::new();
+                sb.set(tokens[i + 1]);
+                stdout_redir = Redirect::Append(sb);
+                i += 2;
+            } else if tok == "<" && i + 1 < tokens.len() {
+                let mut sb = StringBuf::<MAX_REDIRECT_PATH>::new();
+                sb.set(tokens[i + 1]);
+                stdin_redir = Redirect::Read(sb);
+                i += 2;
+            } else {
+                clean_parts.push(tok);
+                i += 1;
+            }
+        }
+
+        // Build args array
+        let mut args: [&str; MAX_ARGS] = [""; MAX_ARGS];
+        let mut argc = 0;
+        for part in &clean_parts {
+            if argc >= MAX_ARGS {
+                break;
+            }
+            args[argc] = *part;
+            argc += 1;
+        }
+
+        if argc == 0 {
+            continue;
+        }
+
+        let cmd = args[0];
+
+        // If this is the last stage and no pipes, run directly
+        // If piped, create an IPC pipe between stages
+        let mut next_pipe_fds: (i32, i32) = (-1, -1);
+        if !is_last_stage {
+            if let Some((r, w)) = crate::ipc::create_pipe() {
+                next_pipe_fds = (r as i32, w as i32);
+            } else {
+                Uart10::puts("shell: pipe creation failed\r\n");
+                break;
+            }
+        }
+
+        // Execute the command (builtins only for now in kernel shell)
+        let exit_code = run_builtin(
+            cmd,
+            args,
+            argc,
+            pipe_read_fd,
+            &stdout_redir,
+            &stdin_redir,
+            if !is_last_stage {
+                Some(next_pipe_fds.1)
+            } else {
+                None
+            },
+        );
+
+        unsafe {
+            LAST_EXIT_CODE = exit_code;
+        }
+
+        // Close previous pipe read fd if any
+        if pipe_read_fd >= 0 {
+            let pid = crate::sched::current_pid();
+            if let Some(idx) = crate::sched::find_task_index(pid) {
+                crate::ipc::fd_close(idx, pipe_read_fd as usize);
+            }
+        }
+
+        // Close write end of current pipe
+        if next_pipe_fds.1 >= 0 {
+            let pid = crate::sched::current_pid();
+            if let Some(idx) = crate::sched::find_task_index(pid) {
+                crate::ipc::fd_close(idx, next_pipe_fds.1 as usize);
+            }
+        }
+
+        // Next stage reads from the read end
+        pipe_read_fd = next_pipe_fds.0;
+
+        // Handle background flag (just log it for now)
+        if background && stage_idx == 0 {
+            Uart10::puts("[background] ");
+            Uart10::puts(cmd);
+            Uart10::puts("\r\n");
+        }
+    }
+    CmdResult::Ok
+}
+
+/// Run a builtin command, returning an exit code (0 = success, 1 = failure)
+fn run_builtin(
+    cmd: &str,
+    args: [&str; MAX_ARGS],
+    argc: usize,
+    pipe_in: i32,
+    stdout_redir: &Redirect,
+    stdin_redir: &Redirect,
+    pipe_out: Option<i32>,
+) -> i32 {
+    match cmd {
+        "help" | "?" => {
+            cmd_help();
+            0
+        }
+        "clear" => {
+            cmd_clear();
+            0
+        }
+        "uptime" => {
+            cmd_uptime();
+            0
+        }
+        "mem" | "memory" => {
+            cmd_mem();
+            0
+        }
+        "ps" | "procs" => {
+            cmd_ps();
+            0
+        }
+        "kill" => cmd_kill(args, argc),
+        "echo" => cmd_echo(args, argc),
+        "reboot" => {
+            cmd_reboot();
+            0
+        }
+        "halt" | "shutdown" => {
+            cmd_halt();
+            0
+        }
+        "version" | "ver" => {
+            cmd_version();
+            0
+        }
+        "cpu" => {
+            cmd_cpu();
+            0
+        }
+        "timer" => {
+            cmd_timer();
+            0
+        }
+        "panic" => {
+            cmd_panic();
+            0
+        }
+        "yield" => {
+            cmd_yield();
+            0
+        }
+        "test" => {
+            cmd_test(args, argc);
+            0
+        }
+        "hexdump" => {
+            cmd_hexdump(args, argc);
+            0
+        }
+        "gpio" => {
+            cmd_gpio(args, argc);
+            0
+        }
+        #[cfg(not(feature = "qemu"))]
+        "ifconfig" => {
+            cmd_ifconfig();
+            0
+        }
+        #[cfg(not(feature = "qemu"))]
+        "ping" => {
+            cmd_ping(args, argc);
+            0
+        }
+        #[cfg(not(feature = "qemu"))]
+        "arp" => {
+            cmd_arp(args, argc);
+            0
+        }
+        #[cfg(not(feature = "qemu"))]
+        "dhcp" => {
+            cmd_dhcp(args, argc);
+            0
+        }
+        #[cfg(not(feature = "qemu"))]
+        "dns" => {
+            cmd_dns(args, argc);
+            0
+        }
+        #[cfg(not(feature = "qemu"))]
+        "net" => {
+            cmd_net(args, argc);
+            0
+        }
+        #[cfg(not(feature = "qemu"))]
+        "wm" => {
+            cmd_wm(args, argc);
+            0
+        }
+        #[cfg(not(feature = "qemu"))]
+        "audio" => {
+            cmd_audio(args, argc);
+            0
+        }
+        #[cfg(not(feature = "qemu"))]
+        "gpu" => {
+            cmd_gpu(args, argc);
+            0
+        }
+        "pkg" => {
+            cmd_pkg(args, argc);
+            0
+        }
+        // Panel command
+        #[cfg(not(feature = "qemu"))]
+        "panel" => {
+            cmd_panel(args, argc);
+            0
+        }
+        // User management commands
+        "login" => cmd_login(args, argc),
+        "su" => cmd_su(args, argc),
+        "sudo" => cmd_sudo(args, argc),
+        "passwd" => cmd_passwd(args, argc),
+        "useradd" => cmd_useradd(args, argc),
+        "userdel" => cmd_userdel(args, argc),
+        "groupadd" => cmd_groupadd(args, argc),
+        "groupdel" => cmd_groupdel(args, argc),
+        "id" => cmd_id(args, argc),
+        "whoami" => cmd_whoami(args, argc),
+        // Environment variable commands
+        "set" | "export" => cmd_env_set(args, argc),
+        "unset" => cmd_env_unset(args, argc),
+        "env" | "printenv" => cmd_env_list(),
+        "history" | "hist" => cmd_history(),
+        // File system commands
+        "cat" => cmd_cat(args, argc),
+        "ls" => cmd_ls(args, argc),
+        "cd" => cmd_cd(args, argc),
+        "pwd" => cmd_pwd(),
+        "mkdir" => cmd_mkdir(args, argc),
+        "rm" => cmd_rm(args, argc),
+        "mv" => cmd_mv(args, argc),
+        "chmod" => cmd_chmod(args, argc),
+        "chown" => cmd_chown(args, argc),
+        // User process execution
+        "run" => cmd_run(args, argc),
+        // Service management commands
+        "svc" => cmd_svc(args, argc),
+        "runlevel" => cmd_runlevel(args, argc),
+        _ => {
+            Uart10::puts("Unknown command: ");
+            Uart10::puts(cmd);
+            Uart10::puts("\r\nType 'help' for available commands.\r\n");
+            1
+        }
+    }
+}
