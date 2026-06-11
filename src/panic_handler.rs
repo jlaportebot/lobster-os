@@ -26,5 +26,11 @@ fn panic(info: &PanicInfo) -> ! {
     }
 }
 
-// When std feature is enabled (for host tests), we don't define a panic handler
-// and use std's default panic handler instead.
+/// Panic handler for std feature (host testing)
+#[cfg(feature = "std")]
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    use std::process;
+    eprintln!("PANIC: {:?}", info);
+    process::abort()
+}

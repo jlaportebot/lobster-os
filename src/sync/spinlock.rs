@@ -3,6 +3,8 @@
 use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "std")]
+use std::sync::Mutex as StdMutex;
 
 /// Raw spinlock implementation (no data protection)
 pub struct SpinlockRaw {
@@ -105,15 +107,19 @@ fn disable_irqs_save() -> bool {
 
 /// A generic spinlock wrapper that protects arbitrary data
 /// This is const-compatible for static initialization and replaces `static mut`
+#[cfg(not(feature = "std"))]
 pub struct Spinlock<T> {
     lock: SpinlockRaw,
     data: UnsafeCell<T>,
 }
 
 // Safe to send since we only access data through the lock
+#[cfg(not(feature = "std"))]
 unsafe impl<T: Send> Send for Spinlock<T> {}
+#[cfg(not(feature = "std"))]
 unsafe impl<T: Send> Sync for Spinlock<T> {}
 
+#[cfg(not(feature = "std"))]
 impl<T> Spinlock<T> {
     pub const fn new(value: T) -> Self {
         Self {
@@ -130,16 +136,19 @@ impl<T> Spinlock<T> {
 }
 
 /// RAII guard for Spinlock that provides mutable access to the inner data
+#[cfg(not(feature = "std"))]
 pub struct SpinlockGuard<'a, T> {
     data: &'a Spinlock<T>,
 }
 
+#[cfg(not(feature = "std"))]
 impl<'a, T> Drop for SpinlockGuard<'a, T> {
     fn drop(&mut self) {
         self.data.lock.unlock();
     }
 }
 
+#[cfg(not(feature = "std"))]
 impl<'a, T> Deref for SpinlockGuard<'a, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
@@ -147,8 +156,51 @@ impl<'a, T> Deref for SpinlockGuard<'a, T> {
     }
 }
 
+#[cfg(not(feature = "std"))]
 impl<'a, T> DerefMut for SpinlockGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *self.data.data.get() }
+    }
+}
+
+/// Std-enabled spinlock using std::sync::Mutex for host testing
+#[cfg(feature = "std")]
+pub struct Spinlock<T> {
+    lock: StdMutex<T>,
+}
+
+#[cfg(feature = "std")]
+impl<T> Spinlock<T> {
+    pub const fn new(value: T) -> Self {
+        Self {
+            lock: StdMutex::new(value),
+        }
+    }
+
+    pub fn lock(&self) -> SpinlockGuard<'_, T> {
+        SpinlockGuard {
+            guard: self.lock.lock().unwrap(),
+        }
+    }
+}
+
+/// RAII guard for std Spinlock
+#[cfg(feature = "std")]
+pub struct SpinlockGuard<'a, T> {
+    guard: std::sync::MutexGuard<'a, T>,
+}
+
+#[cfg(feature = "std")]
+impl<'a, T> Deref for SpinlockGuard<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.guard
+    }
+}
+
+#[cfg(feature = "std")]
+impl<'a, T> DerefMut for SpinlockGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard
     }
 }

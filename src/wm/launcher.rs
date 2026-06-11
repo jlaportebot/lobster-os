@@ -1,7 +1,8 @@
 //! Application Launcher — reads .desktop files and launches applications
-
+//!
 use crate::fs::vfs::{list_dir, read_file};
 use crate::println;
+use crate::sched::{spawn_from_path, Priority};
 use crate::wm::widget::{WidgetId, WidgetTable};
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
@@ -174,13 +175,26 @@ impl AppLauncher {
             return Err("Empty exec command");
         }
 
-        // For now, just print - actual execution would need shell integration
-        println!("[launcher] Launching: {} ({})", name, cmd);
+        // Extract executable path (first word before space)
+        let exec_path = cmd
+            .split_whitespace()
+            .next()
+            .ok_or("No executable in command")?;
 
-        // TODO: Actually spawn the process
-        // This would require integration with the shell/scheduler
-
-        Ok(())
+        // Spawn the process via scheduler
+        match spawn_from_path(exec_path, Priority::Normal) {
+            Some(pid) => {
+                println!(
+                    "[launcher] Launched {} (PID {}) from {}",
+                    name, pid, exec_path
+                );
+                Ok(())
+            }
+            None => {
+                println!("[launcher] Failed to launch {} from {}", name, exec_path);
+                Err("Failed to spawn process")
+            }
+        }
     }
 }
 
@@ -233,4 +247,97 @@ pub fn build_launcher_panel(
 /// Launch an application from the launcher
 pub fn launch_app(launcher: &AppLauncher, name: &str) -> Result<(), &'static str> {
     launcher.launch(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_desktop_file, AppLauncher, DesktopEntry};
+
+    #[test]
+    fn test_parse_desktop_file_basic() {
+        let content = r#"
+[Desktop Entry]
+Name=Test App
+Exec=/usr/bin/test-app
+Comment=A test application
+Categories=Utility;
+Terminal=false
+"#;
+        let entry = parse_desktop_file(content).unwrap();
+        assert_eq!(entry.name, "Test App");
+        assert_eq!(entry.exec, "/usr/bin/test-app");
+        assert_eq!(entry.comment, "A test application");
+        assert_eq!(entry.categories, vec!["Utility"]);
+        assert!(!entry.terminal);
+        assert!(!entry.hidden);
+        assert!(!entry.no_display);
+    }
+
+    #[test]
+    fn test_parse_desktop_file_with_placeholders() {
+        let content = r#"
+[Desktop Entry]
+Name=File Manager
+Exec=file-manager %f %u
+Icon=folder
+Categories=System;FileManager;
+Terminal=true
+"#;
+        let entry = parse_desktop_file(content).unwrap();
+        assert_eq!(entry.name, "File Manager");
+        assert_eq!(entry.exec, "file-manager %f %u");
+        assert_eq!(entry.icon, "folder");
+        assert!(entry.categories.contains(&"System".to_string()));
+        assert!(entry.categories.contains(&"FileManager".to_string()));
+        assert!(entry.terminal);
+    }
+
+    #[test]
+    fn test_parse_desktop_file_hidden() {
+        let content = r#"
+[Desktop Entry]
+Name=Hidden App
+Exec=hidden-app
+Hidden=true
+"#;
+        let entry = parse_desktop_file(content).unwrap();
+        assert!(entry.hidden);
+    }
+
+    #[test]
+    fn test_parse_desktop_file_no_display() {
+        let content = r#"
+[Desktop Entry]
+Name=No Display App
+Exec=no-display-app
+NoDisplay=true
+"#;
+        let entry = parse_desktop_file(content).unwrap();
+        assert!(entry.no_display);
+    }
+
+    #[test]
+    fn test_parse_desktop_file_invalid_missing_name() {
+        let content = r#"
+[Desktop Entry]
+Exec=app
+"#;
+        assert!(parse_desktop_file(content).is_none());
+    }
+
+    #[test]
+    fn test_parse_desktop_file_invalid_missing_exec() {
+        let content = r#"
+[Desktop Entry]
+Name=App
+"#;
+        assert!(parse_desktop_file(content).is_none());
+    }
+
+    #[test]
+    fn test_app_launcher_new() {
+        let launcher = AppLauncher::new();
+        assert!(launcher.get_all_apps().is_empty());
+        assert!(launcher.get_categories().is_empty());
+    }
 }
