@@ -778,6 +778,252 @@ fn derive_gtk(key_data: &[u8]) -> ([u8; 32], u8) {
     (gtk, gtk_len)
 }
 
+/// ─── EAPOL Frame Construction & Transmission ───────────────────────────
+/// Build EAPOL-Key frame for M2 (STA → AP)
+/// Contains SNonce, MIC, and RSN IE
+fn build_eapol_m2(
+    ptk: &[u8; 64],
+    _anonce: &[u8; 32],
+    snonce: &[u8; 32],
+    _ap_mac: &[u8; 6],
+    _sta_mac: &[u8; 6],
+    replay_counter: u64,
+    pmk_id: Option<&[u8]>,
+) -> alloc::vec::Vec<u8> {
+    let mut frame = alloc::vec::Vec::new();
+
+    // EAPOL header (4 bytes)
+    frame.push(EAPOL_VERSION); // Version
+    frame.push(EAPOL_KEY); // Packet type = Key
+    frame.extend_from_slice(&0u16.to_be_bytes()); // Length placeholder (filled later)
+
+    // EAPOL-Key fixed header (94 bytes)
+    frame.push(EAPOL_KEY_DESC_RSN); // Descriptor type = RSN
+
+    // Key Information (2 bytes, big-endian)
+    // Pairwise | MIC | Secure | Request
+    let key_info: u16 = EAPOL_KEY_TYPE_MASK      // Pairwise
+        | EAPOL_KEY_MIC                          // MIC present
+        | EAPOL_KEY_SECURE                       // Secure
+        | EAPOL_KEY_ACK; // ACK
+    frame.extend_from_slice(&key_info.to_be_bytes());
+
+    // Key Length (2 bytes) - 0 for M2 (no key data in this simplified version)
+    frame.extend_from_slice(&0u16.to_be_bytes());
+
+    // Replay Counter (8 bytes)
+    frame.extend_from_slice(&replay_counter.to_be_bytes());
+
+    // Key Nonce (32 bytes) = SNonce
+    frame.extend_from_slice(snonce);
+
+    // Key IV (16 bytes) - zero for M2
+    frame.extend_from_slice(&[0u8; 16]);
+
+    // Key RSC (8 bytes) - zero
+    frame.extend_from_slice(&[0u8; 8]);
+
+    // Key ID (8 bytes) - zero
+    frame.extend_from_slice(&[0u8; 8]);
+
+    // Key MIC (16 bytes) - placeholder, will be filled after computing
+    let mic_start = frame.len();
+    frame.extend_from_slice(&[0u8; 16]);
+
+    // Key Data Length (2 bytes) - placeholder
+    let key_data_len_start = frame.len();
+    frame.extend_from_slice(&0u16.to_be_bytes());
+
+    // Key Data: RSN IE (for M2)
+    let key_data_start = frame.len();
+    let rsn_ie = build_rsn_ie(pmk_id);
+    frame.extend_from_slice(&rsn_ie);
+
+    // Compute and fill MIC
+    let key_data_len = frame.len() - key_data_start;
+    frame[key_data_len_start..key_data_len_start + 2]
+        .copy_from_slice(&(key_data_len as u16).to_be_bytes());
+
+    // Recompute frame length (EAPOL header length = 4 + 94 + key_data_len)
+    let eapol_len = 94 + key_data_len;
+    frame[2..4].copy_from_slice(&(eapol_len as u16).to_be_bytes());
+
+    // Compute MIC using KCK (first 16 bytes of PTK)
+    let kck = &ptk[0..16];
+    // Build frame for MIC calculation (with zeroed MIC)
+    let mut mic_frame = frame.clone();
+    mic_frame[mic_start..mic_start + 16].copy_from_slice(&[0u8; 16]);
+    let computed_mic = sha1::hmac_sha1(kck, &mic_frame);
+
+    // Fill in the MIC
+    frame[mic_start..mic_start + 16].copy_from_slice(&computed_mic[..16]);
+
+    frame
+}
+
+/// Build EAPOL-Key frame for M4 (STA → AP)
+/// Confirmation frame with MIC, no key data
+fn build_eapol_m4(ptk: &[u8; 64], replay_counter: u64) -> alloc::vec::Vec<u8> {
+    let mut frame = alloc::vec::Vec::new();
+
+    // EAPOL header (4 bytes)
+    frame.push(EAPOL_VERSION);
+    frame.push(EAPOL_KEY);
+    frame.extend_from_slice(&0u16.to_be_bytes()); // Length placeholder
+
+    // EAPOL-Key fixed header (94 bytes)
+    frame.push(EAPOL_KEY_DESC_RSN);
+
+    // Key Information: Group | MIC | Secure (no ACK, no Request)
+    let key_info: u16 = EAPOL_KEY_MIC | EAPOL_KEY_SECURE;
+    frame.extend_from_slice(&key_info.to_be_bytes());
+
+    // Key Length = 0
+    frame.extend_from_slice(&0u16.to_be_bytes());
+
+    // Replay Counter (must match M3's replay counter)
+    frame.extend_from_slice(&replay_counter.to_be_bytes());
+
+    // Key Nonce = 32 zeros (M4 has no nonce)
+    frame.extend_from_slice(&[0u8; 32]);
+
+    // Key IV = 16 zeros
+    frame.extend_from_slice(&[0u8; 16]);
+
+    // Key RSC = 8 zeros
+    frame.extend_from_slice(&[0u8; 8]);
+
+    // Key ID = 8 zeros
+    frame.extend_from_slice(&[0u8; 8]);
+
+    // Key MIC placeholder
+    let mic_start = frame.len();
+    frame.extend_from_slice(&[0u8; 16]);
+
+    // Key Data Length = 0
+    frame.extend_from_slice(&0u16.to_be_bytes());
+
+    // No key data for M4
+    let key_data_len = 0;
+    let eapol_len = 94 + key_data_len;
+    frame[2..4].copy_from_slice(&(eapol_len as u16).to_be_bytes());
+
+    // Compute MIC using KCK
+    let kck = &ptk[0..16];
+    let mut mic_frame = frame.clone();
+    mic_frame[mic_start..mic_start + 16].copy_from_slice(&[0u8; 16]);
+    let computed_mic = sha1::hmac_sha1(kck, &mic_frame);
+
+    // Fill in the MIC
+    frame[mic_start..mic_start + 16].copy_from_slice(&computed_mic[..16]);
+
+    frame
+}
+
+/// Build RSN Information Element for M2
+/// Returns the raw IE bytes (Tag=48, Length, Data)
+fn build_rsn_ie(pmk_id: Option<&[u8]>) -> alloc::vec::Vec<u8> {
+    let mut ie = alloc::vec::Vec::new();
+
+    // RSN IE Tag = 48 (0x30)
+    ie.push(0x30);
+
+    // Length placeholder (filled at end)
+    let len_pos = ie.len();
+    ie.push(0); // placeholder
+
+    // RSN Version = 1
+    ie.extend_from_slice(&1u16.to_le_bytes());
+
+    // Group Cipher Suite: AES (CCMP) = 0x00-0F-AC:4
+    ie.extend_from_slice(&[0x00, 0x0F, 0xAC, 0x04]);
+
+    // Pairwise Cipher Suite Count = 1
+    ie.extend_from_slice(&1u16.to_le_bytes());
+    // Pairwise Cipher Suite: AES (CCMP) = 0x00-0F-AC:4
+    ie.extend_from_slice(&[0x00, 0x0F, 0xAC, 0x04]);
+
+    // AKM Suite Count = 1
+    ie.extend_from_slice(&1u16.to_le_bytes());
+    // AKM Suite: PSK = 0x00-0F-AC:2
+    ie.extend_from_slice(&[0x00, 0x0F, 0xAC, 0x02]);
+
+    // RSN Capabilities = 0 (no pre-auth, no peer-key, etc.)
+    ie.extend_from_slice(&0u16.to_le_bytes());
+
+    // PMKID Count (optional, only if pmk_id provided)
+    if let Some(pmkid) = pmk_id {
+        ie.extend_from_slice(&1u16.to_le_bytes());
+        ie.extend_from_slice(pmkid);
+    } else {
+        ie.extend_from_slice(&0u16.to_le_bytes());
+    }
+
+    // Fill in length
+    let ie_len = ie.len() - len_pos - 1;
+    ie[len_pos] = ie_len as u8;
+
+    ie
+}
+
+/// Transmit an EAPOL frame over the wireless medium
+/// EAPOL frames use EtherType 0x888E
+fn transmit_eapol_frame(frame: &[u8]) -> Result<(), WifiError> {
+    // Build Ethernet frame with EAPOL EtherType
+    // Destination = AP MAC (broadcast for M2/M4 since AP is known)
+    // Source = Our MAC
+    // EtherType = 0x888E (EAPOL)
+    // Payload = EAPOL frame
+
+    let mut eth_frame = alloc::vec::Vec::with_capacity(14 + frame.len() + 4); // 14 bytes MAC + payload + FCS placeholder
+
+    // Destination MAC (AP BSSID)
+    unsafe {
+        eth_frame.extend_from_slice(&WIFI.connected_bssid);
+        // Source MAC (our MAC)
+        eth_frame.extend_from_slice(&WIFI.mac_addr);
+    }
+
+    // EtherType = 0x888E (EAPOL)
+    eth_frame.extend_from_slice(&[0x88, 0x8E]);
+
+    // EAPOL payload
+    eth_frame.extend_from_slice(frame);
+
+    // Transmit via WiFi data path
+    // The firmware handles 802.3 → 802.11 conversion
+    unsafe { wifi_transmit(&eth_frame) }
+}
+
+/// Send EAPOL M2 frame
+unsafe fn send_eapol_m2() -> Result<(), WifiError> {
+    let frame = build_eapol_m2(
+        &WIFI.ptk,
+        &WIFI.anonce,
+        &WIFI.snonce,
+        &WIFI.ap_mac,
+        &WIFI.sta_mac,
+        WIFI.handshake_replay_ctr,
+        None, // No PMKID for initial connection
+    );
+    transmit_eapol_frame(&frame)?;
+    WIFI.handshake_replay_ctr += 1;
+    println!("[wifi] EAPOL M2 transmitted");
+    Ok(())
+}
+
+/// Send EAPOL M4 frame
+unsafe fn send_eapol_m4() -> Result<(), WifiError> {
+    let frame = build_eapol_m4(
+        &WIFI.ptk,
+        WIFI.handshake_replay_ctr, // Must match M3's replay counter
+    );
+    transmit_eapol_frame(&frame)?;
+    WIFI.handshake_replay_ctr += 1;
+    println!("[wifi] EAPOL M4 transmitted");
+    Ok(())
+}
+
 /// Process incoming EAPOL frame from firmware event
 fn process_eapol_frame(data: &[u8]) {
     if let Some((frame, key_data)) = parse_eapol_key_frame(data) {
@@ -792,13 +1038,10 @@ fn process_eapol_frame(data: &[u8]) {
                     // M1: AP → STA, has ANonce, no MIC
                     if !has_mic && is_pairwise {
                         WIFI.anonce.copy_from_slice(&frame.key_nonce);
-                        WIFI.handshake_state = HandshakeState::WaitingM2;
-                        println!("[wifi] EAPOL M1 received, ANonce captured");
-                    }
-                }
-                HandshakeState::WaitingM2 => {
-                    // M2: STA → AP, has SNonce, MIC
-                    if has_mic && is_pairwise {
+                        // Capture AP MAC from frame (sender address would be in Ethernet header)
+                        // For now, use the BSSID we connected to
+                        WIFI.ap_mac = WIFI.connected_bssid;
+                        // Generate SNonce
                         let mut snonce = [0u8; 32];
                         let timer_bytes = crate::arch::timer::Timer::uptime_ms().to_le_bytes();
                         snonce[..8].copy_from_slice(&timer_bytes);
@@ -812,18 +1055,13 @@ fn process_eapol_frame(data: &[u8]) {
                             &WIFI.ap_mac,
                             &WIFI.sta_mac,
                         );
-                        // Verify MIC
-                        if verify_eapol_key_mic(
-                            &WIFI.ptk[..16].try_into().unwrap(),
-                            &frame,
-                            key_data,
-                        ) {
-                            WIFI.mic_verified = true;
-                            WIFI.handshake_state = HandshakeState::WaitingM3;
-                            println!("[wifi] EAPOL M2 sent, PTK derived, MIC verified");
-                        } else {
+                        // Send M2
+                        if let Err(e) = send_eapol_m2() {
+                            println!("[wifi] EAPOL M2 send failed: {:?}", e);
                             WIFI.handshake_state = HandshakeState::Failed;
-                            println!("[wifi] EAPOL M2 MIC verification FAILED");
+                        } else {
+                            WIFI.handshake_state = HandshakeState::WaitingM3;
+                            println!("[wifi] EAPOL M1 received, M2 sent, waiting for M3");
                         }
                     }
                 }
@@ -840,28 +1078,23 @@ fn process_eapol_frame(data: &[u8]) {
                             let (gtk, len) = derive_gtk(key_data);
                             WIFI.gtk = gtk;
                             WIFI.gtk_len = len;
-                            WIFI.handshake_state = HandshakeState::WaitingM4;
-                            println!("[wifi] EAPOL M3 received, GTK extracted");
+                            // Capture replay counter from M3 for M4
+                            WIFI.handshake_replay_ctr = u64::from_be_bytes(frame.replay_counter);
+                            // Send M4
+                            if let Err(e) = send_eapol_m4() {
+                                println!("[wifi] EAPOL M4 send failed: {:?}", e);
+                                WIFI.handshake_state = HandshakeState::Failed;
+                            } else {
+                                WIFI.handshake_state = HandshakeState::Completed;
+                                WIFI.link_up = true;
+                                WIFI.mic_verified = true;
+                                println!(
+                                    "[wifi] EAPOL M3 received, M4 sent, 4-way handshake COMPLETED"
+                                );
+                            }
                         } else {
                             WIFI.handshake_state = HandshakeState::Failed;
                             println!("[wifi] EAPOL M3 MIC verification FAILED");
-                        }
-                    }
-                }
-                HandshakeState::WaitingM4 => {
-                    // M4: STA → AP, confirmation, MIC
-                    if has_mic && !is_pairwise {
-                        if verify_eapol_key_mic(
-                            &WIFI.ptk[..16].try_into().unwrap(),
-                            &frame,
-                            key_data,
-                        ) {
-                            WIFI.handshake_state = HandshakeState::Completed;
-                            WIFI.link_up = true;
-                            println!("[wifi] EAPOL M4 sent, 4-way handshake COMPLETED");
-                        } else {
-                            WIFI.handshake_state = HandshakeState::Failed;
-                            println!("[wifi] EAPOL M4 MIC verification FAILED");
                         }
                     }
                 }
