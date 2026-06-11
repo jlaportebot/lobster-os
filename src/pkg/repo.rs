@@ -299,7 +299,10 @@ impl core::fmt::Display for RepoError {
 }
 
 /// Verify package checksum
-pub fn verify_checksum(data: &[u8], expected: &[u8; 32]) -> bool {
+pub fn verify_checksum(data: &[u8], expected: &[u8]) -> bool {
+    if expected.len() != 32 {
+        return false;
+    }
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(data);
