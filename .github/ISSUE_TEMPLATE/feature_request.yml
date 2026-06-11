@@ -1,0 +1,82 @@
+name: Feature Request
+about: Propose a new feature or enhancement
+title: "[FEAT] "
+labels: ["enhancement"]
+assignees: ""
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks for the idea! Please describe what you'd like to see."
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Motivation
+      description: What problem does this solve? Why is it needed?
+      placeholder: "Currently there's no way to mount ext2 filesystems read-write. Users can only read files..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How should it work? API design, user-facing changes, config options.
+      placeholder: "Add `ext2::write_support` module with `Ext2Fs::write()` implementing journal-less write path..."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What else did you think of? Why is this approach better?
+      placeholder: "Could use FUSE layer but adds overhead. Native VFS integration is cleaner."
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: How big is this?
+      options:
+        - Small (single function / config option)
+        - Medium (new module / driver / command)
+        - Large (new subsystem / major refactor)
+    validations:
+      required: true
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain
+      description: Which part of the codebase?
+      options:
+        - arch (AArch64, BCM2712, MMU, GIC, timer)
+        - memory (frame alloc, heap, vmem, process_vmem)
+        - sched (process, thread, syscall, signal, ELF, dlinker)
+        - smp (runqueue, IPI, load balancing)
+        - net (GENET, ARP, IPv4, ICMP, UDP, TCP, DHCP, DNS, HTTP)
+        - display (framebuffer, graphics, console, WM)
+        - fs (VFS, FAT32, ext2, initrd, procfs, sysfs, devfs, block)
+        - usb (XHCI, HID)
+        - security (capabilities, users, auth, sessions)
+        - shell (commands, builtins)
+        - ipc (message passing, shmem, PTY)
+        - terminal (VT100, scrollback)
+        - wm (compositor, windows, widgets, themes, input)
+        - drivers (UART, GPIO, mailbox, EMMC, SDIO, PCIe, NVMe, GPU, WiFi, audio)
+        - pkg (package manager)
+        - sync (spinlock, mutex)
+        - tests / CI / tooling
+        - docs
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: willingness
+    attributes:
+      label: Willingness to Implement
+      options:
+        - label: I'm willing to implement this (assign to me)
+        - label: I can help test / review
+        - label: Just the idea — someone else would need to build it
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Mockups, diagrams, links to related issues/PRs, references.

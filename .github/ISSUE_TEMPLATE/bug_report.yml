@@ -1,0 +1,107 @@
+name: Bug Report
+about: Something isn't working as expected
+title: "[BUG] "
+labels: ["bug"]
+assignees: ""
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks for reporting a bug! Please fill out the sections below."
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What Happened
+      description: A clear description of the bug.
+      placeholder: "When I boot on Pi 5, the framebuffer shows garbage after switching to graphics mode..."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to trigger the bug.
+      placeholder: |
+        1. Build with `cargo build --features qemu --release`
+        2. Run `qemu-system-aarch64 -M raspi4b -kernel ...`
+        3. Type `gfx` in shell
+        4. Observe corrupted display
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should happen.
+      placeholder: "Clean graphics mode switch, framebuffer shows desktop"
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happens. Include logs, serial output, screenshots.
+      placeholder: "Screen shows vertical colored bars, serial shows 'FB: mode set failed'"
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target
+      description: Where does this happen?
+      options:
+        - QEMU (raspi4b emulation)
+        - Raspberry Pi 5 hardware
+        - Both
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: build
+    attributes:
+      label: Build Type
+      options:
+        - Debug
+        - Release
+    validations:
+      required: true
+  - type: input
+    id: features
+    attributes:
+      label: Cargo Features Used
+      description: e.g., `--features qemu`, `--features std`, or "none"
+      placeholder: "--features qemu"
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit Hash
+      description: Output of `git rev-parse HEAD`
+      placeholder: "a1b2c3d4..."
+    validations:
+      required: true
+  - type: input
+    id: rust-version
+    attributes:
+      label: Rust Version
+      description: Output of `rustc --version`
+      placeholder: "rustc 1.82.0-nightly (abcdef 2024-09-01)"
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Config, dmesg, QEMU flags, anything else relevant.
+      placeholder: "config.txt has `arm_64bit=1 kernel=kernel8.img`..."
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I searched existing issues (open + closed)
+          required: true
+        - label: I'm on the latest `master` branch
+          required: true
+        - label: This isn't a known limitation (check README status table)
+          required: true

@@ -1,0 +1,84 @@
+name: Good First Issue
+about: A curated task for new contributors
+title: "[GOOD FIRST ISSUE] "
+labels: ["good first issue", "help wanted"]
+assignees: ""
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Welcome!** This issue is designed for first-time contributors. A maintainer will guide you through the process — just ask questions.
+
+        **Mentor:** @maintainer-who-owns-this-area (will be assigned)
+  - type: textarea
+    id: summary
+    attributes:
+      label: Task Summary
+      description: One-sentence description of the work.
+      placeholder: "Add missing doc comments to all public items in `src/memory/frame_alloc.rs`"
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: What Needs Doing
+      description: Step-by-step breakdown.
+      placeholder: |
+        1. Open `src/memory/frame_alloc.rs`
+        2. Find all `pub` / `pub(crate)` functions, structs, traits without `///` doc comments
+        3. Add doc comments explaining purpose, parameters, return values, invariants
+        4. Run `cargo doc --features qemu --target aarch64-unknown-none --no-deps` to verify
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Files to Touch
+      description: Exact paths — no guessing.
+      placeholder: |
+        - `src/memory/frame_alloc.rs` (main)
+        - `src/memory/mod.rs` (re-exports, if needed)
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: How we'll know it's done.
+      placeholder: |
+        - [ ] All public items in frame_alloc.rs have doc comments
+        - [ ] `cargo doc` builds without warnings
+        - [ ] Comments follow style in CONTRIBUTING.md (why, not what)
+        - [ ] PR passes CI (fmt, clippy, build, tests)
+    validations:
+      required: true
+  - type: textarea
+    id: pointers
+    attributes:
+      label: Helpful Pointers
+      description: Links to related code, docs, examples.
+      placeholder: |
+        - See `src/memory/heap.rs` for doc comment style examples
+        - Rustdoc guide: https://doc.rust-lang.org/rustdoc/how-to-write-documentation.html
+        - Run `cargo doc --open` to preview locally
+  - type: dropdown
+    id: difficulty
+    attributes:
+      label: Estimated Difficulty
+      options:
+        - Very easy (30-60 min) — docs, typo fixes, simple tests
+        - Easy (1-2 hours) — small code change, well-isolated
+        - Moderate (half day) — requires understanding a subsystem
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: For the Contributor
+      options:
+        - label: I've read CONTRIBUTING.md
+          required: true
+        - label: I'll ask questions if stuck (Discord / GitHub Discussions / PR comments)
+          required: true
+        - label: I'll submit a PR when ready
+          required: true

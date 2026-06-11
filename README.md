@@ -1,5 +1,12 @@
 # LobsterOS
 
+[![CI](https://github.com/jlaportebot/lobster-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jlaportebot/lobster-os/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Rust](https://img.shields.io/badge/rust-nightly-orange.svg)](https://www.rust-lang.org/)
+[![Target](https://img.shields.io/badge/target-aarch64--unknown--none-blue.svg)](https://github.com/rust-embedded/rust-target-tier3)
+[![Code style: rustfmt](https://img.shields.io/badge/code_style-rustfmt-brightgreen.svg)](https://github.com/rust-lang/rustfmt)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
+
 A bare-metal Rust operating system for Raspberry Pi 5 (BCM2712), built from scratch with `#![no_std]`.
 
 ## Features
@@ -141,13 +148,44 @@ cargo fmt --check
 | GPU (V3D) | 🚧 Planned |
 | Audio | 🚧 Planned |
 
-## License
-
-MIT License - see LICENSE file for details.
-
 ## Contributing
 
-Contributions welcome! Please read CONTRIBUTING.md for guidelines.
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+**Quick start for contributors:**
+
+```bash
+git clone https://github.com/jlaportebot/lobster-os.git
+cd lobster-os
+rustup default nightly
+rustup target add aarch64-unknown-none
+rustup component add llvm-tools-preview rustfmt clippy
+
+# Build & test
+cargo build --features qemu --target aarch64-unknown-none
+cargo test --features std
+cargo test --features qemu --target aarch64-unknown-none --test integration
+
+# Lint & format
+cargo clippy --features qemu --target aarch64-unknown-none -- -D warnings
+cargo fmt --all -- --check
+```
+
+**Good first issues:** Look for the [`good first issue` label](https://github.com/jlaportebot/lobster-os/issues?q=label%3A%22good+first+issue%22) — we'll mentor you through it.
+
+**Questions?** Open a [Discussion](https://github.com/jlaportebot/lobster-os/discussions) or [issue](https://github.com/jlaportebot/lobster-os/issues/new/choose).
+
+## License
+
+MIT License — see [LICENSE](LICENSE) file for details.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+
+## Code of Conduct
+
+See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). We follow the Contributor Covenant.
 
 ## Acknowledgments
 
