@@ -42,60 +42,66 @@ impl Timer {
 
     /// Calibrate TSC frequency using PIT or CPUID
     fn calibrate_tsc() {
-        // Try CPUID leaf 0x15 first (TSC frequency info)
-        let mut eax: u32;
-        let mut ebx: u32;
-        let mut ecx: u32;
-        let mut edx: u32;
+        #[cfg(not(test))]
+        {
+            // Try CPUID leaf 0x15 first (TSC frequency info)
+            let mut eax: u32;
+            let mut ebx: u32;
+            let mut ecx: u32;
+            let mut edx: u32;
 
-        unsafe {
-            core::arch::asm!(
-                "cpuid",
-                in("eax") 0x15u32,
-                out("eax") eax,
-                out("ebx") ebx,
-                out("ecx") ecx,
-                out("edx") edx,
-                options(nomem, nostack, preserves_flags)
-            );
-        }
+            unsafe {
+                core::arch::asm!(
+                    "cpuid",
+                    in("eax") 0x15u32,
+                    out("eax") eax,
+                    out("ebx") ebx,
+                    out("ecx") ecx,
+                    out("edx") edx,
+                    options(nomem, nostack, preserves_flags)
+                );
+            }
 
-        if eax != 0 || ebx != 0 || ecx != 0 || edx != 0 {
-            // TSC frequency = (EBX/EAX) * ECX (crystal frequency)
-            // Actually leaf 0x15: EAX = denominator, EBX = numerator, ECX = crystal Hz
-            if eax != 0 && ecx != 0 {
-                let freq = ((ebx as u64 * ecx as u64) / eax as u64) as u64;
+            if eax != 0 || ebx != 0 || ecx != 0 || edx != 0 {
+                // TSC frequency = (EBX/EAX) * ECX (crystal frequency)
+                // Actually leaf 0x15: EAX = denominator, EBX = numerator, ECX = crystal Hz
+                if eax != 0 && ecx != 0 {
+                    let freq = ((ebx as u64 * ecx as u64) / eax as u64) as u64;
+                    TSC_FREQ.store(freq, Ordering::Relaxed);
+                    println!("[timer] TSC frequency from CPUID 0x15: {} Hz", freq);
+                    return;
+                }
+            }
+
+            // Try CPUID leaf 0x16 (processor frequency info)
+            unsafe {
+                core::arch::asm!(
+                    "cpuid",
+                    in("eax") 0x16u32,
+                    out("eax") eax,
+                    out("ebx") ebx,
+                    out("ecx") ecx,
+                    out("edx") edx,
+                    options(nomem, nostack, preserves_flags)
+                );
+            }
+
+            if eax != 0 {
+                // EAX = base frequency in MHz
+                let freq = (eax as u64) * 1_000_000;
                 TSC_FREQ.store(freq, Ordering::Relaxed);
-                println!("[timer] TSC frequency from CPUID 0x15: {} Hz", freq);
+                println!("[timer] TSC frequency from CPUID 0x16: {} Hz", freq);
                 return;
             }
+
+            // Fallback: calibrate using PIT or LAPIC timer
+            // For now, assume 2.4 GHz (will be refined)
+            TSC_FREQ.store(2_400_000_000, Ordering::Relaxed);
+            println!("[timer] TSC frequency assumed: 2.4 GHz (fallback)");
         }
 
-        // Try CPUID leaf 0x16 (processor frequency info)
-        unsafe {
-            core::arch::asm!(
-                "cpuid",
-                in("eax") 0x16u32,
-                out("eax") eax,
-                out("ebx") ebx,
-                out("ecx") ecx,
-                out("edx") edx,
-                options(nomem, nostack, preserves_flags)
-            );
-        }
-
-        if eax != 0 {
-            // EAX = base frequency in MHz
-            let freq = (eax as u64) * 1_000_000;
-            TSC_FREQ.store(freq, Ordering::Relaxed);
-            println!("[timer] TSC frequency from CPUID 0x16: {} Hz", freq);
-            return;
-        }
-
-        // Fallback: calibrate using PIT or LAPIC timer
-        // For now, assume 2.4 GHz (will be refined)
+        // Fallback for tests
         TSC_FREQ.store(2_400_000_000, Ordering::Relaxed);
-        println!("[timer] TSC frequency assumed: 2.4 GHz (fallback)");
     }
 
     /// Get TSC frequency in Hz

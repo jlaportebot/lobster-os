@@ -1,6 +1,5 @@
 //! Package installation logic for LobsterOS
 
-#[cfg(target_arch = "aarch64")]
 use crate::net::http::http_get;
 use crate::pkg::package::{
     InstalledPackage, Package, PackageArch, PackageFile, PackageMetadata, LOBPKG_MAGIC,

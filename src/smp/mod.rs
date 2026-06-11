@@ -24,6 +24,14 @@ pub mod runqueue;
 /// Total number of CPU cores on BCM2712
 pub const CORE_COUNT: usize = 4;
 
+/// Architecture-specific IPI vector type
+/// - AArch64: GIC SGI numbers (u32, 0-15)
+/// - x86_64: LAPIC vectors (u8, 0xE0-0xE3)
+#[cfg(target_arch = "aarch64")]
+type IpiVector = u32;
+#[cfg(target_arch = "x86_64")]
+type IpiVector = u8;
+
 /// SGI/Vector numbers used for IPI — re-exported from arch::interrupt
 /// These are architecture-specific (GIC SGI 0-3 for ARM64, LAPIC vectors 0xE0-0xE3 for x86_64)
 /// Per-core state
@@ -270,7 +278,7 @@ pub fn secondary_entry(core_id: u64) -> ! {
 
 /// Handle an IPI received on this core
 /// Called from the IRQ handler when an SGI arrives
-pub fn handle_ipi(sgi_num: u32) {
+pub fn handle_ipi(sgi_num: IpiVector) {
     let core_id = current_core_id() as usize;
     increment_ipi_received(core_id);
 

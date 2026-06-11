@@ -11,9 +11,7 @@
 //! - Variable expansion: $VAR, ${VAR}, $? (last exit code)
 //! - Integrates with scheduler, memory, and process subsystems
 
-#[cfg(target_arch = "aarch64")]
 use crate::drivers::serial_input;
-#[cfg(target_arch = "aarch64")]
 use crate::drivers::uart::Uart10;
 use alloc::vec::Vec;
 
@@ -756,49 +754,79 @@ fn run_builtin(
             cmd_gpio(args, argc);
             0
         }
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "ifconfig" => {
             cmd_ifconfig();
             0
         }
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "ping" => {
             cmd_ping(args, argc);
             0
         }
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "arp" => {
             cmd_arp(args, argc);
             0
         }
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "dhcp" => {
             cmd_dhcp(args, argc);
             0
         }
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(target_arch = "x86_64")]
+        "dhcp" => {
+            Uart10::puts("DHCP not available on x86_64.\r\n");
+            0
+        }
+        #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "dns" => {
             cmd_dns(args, argc);
             0
         }
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(target_arch = "x86_64")]
+        "dns" => {
+            Uart10::puts("DNS not available on x86_64.\r\n");
+            0
+        }
+        #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "net" => {
             cmd_net(args, argc);
             0
         }
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(target_arch = "x86_64")]
+        "net" => {
+            Uart10::puts("Network commands not available on x86_64.\r\n");
+            0
+        }
+        #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "wm" => {
             cmd_wm(args, argc);
             0
         }
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(target_arch = "x86_64")]
+        "wm" => {
+            Uart10::puts("Window manager not available on x86_64.\r\n");
+            0
+        }
+        #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "audio" => {
             cmd_audio(args, argc);
             0
         }
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(target_arch = "x86_64")]
+        "audio" => {
+            Uart10::puts("Audio not available on x86_64.\r\n");
+            0
+        }
+        #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "gpu" => {
             cmd_gpu(args, argc);
+            0
+        }
+        #[cfg(target_arch = "x86_64")]
+        "gpu" => {
+            Uart10::puts("GPU not available on x86_64.\r\n");
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
@@ -811,14 +839,14 @@ fn run_builtin(
             Uart10::puts("WiFi not available on x86_64.\r\n");
             0
         }
-        "pkg" => {
-            cmd_pkg(args, argc);
-            0
-        }
-        // Panel command
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "panel" => {
             cmd_panel(args, argc);
+            0
+        }
+        #[cfg(target_arch = "x86_64")]
+        "panel" => {
+            Uart10::puts("Panel not available on x86_64.\r\n");
             0
         }
         // User management commands

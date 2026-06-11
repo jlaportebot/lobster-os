@@ -37,6 +37,7 @@ static mut INPUT_LEN: usize = 0;
 static mut ECHO_ENABLED: bool = true;
 
 /// Initialize serial input: enable UART10 RX interrupt
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn init() {
     // Clear ring buffer state
     RX_HEAD = 0;
@@ -65,7 +66,11 @@ pub unsafe fn init() {
     crate::println!("[serial] UART10 RX interrupt enabled (SPI {})", UART10_SPI);
 }
 
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn init() {}
+
 /// Called from IRQ handler when UART10 interrupt fires
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn handle_irq() {
     const UART10_BASE: u64 = 0x10_7D00_1000;
     const UART_DR: u64 = UART10_BASE + 0x000;
@@ -98,10 +103,10 @@ pub unsafe fn handle_irq() {
 
     // Clear UART interrupts
     core::ptr::write_volatile(UART_ICR as *mut u32, (1 << 4) | (1 << 6));
-
-    // Process raw bytes into lines
-    process_rx_bytes();
 }
+
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn handle_irq() {}
 
 /// Process bytes from the ring buffer into line buffer
 unsafe fn process_rx_bytes() {
@@ -261,3 +266,40 @@ pub fn rx_available() -> usize {
         }
     }
 }
+
+// x86_64 stub implementations
+#[cfg(target_arch = "x86_64")]
+mod x86_64_stubs {
+    use super::*;
+
+    pub unsafe fn init() {}
+
+    pub fn has_line() -> bool {
+        false
+    }
+
+    pub fn read_line(_buf: &mut [u8]) -> usize {
+        0
+    }
+
+    pub fn poll_byte() -> Option<u8> {
+        None
+    }
+
+    pub fn read_byte() -> u8 {
+        0
+    }
+
+    pub fn set_echo(_enabled: bool) {}
+
+    pub fn echo_enabled() -> bool {
+        false
+    }
+
+    pub fn rx_available() -> usize {
+        0
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub use x86_64_stubs::*;

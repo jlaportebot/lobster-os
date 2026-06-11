@@ -190,7 +190,7 @@ pub unsafe fn ioapic_set_irq(
     let redir_high = redir_low + 1;
 
     let mut low = vector as u32;
-    low |= (delivery_mode & 0x7) << 8; // Delivery mode
+    low |= ((delivery_mode & 0x7) as u32) << 8; // Delivery mode
     low |= (1 << 11); // Destination mode: physical
     low |= (polarity as u32) << 13; // Polarity (0=high, 1=low)
     low |= (trigger_mode as u32) << 15; // Trigger mode (0=edge, 1=level)
@@ -227,7 +227,7 @@ pub fn send_ipi(target_cpus: u32, vector: u8, delivery_mode: u8) {
         }
 
         let mut icr_low = vector as u32;
-        icr_low |= (delivery_mode & 0x7) << 8;
+        icr_low |= ((delivery_mode & 0x7) as u32) << 8;
         icr_low |= (1 << 14); // Level = assert
         icr_low |= (1 << 11); // Destination mode: physical
 

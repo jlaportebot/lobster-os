@@ -48,24 +48,34 @@
 )]
 extern crate alloc;
 
+#[cfg(target_arch = "aarch64")]
 mod apps;
 mod arch;
 mod console;
+#[cfg(target_arch = "aarch64")]
 mod display;
+#[cfg(target_arch = "aarch64")]
 mod drivers;
+#[cfg(target_arch = "aarch64")]
 mod dtb;
+#[cfg(target_arch = "aarch64")]
 mod fs;
 mod ipc;
+#[cfg(target_arch = "aarch64")]
 mod memory;
 mod net;
 mod panic_handler;
 mod pkg;
+#[cfg(target_arch = "aarch64")]
 mod sched;
 mod security;
+#[cfg(target_arch = "aarch64")]
 mod shell;
+#[cfg(target_arch = "aarch64")]
 mod smp;
 mod sync;
 mod terminal;
+#[cfg(target_arch = "aarch64")]
 mod usb;
 mod wm;
 
@@ -75,7 +85,7 @@ use core::arch::global_asm;
 #[cfg(target_arch = "aarch64")]
 global_asm!(include_str!("boot.S"));
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(test)))]
 global_asm!(include_str!("boot_x86_64.S"));
 
 // Linker symbols for kernel boundaries

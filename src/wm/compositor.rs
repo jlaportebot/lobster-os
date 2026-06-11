@@ -106,7 +106,7 @@ impl Layer {
 
 // ─── Compositor State ──────────────────────────────────────────────────
 
-use spin::Mutex;
+use crate::sync::spinlock::Spinlock;
 
 /// Wrapper for raw pointer to make it Send + Sync
 struct RawPtr(*mut u32);
@@ -114,20 +114,20 @@ unsafe impl Send for RawPtr {}
 unsafe impl Sync for RawPtr {}
 
 /// Back buffer dimensions and pointer
-static BACK_BUF: Mutex<Option<RawPtr>> = Mutex::new(None);
-static BACK_BUF_SIZE: Mutex<usize> = Mutex::new(0);
-static FB_INFO: Mutex<Option<FramebufferInfo>> = Mutex::new(None);
+static BACK_BUF: Spinlock<Option<RawPtr>> = Spinlock::new(None);
+static BACK_BUF_SIZE: Spinlock<usize> = Spinlock::new(0);
+static FB_INFO: Spinlock<Option<FramebufferInfo>> = Spinlock::new(None);
 
 /// Dirty rectangle list
-static DIRTY_LIST: Mutex<[DirtyRect; MAX_DIRTY]> = Mutex::new([DirtyRect::zero(); MAX_DIRTY]);
-static DIRTY_COUNT: Mutex<usize> = Mutex::new(0);
+static DIRTY_LIST: Spinlock<[DirtyRect; MAX_DIRTY]> = Spinlock::new([DirtyRect::zero(); MAX_DIRTY]);
+static DIRTY_COUNT: Spinlock<usize> = Spinlock::new(0);
 
 /// Layer list (sorted by z_order on each composite)
-static LAYERS: Mutex<[Layer; MAX_LAYERS]> = Mutex::new([Layer::zero(); MAX_LAYERS]);
-static LAYER_COUNT: Mutex<usize> = Mutex::new(0);
+static LAYERS: Spinlock<[Layer; MAX_LAYERS]> = Spinlock::new([Layer::zero(); MAX_LAYERS]);
+static LAYER_COUNT: Spinlock<usize> = Spinlock::new(0);
 
 /// Full-screen dirty flag (set on init or resize)
-static FULL_REDRAW: Mutex<bool> = Mutex::new(true);
+static FULL_REDRAW: Spinlock<bool> = Spinlock::new(true);
 
 // ─── Initialization ────────────────────────────────────────────────────
 
