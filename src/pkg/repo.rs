@@ -9,7 +9,7 @@ use crate::pkg::package::{PackageArch, RepoPackage, RepositoryIndex};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{PublicKey, Signature, Verifier};
 
 /// Maximum public key size (Ed25519 = 32 bytes)
 const ED25519_PUBKEY_LEN: usize = 32;
@@ -299,75 +299,18 @@ impl core::fmt::Display for RepoError {
 }
 
 /// Verify package checksum
-pub fn verify_checksum(data: &[u8], expected: &[u8; 32]) -> bool {
+pub fn verify_checksum(data: &[u8], expected: &[u8]) -> bool {
+    if expected.len() != 32 {
+        return false;
+    }
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(data);
-    /// Verify Ed25519 signature of repository index
-    /// 
-    /// The signature is expected to be a base64-encoded Ed25519 signature
-    /// of the canonical JSON index data (excluding the "signature" field).
-    /// The public key is a 32-byte Ed25519 public key.
-    pub fn verify_signature(
-        index_data: &[u8],
-        signature_b64: &str,
-        public_key: &[u8; 32],
-    ) -> Result<bool, RepoError> {
-        use ed25519_dalek::{PublicKey, Signature, Verifier};
-
-        // Decode base64 signature
-        let sig_bytes = base64_decode(signature_b64).ok_or(RepoError::SignatureError)?;
-
-        if sig_bytes.len() != 64 {
-            return Err(RepoError::SignatureError);
-        }
-
-        // Convert Vec<u8> to [u8; 64]
-        let mut sig_array = [0u8; 64];
-        sig_array.copy_from_slice(&sig_bytes);
-
-        // Parse signature
-        let signature = Signature::from_bytes(&sig_array);
-
-        // Parse public key
-        let public_key = PublicKey::from_bytes(public_key).map_err(|_| RepoError::SignatureError)?;
-
-        // Verify
-        public_key
-            .verify(index_data, &signature)
-            .map(|_| true)
-            .map_err(|_| RepoError::SignatureError)
-    }
-
-    /// Simple base64 decode for no_std
-    fn base64_decode(input: &str) -> Option<alloc::vec::Vec<u8>> {
-        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-        let mut output = alloc::vec::Vec::new();
-        let mut buffer = 0u32;
-        let mut bits = 0;
-
-        for ch in input.bytes() {
-            if ch == b'=' {
-                break;
-            }
-
-            // Find character in alphabet
-            let val = ALPHABET.iter().position(|&c| c == ch)?;
-            buffer = (buffer << 6) | val as u32;
-            bits += 6;
-
-            if bits >= 8 {
-                bits -= 8;
-                output.push((buffer >> bits) as u8);
-            }
-        }
-
-        Some(output)
-    }
+    let result = hasher.finalize();
+    result.as_slice() == expected
+}
 
 /// Verify Ed25519 signature of repository index JSON
-/// Expected JSON format includes a "signature" field at the top level:
 /// {
 ///   "name": "repo-name",
 ///   "url": "https://...",
@@ -414,8 +357,8 @@ fn verify_repository_signature(
     let signed_data = remove_signature_field(json).ok_or(RepoError::SignatureError)?;
 
     // Verify signature
-    let verifying_key = VerifyingKey::from_bytes(pubkey).map_err(|_| RepoError::SignatureError)?;
-    let signature = Signature::from_bytes(&sig_bytes);
+    let verifying_key = PublicKey::from_bytes(pubkey).map_err(|_| RepoError::SignatureError)?;
+    let signature = Signature::from_bytes(&sig_bytes).map_err(|_| RepoError::SignatureError)?;
 
     verifying_key
         .verify(signed_data.as_bytes(), &signature)

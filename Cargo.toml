@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["Mister Lobster"]
 
 [features]
+std = []  # Enable std for host builds
 qemu = []  # Build for QEMU raspi4b emulation
 
 [dependencies]
