@@ -12,7 +12,6 @@ qemu = []  # Build for QEMU raspi4b emulation
 tock-registers = "0.9"
 log = "0.4"
 bitflags = "2.6"
-spin = "0.9"
 sha2 = { version = "0.10", default-features = false, features = [] }
 ed25519-dalek = { version = "1.0", default-features = false, features = ["u64_backend"] }
 

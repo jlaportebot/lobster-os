@@ -64,7 +64,9 @@ pub mod interrupt {
     };
     pub type InterruptController = ();
     pub fn interrupt_init() {
-        crate::arch::x86_64::lapic::init();
+        unsafe {
+            crate::arch::x86_64::lapic::init();
+        }
     }
 }
 

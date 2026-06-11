@@ -218,3 +218,126 @@ pub fn set_dns(dns: [u8; 4]) {
 pub fn handle_irq() {
     genet::handle_irq();
 }
+
+// x86_64 stub modules for cross-compilation testing
+#[cfg(target_arch = "x86_64")]
+pub mod genet {
+    pub fn init() -> Result<(), &'static str> {
+        Ok(())
+    }
+    pub fn mac_addr() -> [u8; 6] {
+        [0x00, 0x11, 0x22, 0x33, 0x44, 0x55]
+    }
+    pub fn receive(_buf: &mut [u8]) -> usize {
+        0
+    }
+    pub fn handle_irq() {}
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod eth {
+    pub const ETHER_TYPE_ARP: u16 = 0x0806;
+    pub const ETHER_TYPE_IPV4: u16 = 0x0800;
+    pub const ETHER_TYPE_IPV6: u16 = 0x86DD;
+    pub const HEADER_LEN: usize = 14;
+    #[derive(Clone, Copy)]
+    pub struct EthernetFrame {
+        pub dst_mac: [u8; 6],
+        pub src_mac: [u8; 6],
+        pub ether_type: u16,
+    }
+    impl EthernetFrame {
+        pub fn parse(_data: &[u8]) -> Option<Self> {
+            None
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod arp {
+    pub fn init() {}
+    pub fn handle_packet(_data: &[u8]) {}
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod ipv4 {
+    pub const IPPROTO_ICMP: u8 = 1;
+    pub const IPPROTO_UDP: u8 = 17;
+    pub const IPPROTO_TCP: u8 = 6;
+    #[derive(Clone, Copy)]
+    pub struct Ipv4Header {
+        pub ihl: u8,
+        pub protocol: u8,
+    }
+    pub fn parse(_data: &[u8]) -> Option<Ipv4Header> {
+        None
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod icmp {
+    pub fn handle_packet(_ip_hdr: &crate::net::ipv4::Ipv4Header, _payload: &[u8]) {}
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod udp {
+    pub const HEADER_LEN: usize = 8;
+    #[derive(Clone, Copy)]
+    pub struct UdpHeader {
+        pub src_port: u16,
+        pub dst_port: u16,
+    }
+    pub fn parse(_data: &[u8]) -> Option<UdpHeader> {
+        None
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod tcp {
+    pub fn handle_packet(_ip_hdr: &crate::net::ipv4::Ipv4Header, _payload: &[u8]) {}
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod dhcp {
+    pub fn discover() -> bool {
+        false
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod socket {
+    pub fn init() {}
+    pub fn handle_udp(
+        _ip_hdr: &crate::net::ipv4::Ipv4Header,
+        _udp_hdr: &crate::net::udp::UdpHeader,
+        _data: &[u8],
+    ) {
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod dns {
+    pub fn init() {}
+    pub fn resolve(_name: &str) -> Option<[u8; 4]> {
+        None
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod http {
+    pub fn init() {}
+    pub fn http_get(_url: &str) -> Option<HttpResponse> {
+        None
+    }
+
+    // Stub HttpResponse for x86_64
+    pub struct HttpResponse {
+        pub status_code: u16,
+        pub status_reason: [u8; 32],
+        pub reason_len: usize,
+        pub body: [u8; 65536],
+        pub body_len: usize,
+        pub content_length: i64,
+        pub chunked: bool,
+    }
+}

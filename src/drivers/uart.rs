@@ -1,5 +1,8 @@
 //! UART driver — PL011 for BCM2712 (Pi 5) / QEMU raspi4b, COM1 for x86_64
 
+#[cfg(target_arch = "x86_64")]
+use crate::arch::x86_64::cpu;
+
 /// UART driver for both AArch64 (PL011) and x86_64 (COM1)
 pub struct Uart10;
 

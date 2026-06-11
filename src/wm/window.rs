@@ -104,26 +104,26 @@ impl Window {
 
 // ─── Global Window State ───────────────────────────────────────────────
 
-use spin::Mutex;
+use crate::sync::spinlock::Spinlock;
 
-static WINDOWS: Mutex<[Window; MAX_WINDOWS]> = Mutex::new([Window::ZERO; MAX_WINDOWS]);
-static WIN_COUNT: Mutex<usize> = Mutex::new(0);
-static NEXT_WIN_ID: Mutex<u32> = Mutex::new(1);
-static FOCUSED_ID: Mutex<u32> = Mutex::new(0);
+static WINDOWS: Spinlock<[Window; MAX_WINDOWS]> = Spinlock::new([Window::ZERO; MAX_WINDOWS]);
+static WIN_COUNT: Spinlock<usize> = Spinlock::new(0);
+static NEXT_WIN_ID: Spinlock<u32> = Spinlock::new(1);
+static FOCUSED_ID: Spinlock<u32> = Spinlock::new(0);
 
 /// Drag state for window moving
-static DRAG_WIN_ID: Mutex<u32> = Mutex::new(0);
-static DRAG_START_X: Mutex<u32> = Mutex::new(0);
-static DRAG_START_Y: Mutex<u32> = Mutex::new(0);
-static DRAG_WIN_START_X: Mutex<u32> = Mutex::new(0);
-static DRAG_WIN_START_Y: Mutex<u32> = Mutex::new(0);
-static DRAGGING: Mutex<bool> = Mutex::new(false);
+static DRAG_WIN_ID: Spinlock<u32> = Spinlock::new(0);
+static DRAG_START_X: Spinlock<u32> = Spinlock::new(0);
+static DRAG_START_Y: Spinlock<u32> = Spinlock::new(0);
+static DRAG_WIN_START_X: Spinlock<u32> = Spinlock::new(0);
+static DRAG_WIN_START_Y: Spinlock<u32> = Spinlock::new(0);
+static DRAGGING: Spinlock<bool> = Spinlock::new(false);
 
 /// Resize state
-static RESIZE_WIN_ID: Mutex<u32> = Mutex::new(0);
-static RESIZE_START_W: Mutex<u32> = Mutex::new(0);
-static RESIZE_START_H: Mutex<u32> = Mutex::new(0);
-static RESIZING: Mutex<bool> = Mutex::new(false);
+static RESIZE_WIN_ID: Spinlock<u32> = Spinlock::new(0);
+static RESIZE_START_W: Spinlock<u32> = Spinlock::new(0);
+static RESIZE_START_H: Spinlock<u32> = Spinlock::new(0);
+static RESIZING: Spinlock<bool> = Spinlock::new(false);
 
 // ─── Initialization ────────────────────────────────────────────────────
 

@@ -265,6 +265,7 @@ pub struct ExceptionFrame {
 }
 
 // Assembly stubs that save registers and call Rust handlers
+#[cfg(not(test))]
 global_asm!(include_str!("exception.S"));
 
 // Rust handlers called from assembly

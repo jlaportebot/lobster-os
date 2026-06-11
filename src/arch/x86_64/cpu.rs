@@ -6,35 +6,51 @@ use core::arch::asm;
 
 /// Read the current CPU vendor string
 pub fn cpu_vendor() -> [u8; 12] {
-    let mut vendor = [0u8; 12];
-    unsafe {
-        asm!(
-            "cpuid",
-            in("eax") 0u32,
-            out("ebx") vendor[0..4].as_mut_ptr() as *mut u32,
-            out("edx") vendor[4..8].as_mut_ptr() as *mut u32,
-            out("ecx") vendor[8..12].as_mut_ptr() as *mut u32,
-            options(nomem, nostack, preserves_flags)
-        );
+    #[cfg(not(test))]
+    {
+        let mut vendor = [0u8; 12];
+        unsafe {
+            asm!(
+                "cpuid",
+                in("eax") 0u32,
+                out("ebx") vendor[0..4].as_mut_ptr() as *mut u32,
+                out("edx") vendor[4..8].as_mut_ptr() as *mut u32,
+                out("ecx") vendor[8..12].as_mut_ptr() as *mut u32,
+                options(nomem, nostack, preserves_flags)
+            );
+        }
+        vendor
     }
-    vendor
+    #[cfg(test)]
+    {
+        // Stub for tests - return a dummy vendor string
+        *b"TestVendor  "
+    }
 }
 
 /// Check if a specific CPUID feature is supported
 pub fn cpuid_feature(eax: u32, ecx: u32, bit: u32) -> bool {
-    let mut edx: u32;
-    let mut ecx_out: u32;
-    unsafe {
-        asm!(
-            "cpuid",
-            in("eax") eax,
-            in("ecx") ecx,
-            out("edx") edx,
-            out("ecx") ecx_out,
-            options(nomem, nostack, preserves_flags)
-        );
+    #[cfg(not(test))]
+    {
+        let mut edx: u32;
+        let mut ecx_out: u32;
+        unsafe {
+            asm!(
+                "cpuid",
+                in("eax") eax,
+                in("ecx") ecx,
+                out("edx") edx,
+                out("ecx") ecx_out,
+                options(nomem, nostack, preserves_flags)
+            );
+        }
+        (edx & (1 << bit)) != 0 || (ecx_out & (1 << bit)) != 0
     }
-    (edx & (1 << bit)) != 0 || (ecx_out & (1 << bit)) != 0
+    #[cfg(test)]
+    {
+        // Stub for tests - return false
+        false
+    }
 }
 
 /// Check if APIC is present (CPUID.1:EDT[9])
@@ -205,30 +221,16 @@ pub fn delay_us(us: u64) {
 
 /// Get the number of logical CPUs (from CPUID leaf 0xB or 0x1F)
 pub fn cpu_count() -> u32 {
-    let mut count = 1u32;
-    // Try extended topology leaf (0x1F)
-    let mut eax: u32;
-    let mut ebx: u32;
-    unsafe {
-        asm!(
-            "cpuid",
-            in("eax") 0x1Fu32,
-            in("ecx") 0u32,
-            out("eax") eax,
-            out("ebx") ebx,
-            out("ecx") _,
-            out("edx") _,
-            options(nomem, nostack, preserves_flags)
-        );
-    }
-    if eax != 0 || ebx != 0 {
-        count = ebx & 0xFFFF;
-    } else {
-        // Fallback to legacy leaf 0xB
+    #[cfg(not(test))]
+    {
+        let mut count = 1u32;
+        // Try extended topology leaf (0x1F)
+        let mut eax: u32;
+        let mut ebx: u32;
         unsafe {
             asm!(
                 "cpuid",
-                in("eax") 0xBu32,
+                in("eax") 0x1Fu32,
                 in("ecx") 0u32,
                 out("eax") eax,
                 out("ebx") ebx,
@@ -239,9 +241,31 @@ pub fn cpu_count() -> u32 {
         }
         if eax != 0 || ebx != 0 {
             count = ebx & 0xFFFF;
+        } else {
+            // Fallback to legacy leaf 0xB
+            unsafe {
+                asm!(
+                    "cpuid",
+                    in("eax") 0xBu32,
+                    in("ecx") 0u32,
+                    out("eax") eax,
+                    out("ebx") ebx,
+                    out("ecx") _,
+                    out("edx") _,
+                    options(nomem, nostack, preserves_flags)
+                );
+            }
+            if eax != 0 || ebx != 0 {
+                count = ebx & 0xFFFF;
+            }
         }
+        count
     }
-    count
+    #[cfg(test)]
+    {
+        // Stub for tests
+        1
+    }
 }
 
 /// Port I/O: read byte from port
