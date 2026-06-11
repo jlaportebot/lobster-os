@@ -549,3 +549,9 @@ pub unsafe extern "C" fn secondary_core_init(core_id: u64) -> ! {
     // per-core runqueue scheduler loop (never returns).
     smp::secondary_entry(core_id);
 }
+
+/// Dummy main for std feature (host testing)
+#[cfg(feature = "std")]
+fn main() {
+    // Tests use their own main via #[test] harness
+}
