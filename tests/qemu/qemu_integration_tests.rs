@@ -10,6 +10,9 @@ pub mod qemu_tests {
     // Include display tests module
     include!("display_tests.rs");
 
+    // Include GENET tests module
+    include!("genet_tests.rs");
+
     /// Test memory allocator basic functionality
     fn test_heap_allocation() -> TestResult {
         use core::alloc::{GlobalAlloc, Layout};
