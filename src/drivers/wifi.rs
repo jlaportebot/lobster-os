@@ -16,7 +16,7 @@ use crate::drivers::sdio::{self, SdioError};
 use crate::println;
 
 /// SHA-1 implementation for PBKDF2 (WPA2 PMK derivation)
-mod sha1 {
+pub mod sha1 {
     use alloc::vec::Vec;
 
     const K: [u32; 4] = [0x5A827999, 0x6ED9EBA1, 0x8F1BBCDC, 0xCA62C1D6];

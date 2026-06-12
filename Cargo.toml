@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Mister Lobster"]
 
+[lib]
+name = "lobster_os"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lobster-os"
+path = "src/main.rs"
+
 [features]
 std = []  # Enable std for host builds
 qemu = []  # Build for QEMU raspi4b emulation
@@ -14,6 +22,9 @@ log = "0.4"
 bitflags = "2.6"
 sha2 = { version = "0.10", default-features = false, features = [] }
 ed25519-dalek = { version = "1.0", default-features = false, features = ["u64_backend"] }
+
+[dev-dependencies]
+heapless = "0.8"
 
 [profile.dev]
 panic = "abort"
