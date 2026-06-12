@@ -30,15 +30,8 @@ impl FileManager {
             entries: Vec::new(),
         }
     }
-}
 
-impl Default for FileManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Refresh the directory listing
+    /// Refresh the directory listing
     pub fn refresh(&mut self) {
         self.entries.clear();
         self.selected_index = 0;
@@ -235,6 +228,12 @@ impl Default for FileManager {
         } else {
             Err("No entry selected")
         }
+    }
+}
+
+impl Default for FileManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -31,15 +31,8 @@ impl Terminal {
             input_len: 0,
         }
     }
-}
 
-impl Default for Terminal {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Feed a byte to the VT100 parser
+    /// Feed a byte to the VT100 parser
     pub fn feed_byte(&mut self, byte: u8) {
         self.parser.feed(byte, &mut self.screen);
     }
@@ -117,6 +110,12 @@ impl Default for Terminal {
     /// Mark screen as dirty (needs redraw)
     pub fn mark_dirty(&mut self) {
         self.screen.dirty = true;
+    }
+}
+
+impl Default for Terminal {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
