@@ -7,6 +7,9 @@ pub mod qemu_tests {
     use crate::qemu_test::*;
     use crate::println;
 
+    // Include display tests module
+    include!("display_tests.rs");
+
     /// Test memory allocator basic functionality
     fn test_heap_allocation() -> TestResult {
         use core::alloc::{GlobalAlloc, Layout};
@@ -171,6 +174,138 @@ pub mod qemu_tests {
         TestResult::Passed
     }
 
+    /// Test GPU driver initialization and display info
+    fn test_gpu_display_init() -> TestResult {
+        // This test runs on real hardware/QEMU where mailbox is available
+        // For now, just test that the GPU module types are accessible
+        let _info = crate::drivers::gpu::display_info();
+        let _gpu_info = crate::drivers::gpu::gpu_info();
+        let _initialized = crate::drivers::gpu::is_initialized();
+        TestResult::Passed
+    }
+
+    /// Test GPU EDID parsing (unit test - runs without hardware)
+    fn test_gpu_edid_parsing() -> TestResult {
+        use crate::drivers::gpu::{parse_edid, EdidVersion};
+        
+        // Create a minimal valid EDID block
+        let mut edid = [0u8; 128];
+        edid[0] = 0x00;
+        edid[1..7].fill(0xFF);
+        edid[7] = 0x00;
+        edid[8] = 0x10; // Manufacturer "DEL"
+        edid[9] = 0xAC;
+        edid[10] = 0x71; // Product code
+        edid[11] = 0x40;
+        edid[12..16].copy_from_slice(&[0x4E, 0x61, 0xBC, 0x00]); // Serial
+        edid[16] = 25; // Week
+        edid[17] = 30; // Year (2020)
+        edid[18] = 1; // Version major
+        edid[19] = 4; // Version minor
+        edid[20] = 0xA0;
+        edid[21] = 53;
+        edid[22] = 30;
+        edid[23] = 78;
+        edid[24] = 0x0A;
+        // ... fill rest with zeros
+        // Calculate checksum
+        let sum: u8 = edid[..127].iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
+        edid[127] = sum.wrapping_neg();
+        
+        let result = parse_edid(&edid);
+        test_assert!(result.is_ok(), "[test] EDID parsing failed");
+        
+        let info = result.unwrap();
+        test_assert_eq!(info.version.major, 1);
+        test_assert_eq!(info.version.minor, 4);
+        test_assert_eq!(info.manufacturer_id, [b'D', b'E', b'L']);
+        TestResult::Passed
+    }
+
+    /// Test HDMI hotplug state enum
+    fn test_gpu_hotplug_state() -> TestResult {
+        use crate::drivers::gpu::HotplugState;
+        test_assert_eq!(HotplugState::Disconnected as u8, 0);
+        test_assert_eq!(HotplugState::Connected as u8, 1);
+        TestResult::Passed
+    }
+
+    /// Test HDMI audio infoframe struct
+    fn test_gpu_hdmi_audio_infoframe() -> TestResult {
+        use crate::drivers::gpu::HdmiAudioInfoFrame;
+        let info = HdmiAudioInfoFrame {
+            coding_type: 1,
+            sample_rate: 3,
+            sample_size: 2,
+            channels: 2,
+            speaker_placement: 0,
+            channel_allocation: 0,
+            level_shift: 0,
+            downmix_inhibit: false,
+        };
+        test_assert_eq!(info.coding_type, 1);
+        test_assert_eq!(info.sample_rate, 3);
+        test_assert_eq!(info.channels, 2);
+        TestResult::Passed
+    }
+
+    /// Test cursor info and state
+    fn test_gpu_cursor() -> TestResult {
+        use crate::drivers::gpu::{CursorInfo, CursorState};
+        let info = CursorInfo {
+            width: 64,
+            height: 64,
+            format: 0,
+            hotspot_x: 0,
+            hotspot_y: 0,
+            data_ptr: 0x1000,
+        };
+        test_assert_eq!(info.width, 64);
+        test_assert_eq!(info.height, 64);
+        test_assert_eq!(CursorState::Hidden as u8, 0);
+        test_assert_eq!(CursorState::Visible as u8, 1);
+        TestResult::Passed
+    }
+
+    /// Test display info struct
+    fn test_gpu_display_info() -> TestResult {
+        use crate::drivers::gpu::DisplayInfo;
+        let info = DisplayInfo {
+            width: 1920,
+            height: 1080,
+            bpp: 32,
+            pitch: 7680,
+            fb_addr: 0x3F000000,
+            fb_size: 8294400,
+            pixel_order: 1,
+            alpha_mode: 0,
+        };
+        test_assert_eq!(info.width, 1920);
+        test_assert_eq!(info.height, 1080);
+        test_assert_eq!(info.bpp, 32);
+        test_assert_eq!(info.pixel_order, 1);
+        TestResult::Passed
+    }
+
+    /// Test GPU info struct
+    fn test_gpu_gpu_info() -> TestResult {
+        use crate::drivers::gpu::GpuInfo;
+        let info = GpuInfo {
+            firmware_rev: 0x12345678,
+            board_model: 0x00000011,
+            board_rev: 0x00000010,
+            vc_mem_base: 0x3A000000,
+            vc_mem_size: 0x06000000,
+            arm_mem_base: 0x00000000,
+            arm_mem_size: 0x80000000,
+            v3d_clock: 800_000_000,
+            core_clock: 600_000_000,
+        };
+        test_assert_eq!(info.firmware_rev, 0x12345678);
+        test_assert_eq!(info.v3d_clock, 800_000_000);
+        TestResult::Passed
+    }
+
     /// Register all QEMU integration tests
     pub fn register() {
         let tests = test_suite!(
@@ -188,6 +323,25 @@ pub mod qemu_tests {
             "timer" => test_timer,
             "uart_echo" => test_uart_echo,
             "interrupts" => test_interrupts,
+            "gpu_display_init" => test_gpu_display_init,
+            "gpu_edid_parsing" => test_gpu_edid_parsing,
+            "gpu_hotplug_state" => test_gpu_hotplug_state,
+            "gpu_hdmi_audio_infoframe" => test_gpu_hdmi_audio_infoframe,
+            "gpu_cursor" => test_gpu_cursor,
+            "gpu_display_info" => test_gpu_display_info,
+            "gpu_gpu_info" => test_gpu_gpu_info,
+            // Display subsystem tests
+            "fb_info_struct" => display_tests::test_fb_info_struct,
+            "fb_error_enum" => display_tests::test_fb_error_enum,
+            "graphics_draw_pixel_bounds" => display_tests::test_graphics_draw_pixel_bounds,
+            "graphics_draw_rect" => display_tests::test_graphics_draw_rect,
+            "graphics_draw_line" => display_tests::test_graphics_draw_line,
+            "graphics_draw_circle" => display_tests::test_graphics_draw_circle,
+            "graphics_fill_region" => display_tests::test_graphics_fill_region,
+            "graphics_draw_bitmap" => display_tests::test_graphics_draw_bitmap,
+            "graphics_blit" => display_tests::test_graphics_blit,
+            "console_font" => display_tests::test_console_font,
+            "graphics_draw_text" => display_tests::test_graphics_draw_text,
         );
         register_tests(tests);
     }
