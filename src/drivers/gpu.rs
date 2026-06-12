@@ -59,6 +59,11 @@ const TAG_SET_CURSOR_INFO: u32 = 0x00008010;
 const TAG_SET_CURSOR_STATE: u32 = 0x00008011;
 const TAG_GET_EDID_BLOCK: u32 = 0x00030020;
 
+// HDMI hotplug and audio tags
+const TAG_GET_HDMI_HOTPLUG: u32 = 0x0004000F;
+const TAG_SET_HDMI_HOTPLUG: u32 = 0x0004800F;
+const TAG_HDMI_AUDIO_INFOFRAME: u32 = 0x00048010;
+
 // Clock IDs
 const CLOCK_ID_ARM: u32 = 0;
 const CLOCK_ID_CORE: u32 = 2;
@@ -549,6 +554,224 @@ pub fn set_cursor_state(state: CursorState, x: u32, y: u32) -> bool {
 
 // ─── EDID Support ───────────────────────────────────────────────
 
+/// EDID version
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdidVersion {
+    pub major: u8,
+    pub minor: u8,
+}
+
+/// EDID basic display parameters
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdidDisplayParams {
+    pub video_input: u8,
+    pub horiz_size_cm: u8,
+    pub vert_size_cm: u8,
+    pub display_gamma: u8,
+    pub features: u8,
+}
+
+/// EDID detailed timing descriptor
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdidDetailedTiming {
+    pub pixel_clock: u32, // in 10kHz units
+    pub h_active: u16,
+    pub h_blanking: u16,
+    pub v_active: u16,
+    pub v_blanking: u16,
+    pub h_sync_offset: u16,
+    pub h_sync_pulse: u16,
+    pub v_sync_offset: u8,
+    pub v_sync_pulse: u8,
+    pub h_image_size: u16,
+    pub v_image_size: u16,
+    pub h_border: u8,
+    pub v_border: u8,
+    pub flags: u8,
+}
+
+/// Parsed EDID information
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdidInfo {
+    pub version: EdidVersion,
+    pub manufacturer_id: [u8; 3],
+    pub product_code: u16,
+    pub serial_number: u32,
+    pub manufacture_week: u8,
+    pub manufacture_year: u16,
+    pub display_params: EdidDisplayParams,
+    pub established_timings: [u8; 3],
+    pub standard_timings: [(u16, u8); 8],
+    pub detailed_timings: [Option<EdidDetailedTiming>; 4],
+    pub extension_count: u8,
+    pub checksum: u8,
+}
+
+/// Parse a 128-byte EDID block into structured data
+pub fn parse_edid(block: &[u8; 128]) -> Result<EdidInfo, &'static str> {
+    // Verify header: 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00
+    if block[0] != 0x00 || block[1] != 0xFF || block[2] != 0xFF || block[3] != 0xFF
+        || block[4] != 0xFF || block[5] != 0xFF || block[6] != 0xFF || block[7] != 0x00
+    {
+        return Err("Invalid EDID header");
+    }
+
+    // Manufacturer ID (compressed ASCII, 3 chars in 2 bytes)
+    let mfg_bytes = &block[8..10];
+    let mfg_id = [
+        0x40 | (mfg_bytes[0] >> 2),
+        0x40 | (((mfg_bytes[0] & 0x03) << 3) | (mfg_bytes[1] >> 5)),
+        0x40 | (mfg_bytes[1] & 0x1F),
+    ];
+
+    // Product code (little-endian)
+    let product_code = u16::from_le_bytes([block[10], block[11]]);
+
+    // Serial number (little-endian)
+    let serial_number = u32::from_le_bytes([block[12], block[13], block[14], block[15]]);
+
+    // Manufacture date
+    let manufacture_week = block[16];
+    let manufacture_year = 1990 + block[17] as u16;
+
+    // EDID version
+    let version = EdidVersion {
+        major: block[18],
+        minor: block[19],
+    };
+
+    // Display parameters
+    let display_params = EdidDisplayParams {
+        video_input: block[20],
+        horiz_size_cm: block[21],
+        vert_size_cm: block[22],
+        display_gamma: block[23],
+        features: block[24],
+    };
+
+    // Color characteristics (bytes 25-34) - skip for now
+
+    // Established timings (bytes 35-37)
+    let established_timings = [block[35], block[36], block[37]];
+
+    // Standard timings (bytes 38-53) - 8 entries of 2 bytes each
+    let mut standard_timings = [(0u16, 0u8); 8];
+    for i in 0..8 {
+        let offset = 38 + i * 2;
+        if offset + 1 < 128 {
+            let h = block[offset];
+            let v = block[offset + 1];
+            if h != 0x01 && v != 0x01 { // 0x0101 means unused
+                standard_timings[i] = (h as u16, v);
+            }
+        }
+    }
+
+    // Detailed timing descriptors (bytes 54-125) - 4 entries of 18 bytes each
+    let mut detailed_timings = [None, None, None, None];
+    for i in 0..4 {
+        let offset = 54 + i * 18;
+        if offset + 17 < 128 {
+            let dt = parse_detailed_timing(&block[offset..offset + 18]);
+            if dt.pixel_clock != 0 {
+                detailed_timings[i] = Some(dt);
+            }
+        }
+    }
+
+    // Extension count
+    let extension_count = block[126];
+
+    // Checksum
+    let checksum = block[127];
+
+    // Verify checksum
+    let sum: u8 = block.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
+    if sum != 0 {
+        return Err("EDID checksum mismatch");
+    }
+
+    Ok(EdidInfo {
+        version,
+        manufacturer_id: mfg_id,
+        product_code,
+        serial_number,
+        manufacture_week,
+        manufacture_year,
+        display_params,
+        established_timings,
+        standard_timings,
+        detailed_timings,
+        extension_count,
+        checksum,
+    })
+}
+
+/// Parse an 18-byte detailed timing descriptor
+fn parse_detailed_timing(data: &[u8]) -> EdidDetailedTiming {
+    if data.len() < 18 {
+        return EdidDetailedTiming::default();
+    }
+
+    // Check if it's a monitor descriptor (pixel clock = 0)
+    let pixel_clock = u16::from_le_bytes([data[0], data[1]]) as u32 * 10000; // 10kHz units
+    if pixel_clock == 0 {
+        return EdidDetailedTiming::default();
+    }
+
+    let h_active = u16::from_le_bytes([data[2], data[4] & 0xF0]);
+    let h_blanking = u16::from_le_bytes([data[3], data[4] & 0x0F]);
+    let v_active = u16::from_le_bytes([data[5], data[7] & 0xF0]);
+    let v_blanking = u16::from_le_bytes([data[6], data[7] & 0x0F]);
+    let h_sync_offset = u16::from_le_bytes([data[8], data[11] & 0xC0]);
+    let h_sync_pulse = u16::from_le_bytes([data[9], data[11] & 0x30]);
+    let v_sync_offset = (data[10] & 0xF0) >> 4;
+    let v_sync_pulse = data[10] & 0x0F;
+    let h_image_size = u16::from_le_bytes([data[12], data[14] & 0xF0]);
+    let v_image_size = u16::from_le_bytes([data[13], data[14] & 0x0F]);
+    let h_border = data[15];
+    let v_border = data[16];
+    let flags = data[17];
+
+    EdidDetailedTiming {
+        pixel_clock,
+        h_active,
+        h_blanking,
+        v_active,
+        v_blanking,
+        h_sync_offset,
+        h_sync_pulse,
+        v_sync_offset,
+        v_sync_pulse,
+        h_image_size,
+        v_image_size,
+        h_border,
+        v_border,
+        flags,
+    }
+}
+
+impl Default for EdidDetailedTiming {
+    fn default() -> Self {
+        EdidDetailedTiming {
+            pixel_clock: 0,
+            h_active: 0,
+            h_blanking: 0,
+            v_active: 0,
+            v_blanking: 0,
+            h_sync_offset: 0,
+            h_sync_pulse: 0,
+            v_sync_offset: 0,
+            v_sync_pulse: 0,
+            h_image_size: 0,
+            v_image_size: 0,
+            h_border: 0,
+            v_border: 0,
+            flags: 0,
+        }
+    }
+}
+
 /// Read an EDID block from the display
 pub fn get_edid_block(block_num: u32) -> [u8; 128] {
     let mut result = [0u8; 128];
@@ -572,6 +795,120 @@ pub fn get_edid_block(block_num: u32) -> [u8; 128] {
         }
     }
     result
+}
+
+/// Read and parse the base EDID block (block 0)
+pub fn read_edid() -> Result<EdidInfo, &'static str> {
+    let block = get_edid_block(0);
+    parse_edid(&block)
+}
+
+/// Get the preferred (native) resolution from EDID
+pub fn edid_preferred_resolution() -> Option<(u32, u32)> {
+    match read_edid() {
+        Ok(edid) => {
+            // First detailed timing is typically the preferred mode
+            if let Some(Some(dt)) = edid.detailed_timings.first() {
+                if dt.pixel_clock != 0 {
+                    return Some((dt.h_active as u32, dt.v_active as u32));
+                }
+            }
+            // Fallback: check standard timings
+            for (h_raw, _) in edid.standard_timings {
+                if h_raw != 0 {
+                    // Standard timing encoding: (h_raw + 31) * 8 = horizontal pixels
+                    // v_raw encodes aspect ratio and refresh rate
+                    let h = ((h_raw + 31) * 8) as u32;
+                    // Simplified: assume 16:9
+                    let v = (h * 9 / 16) as u32;
+                    return Some((h, v));
+                }
+            }
+            None
+        }
+        Err(_) => None,
+    }
+}
+
+/// HDMI hotplug state
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HotplugState {
+    Disconnected = 0,
+    Connected = 1,
+}
+
+/// Get the current HDMI hotplug state
+pub fn get_hdmi_hotplug() -> HotplugState {
+    unsafe {
+        let size = build_single_tag(TAG_GET_HDMI_HOTPLUG, &[0]);
+        if send_property_message(size) {
+            let state = PROPERTY_BUFFER[5];
+            if state != 0 {
+                HotplugState::Connected
+            } else {
+                HotplugState::Disconnected
+            }
+        } else {
+            HotplugState::Disconnected
+        }
+    }
+}
+
+/// Set the HDMI hotplug state (force enable/disable)
+pub fn set_hdmi_hotplug(state: HotplugState) -> bool {
+    unsafe {
+        let size = build_single_tag(TAG_SET_HDMI_HOTPLUG, &[state as u32]);
+        send_property_message(size)
+    }
+}
+
+/// HDMI Audio InfoFrame configuration
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HdmiAudioInfoFrame {
+    /// Audio coding type (0=refer to stream header, 1=PCM, etc.)
+    pub coding_type: u8,
+    /// Sample rate (0=refer to stream header, 1=32kHz, 2=44.1kHz, 3=48kHz, etc.)
+    pub sample_rate: u8,
+    /// Sample size (0=refer to stream header, 1=16-bit, 2=20-bit, 3=24-bit)
+    pub sample_size: u8,
+    /// Number of channels (0=refer to stream header, 1-8)
+    pub channels: u8,
+    /// Speaker placement (bitmask)
+    pub speaker_placement: u8,
+    /// Channel allocation (for 8-channel configurations)
+    pub channel_allocation: u8,
+    /// Level shift value
+    pub level_shift: u8,
+    /// Down-mix inhibit flag
+    pub downmix_inhibit: bool,
+}
+
+/// Configure HDMI audio infoframe
+/// Sends the audio infoframe to the GPU firmware for HDMI audio output
+pub fn set_hdmi_audio_infoframe(info: &HdmiAudioInfoFrame) -> bool {
+    unsafe {
+        let data = [
+            // Byte 0: coding_type + channel count
+            ((info.coding_type as u32) << 4) | (info.channels as u32 & 0x0F),
+            // Byte 1: sample_rate + sample_size
+            ((info.sample_rate as u32) << 4) | (info.sample_size as u32 & 0x0F),
+            // Byte 2: speaker_placement
+            info.speaker_placement as u32,
+            // Byte 3: channel_allocation
+            info.channel_allocation as u32,
+            // Byte 4: level_shift + downmix_inhibit
+            (info.level_shift as u32 & 0x0F) | (if info.downmix_inhibit { 0x80 } else { 0 }),
+        ];
+        let size = build_single_tag(TAG_HDMI_AUDIO_INFOFRAME, &data);
+        send_property_message(size)
+    }
+}
+
+/// Get the current HDMI audio infoframe configuration (if supported)
+pub fn get_hdmi_audio_infoframe() -> Option<HdmiAudioInfoFrame> {
+    // Note: The firmware doesn't provide a GET for this tag typically
+    // This is a placeholder for future firmware support
+    None
 }
 
 // ─── V3D Clock Management ───────────────────────────────────────
@@ -819,5 +1156,207 @@ pub fn print_status() {
                 "per-pixel"
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create a valid EDID block for testing (1920x1080 @ 60Hz)
+    fn test_edid_1920x1080() -> [u8; 128] {
+        let mut edid = [0u8; 128];
+
+        // Header
+        edid[0] = 0x00;
+        edid[1..7].fill(0xFF);
+        edid[7] = 0x00;
+
+        // Manufacturer ID: "DEL" (Dell) = 0x10, 0xAC in compressed form
+        edid[8] = 0x10;
+        edid[9] = 0xAC;
+
+        // Product code: 0x4071 (little-endian)
+        edid[10] = 0x71;
+        edid[11] = 0x40;
+
+        // Serial number: 12345678 (little-endian)
+        edid[12] = 0x4E;
+        edid[13] = 0x61;
+        edid[14] = 0xBC;
+        edid[15] = 0x00;
+
+        // Manufacture week 25, year 2020 (1990 + 30)
+        edid[16] = 25;
+        edid[17] = 30;
+
+        // EDID version 1.4
+        edid[18] = 1;
+        edid[19] = 4;
+
+        // Display parameters
+        edid[20] = 0xA0; // Digital input, DFP 1.x
+        edid[21] = 53;   // 53 cm horizontal
+        edid[22] = 30;   // 30 cm vertical
+        edid[23] = 78;   // Gamma 2.2
+        edid[24] = 0x0A; // Standby, suspend, RGB, preferred timing
+
+        // Color characteristics (simplified)
+        edid[25] = 0x6E; // Red/Green low bits
+        edid[26] = 0x50; // Blue/White low bits
+        edid[27] = 0xA4; // Red x
+        edid[28] = 0x8C; // Red y
+        edid[29] = 0x5A; // Green x
+        edid[30] = 0xA1; // Green y
+        edid[31] = 0x23; // Blue x
+        edid[32] = 0x1B; // Blue y
+        edid[33] = 0x50; // White x
+        edid[34] = 0x54; // White y
+
+        // Established timings (none)
+        edid[35] = 0x00;
+        edid[36] = 0x00;
+        edid[37] = 0x00;
+
+        // Standard timings (none - 0x0101 means unused)
+        for i in 0..8 {
+            edid[38 + i * 2] = 0x01;
+            edid[39 + i * 2] = 0x01;
+        }
+
+        // Detailed timing 1: 1920x1080 @ 60Hz
+        // Pixel clock: 148.5 MHz = 14850 * 10kHz = 0x3A02 (little-endian)
+        edid[54] = 0x02;
+        edid[55] = 0x3A;
+        // H active: 1920 = 0x0780 -> low byte 0x80, high nibble 0x07
+        // H blanking: 280 = 0x0118 -> low byte 0x18, high nibble 0x01
+        edid[56] = 0x80;
+        edid[57] = 0x18;
+        edid[58] = 0x07;
+        // V active: 1080 = 0x0438 -> low byte 0x38, high nibble 0x04
+        // V blanking: 45 = 0x002D -> low byte 0x2D, high nibble 0x00
+        edid[59] = 0x38;
+        edid[60] = 0x2D;
+        edid[61] = 0x40;
+        // H sync offset: 88 = 0x0058 -> low byte 0x58, high 2 bits 0x00
+        // H sync pulse: 44 = 0x002C -> low byte 0x2C, next 2 bits 0x00
+        // V sync offset: 4, V sync pulse: 5 -> 0x45
+        edid[62] = 0x58;
+        edid[63] = 0x2C;
+        edid[64] = 0x45;
+        // H image size: 530mm = 0x0212 -> low byte 0x12, high nibble 0x02
+        // V image size: 300mm = 0x012C -> low byte 0x2C, high nibble 0x01
+        edid[65] = 0x12;
+        edid[66] = 0x2C;
+        edid[67] = 0x21;
+        // Borders: 0
+        edid[68] = 0x00;
+        edid[69] = 0x00;
+        // Flags: 0x18 = H sync +, V sync -, interlaced
+        edid[70] = 0x18;
+
+        // Detailed timing 2-4: empty (monitor descriptors)
+        for i in 1..4 {
+            let base = 54 + i * 18;
+            for j in 0..18 {
+                edid[base + j] = 0x00;
+            }
+        }
+
+        // Extension count: 0
+        edid[126] = 0;
+
+        // Calculate checksum
+        let sum: u8 = edid[..127].iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
+        edid[127] = sum.wrapping_neg();
+
+        edid
+    }
+
+    #[test]
+    fn test_parse_edid_valid_1920x1080() {
+        let edid = test_edid_1920x1080();
+        let result = parse_edid(&edid);
+        assert!(result.is_ok(), "Failed to parse valid EDID: {:?}", result.err());
+
+        let info = result.unwrap();
+        assert_eq!(info.version.major, 1);
+        assert_eq!(info.version.minor, 4);
+        // Manufacturer "DEL"
+        assert_eq!(info.manufacturer_id, [b'D', b'E', b'L']);
+        assert_eq!(info.product_code, 0x4071);
+        assert_eq!(info.serial_number, 12345678);
+        assert_eq!(info.manufacture_week, 25);
+        assert_eq!(info.manufacture_year, 2020);
+        assert_eq!(info.display_params.horiz_size_cm, 53);
+        assert_eq!(info.display_params.vert_size_cm, 30);
+        assert_eq!(info.extension_count, 0);
+
+        // Check detailed timing
+        assert!(info.detailed_timings[0].is_some());
+        let dt = info.detailed_timings[0].unwrap();
+        assert_eq!(dt.h_active, 1920);
+        assert_eq!(dt.v_active, 1080);
+        assert_eq!(dt.pixel_clock, 148500000); // 148.5 MHz in Hz
+    }
+
+    #[test]
+    fn test_parse_edid_invalid_header() {
+        let mut edid = test_edid_1920x1080();
+        edid[0] = 0xFF; // Corrupt header
+        let result = parse_edid(&edid);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid EDID header");
+    }
+
+    #[test]
+    fn test_parse_edid_checksum_mismatch() {
+        let mut edid = test_edid_1920x1080();
+        edid[127] = edid[127].wrapping_add(1); // Corrupt checksum
+        let result = parse_edid(&edid);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "EDID checksum mismatch");
+    }
+
+    #[test]
+    fn test_parse_detailed_timing_1920x1080() {
+        let edid = test_edid_1920x1080();
+        let dt = parse_detailed_timing(&edid[54..72]);
+        assert_eq!(dt.h_active, 1920);
+        assert_eq!(dt.v_active, 1080);
+        assert_eq!(dt.pixel_clock, 148500000);
+        assert_eq!(dt.h_blanking, 280);
+        assert_eq!(dt.v_blanking, 45);
+    }
+
+    #[test]
+    fn test_edid_preferred_resolution() {
+        // This test would require the mailbox to work, so we just test the parsing
+        // The function read_edid() calls get_edid_block which needs hardware
+        // We test the logic by creating a mock scenario
+        let edid = test_edid_1920x1080();
+        let info = parse_edid(&edid).unwrap();
+
+        // First detailed timing should be preferred
+        let pref = info.detailed_timings[0].unwrap();
+        assert_eq!(pref.h_active, 1920);
+        assert_eq!(pref.v_active, 1080);
+    }
+
+    #[test]
+    fn test_manufacturer_id_decoding() {
+        // Test various manufacturer IDs
+        // "ABC" = 0x41, 0x42, 0x43
+        // Compressed: byte0 = (0x41-0x40)<<2 | (0x42-0x40)>>3 = 0x04 | 0x00 = 0x04
+        //           byte1 = ((0x42-0x40)&0x07)<<5 | (0x43-0x40) = 0x02<<5 | 0x03 = 0x43
+        let mut edid = test_edid_1920x1080();
+        edid[8] = 0x04;
+        edid[9] = 0x43;
+        // Recalculate checksum
+        let sum: u8 = edid[..127].iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
+        edid[127] = sum.wrapping_neg();
+
+        let info = parse_edid(&edid).unwrap();
+        assert_eq!(info.manufacturer_id, [b'A', b'B', b'C']);
     }
 }

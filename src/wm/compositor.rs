@@ -1,8 +1,8 @@
-//! Compositor — double-buffered scene composition for LobsterOS
+//! Compositor — double/triple-buffered scene composition for LobsterOS
 //!
-//! The compositor maintains a back buffer, renders all windows into it
-//! (painter's algorithm: bottom to top), then swaps it to the front buffer
-//! in a single blit operation for flicker-free display.
+//! The compositor maintains multiple buffers for flicker-free display:
+//! - Double buffering: front + back (current implementation)
+//! - Triple buffering: front + middle + back (lower latency, better throughput)
 //!
 //! Optimization: dirty rectangles track which regions changed so we only
 //! repaint the affected areas.
@@ -17,6 +17,18 @@ const MAX_DIRTY: usize = 8;
 
 /// Maximum number of layers (windows) the compositor tracks
 const MAX_LAYERS: usize = 8;
+
+/// Buffering mode
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BufferingMode {
+    /// Double buffering (front + back)
+    Double,
+    /// Triple buffering (front + middle + back)
+    Triple,
+}
+
+/// Default buffering mode
+const DEFAULT_BUFFERING: BufferingMode = BufferingMode::Triple;
 
 // ─── Dirty Rectangle ──────────────────────────────────────────────────
 
@@ -113,10 +125,18 @@ struct RawPtr(*mut u32);
 unsafe impl Send for RawPtr {}
 unsafe impl Sync for RawPtr {}
 
-/// Back buffer dimensions and pointer
+/// Buffer pointers for double/triple buffering
+/// - front: currently displayed (read by display hardware)
+/// - middle: ready to be displayed next (triple buffering only)
+/// - back: being rendered to by CPU
+static FRONT_BUF: Spinlock<Option<RawPtr>> = Spinlock::new(None);
+static MIDDLE_BUF: Spinlock<Option<RawPtr>> = Spinlock::new(None);
 static BACK_BUF: Spinlock<Option<RawPtr>> = Spinlock::new(None);
 static BACK_BUF_SIZE: Spinlock<usize> = Spinlock::new(0);
 static FB_INFO: Spinlock<Option<FramebufferInfo>> = Spinlock::new(None);
+
+/// Current buffering mode
+static BUFFERING_MODE: Spinlock<BufferingMode> = Spinlock::new(DEFAULT_BUFFERING);
 
 /// Dirty rectangle list
 static DIRTY_LIST: Spinlock<[DirtyRect; MAX_DIRTY]> = Spinlock::new([DirtyRect::zero(); MAX_DIRTY]);
@@ -139,34 +159,57 @@ pub fn init(fb: FramebufferInfo) {
     *LAYER_COUNT.lock() = 0;
     *FULL_REDRAW.lock() = true;
 
-    // Allocate back buffer (same size as framebuffer)
+    // Allocate buffers (same size as framebuffer)
     let fb = FB_INFO.lock();
     let fb = fb.as_ref().expect("FB_INFO not set");
     let total_pixels = (fb.width * fb.height) as usize;
     *BACK_BUF_SIZE.lock() = total_pixels * 4;
-    let back_buf_size = *BACK_BUF_SIZE.lock();
+    let buf_size = *BACK_BUF_SIZE.lock();
 
-    // Allocate from heap
-    let layout = core::alloc::Layout::from_size_align(back_buf_size, 16).unwrap();
-    let ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
-    if ptr.is_null() {
+    let layout = core::alloc::Layout::from_size_align(buf_size, 16).unwrap();
+
+    // Allocate back buffer (CPU writes here)
+    let back_ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
+    if back_ptr.is_null() {
         println!(
             "[compositor] FATAL: cannot allocate back buffer ({} bytes)",
-            back_buf_size
+            buf_size
         );
         return;
     }
-    *BACK_BUF.lock() = Some(RawPtr(ptr as *mut u32));
+    *BACK_BUF.lock() = Some(RawPtr(back_ptr as *mut u32));
+    unsafe { core::ptr::write_bytes(back_ptr, 0, buf_size); }
 
-    // Clear back buffer to black
-    unsafe {
-        core::ptr::write_bytes(ptr, 0, back_buf_size);
+    // Allocate middle buffer (triple buffering)
+    let middle_ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
+    if middle_ptr.is_null() {
+        println!(
+            "[compositor] FATAL: cannot allocate middle buffer ({} bytes)",
+            buf_size
+        );
+        return;
     }
+    *MIDDLE_BUF.lock() = Some(RawPtr(middle_ptr as *mut u32));
+    unsafe { core::ptr::write_bytes(middle_ptr, 0, buf_size); }
+
+    // Allocate front buffer (initially same as back)
+    let front_ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
+    if front_ptr.is_null() {
+        println!(
+            "[compositor] FATAL: cannot allocate front buffer ({} bytes)",
+            buf_size
+        );
+        return;
+    }
+    *FRONT_BUF.lock() = Some(RawPtr(front_ptr as *mut u32));
+    unsafe { core::ptr::write_bytes(front_ptr, 0, buf_size); }
 
     println!(
-        "[compositor] Back buffer at {:#x} ({} KB)",
-        ptr as u64,
-        back_buf_size / 1024
+        "[compositor] Triple buffering: front={:#x} middle={:#x} back={:#x} ({} KB each)",
+        front_ptr as u64,
+        middle_ptr as u64,
+        back_ptr as u64,
+        buf_size / 1024
     );
 }
 
@@ -328,7 +371,7 @@ pub fn composite() {
         }
     };
 
-    let back_buf = {
+    let back_buffer = {
         let back_buf_opt = BACK_BUF.lock();
         match back_buf_opt.as_ref() {
             Some(buf) => buf.0,
@@ -340,7 +383,7 @@ pub fn composite() {
 
     if do_full {
         // Full redraw: draw wallpaper first
-        draw_wallpaper(fb, back_buf);
+        draw_wallpaper(fb, back_buffer);
 
         // Sort layers by z_order (simple bubble sort — small N)
         sort_layers();
@@ -355,8 +398,8 @@ pub fn composite() {
             }
         }
 
-        // Blit entire back buffer to front
-        blit_full(fb, back_buf);
+        // Triple buffering: rotate buffers and present
+        rotate_and_present(fb, back_buffer);
 
         *FULL_REDRAW.lock() = false;
         *DIRTY_COUNT.lock() = 0;
@@ -372,7 +415,7 @@ pub fn composite() {
 
         for rect in dirty_list.iter() {
             // Clear dirty rect with wallpaper
-            fill_back_buffer_rect_with_wallpaper(fb, back_buf, rect.x, rect.y, rect.w, rect.h);
+            fill_back_buffer_rect_with_wallpaper(fb, back_buffer, rect.x, rect.y, rect.w, rect.h);
 
             // Re-render layers that overlap this dirty rect
             let layers = LAYERS.lock();
@@ -394,12 +437,120 @@ pub fn composite() {
             }
         }
 
-        // Blit dirty rects to front buffer
-        for rect in dirty_list.iter() {
-            blit_rect(fb, back_buf, rect);
-        }
+        // Triple buffering: rotate buffers and present dirty rects
+        rotate_and_present_dirty(fb, back_buffer, &dirty_list);
 
         *DIRTY_COUNT.lock() = 0;
+    }
+}
+
+/// Rotate triple buffers and present the front buffer to the display
+/// Rotation: back -> middle -> front -> back (for next frame)
+fn rotate_and_present(fb: FramebufferInfo, back_buffer: *mut u32) {
+    let mode = *BUFFERING_MODE.lock();
+    match mode {
+        BufferingMode::Double => {
+            // Double buffering: back -> front
+            let front_buf = {
+                let front_buf_opt = FRONT_BUF.lock();
+                match front_buf_opt.as_ref() {
+                    Some(buf) => buf.0,
+                    None => return,
+                }
+            };
+            blit_full(fb, front_buf, back_buffer);
+            // Swap back and front pointers for next frame
+            let mut back_buf_lock = BACK_BUF.lock();
+            let mut front_buf_lock = FRONT_BUF.lock();
+            core::mem::swap(&mut *back_buf_lock, &mut *front_buf_lock);
+        }
+        BufferingMode::Triple => {
+            // Triple buffering: back -> middle -> front -> display
+            let front_buf = {
+                let front_buf_opt = FRONT_BUF.lock();
+                match front_buf_opt.as_ref() {
+                    Some(buf) => buf.0,
+                    None => return,
+                }
+            };
+            let middle_buf = {
+                let middle_buf_opt = MIDDLE_BUF.lock();
+                match middle_buf_opt.as_ref() {
+                    Some(buf) => buf.0,
+                    None => return,
+                }
+            };
+
+            // Blit middle to front (middle has the completed frame from last rotation)
+            blit_full(fb, front_buf, middle_buf);
+
+            // Rotate pointers: back becomes middle, middle becomes front, front becomes back
+            let mut back_buf_lock = BACK_BUF.lock();
+            let mut middle_buf_lock = MIDDLE_BUF.lock();
+            let mut front_buf_lock = FRONT_BUF.lock();
+
+            let back_ptr = back_buf_lock.take();
+            let middle_ptr = middle_buf_lock.take();
+            let front_ptr = front_buf_lock.take();
+
+            *middle_buf_lock = back_ptr;   // back -> middle
+            *front_buf_lock = middle_ptr;  // middle -> front
+            *back_buf_lock = front_ptr;    // front -> back (will be rendered to next)
+        }
+    }
+}
+
+/// Rotate triple buffers and present only dirty rects
+fn rotate_and_present_dirty(fb: FramebufferInfo, back_buffer: *mut u32, dirty_list: &[DirtyRect]) {
+    let mode = *BUFFERING_MODE.lock();
+    match mode {
+        BufferingMode::Double => {
+            let front_buf = {
+                let front_buf_opt = FRONT_BUF.lock();
+                match front_buf_opt.as_ref() {
+                    Some(buf) => buf.0,
+                    None => return,
+                }
+            };
+            for rect in dirty_list {
+                blit_rect(fb, front_buf, back_buffer, rect);
+            }
+            let mut back_buf_lock = BACK_BUF.lock();
+            let mut front_buf_lock = FRONT_BUF.lock();
+            core::mem::swap(&mut *back_buf_lock, &mut *front_buf_lock);
+        }
+        BufferingMode::Triple => {
+            let front_buf = {
+                let front_buf_opt = FRONT_BUF.lock();
+                match front_buf_opt.as_ref() {
+                    Some(buf) => buf.0,
+                    None => return,
+                }
+            };
+            let middle_buf = {
+                let middle_buf_opt = MIDDLE_BUF.lock();
+                match middle_buf_opt.as_ref() {
+                    Some(buf) => buf.0,
+                    None => return,
+                }
+            };
+
+            for rect in dirty_list {
+                blit_rect(fb, front_buf, middle_buf, rect);
+            }
+
+            let mut back_buf_lock = BACK_BUF.lock();
+            let mut middle_buf_lock = MIDDLE_BUF.lock();
+            let mut front_buf_lock = FRONT_BUF.lock();
+
+            let back_ptr = back_buf_lock.take();
+            let middle_ptr = middle_buf_lock.take();
+            let front_ptr = front_buf_lock.take();
+
+            *middle_buf_lock = back_ptr;
+            *front_buf_lock = middle_ptr;
+            *back_buf_lock = front_ptr;
+        }
     }
 }
 
@@ -594,27 +745,25 @@ fn set_back_pixel(fb: FramebufferInfo, back_buf: *mut u32, x: u32, y: u32, color
     }
 }
 
-/// Blit the entire back buffer to the front framebuffer
-fn blit_full(fb: FramebufferInfo, back_buf: *mut u32) {
+/// Blit the entire source buffer to the destination buffer
+fn blit_full(fb: FramebufferInfo, dst: *mut u32, src: *mut u32) {
     unsafe {
-        if back_buf.is_null() {
+        if src.is_null() || dst.is_null() {
             return;
         }
-        let front = fb.base_addr as *mut u32;
         let total = (fb.width * fb.height) as usize;
         for i in 0..total {
-            core::ptr::write_volatile(front.add(i), core::ptr::read_volatile(back_buf.add(i)));
+            core::ptr::write_volatile(dst.add(i), core::ptr::read_volatile(src.add(i)));
         }
     }
 }
 
-/// Blit a dirty rectangle from back to front buffer
-fn blit_rect(fb: FramebufferInfo, back_buf: *mut u32, rect: &DirtyRect) {
+/// Blit a dirty rectangle from source to destination buffer
+fn blit_rect(fb: FramebufferInfo, dst: *mut u32, src: *mut u32, rect: &DirtyRect) {
     unsafe {
-        if back_buf.is_null() {
+        if src.is_null() || dst.is_null() {
             return;
         }
-        let front = fb.base_addr as *mut u32;
         let pitch = fb.width;
         for dy in 0..rect.h {
             let py = rect.y + dy;
@@ -627,8 +776,8 @@ fn blit_rect(fb: FramebufferInfo, back_buf: *mut u32, rect: &DirtyRect) {
                     break;
                 }
                 let idx = (py * pitch + px) as usize;
-                let pixel = core::ptr::read_volatile(back_buf.add(idx));
-                core::ptr::write_volatile(front.add(idx), pixel);
+                let pixel = core::ptr::read_volatile(src.add(idx));
+                core::ptr::write_volatile(dst.add(idx), pixel);
             }
         }
     }
@@ -645,6 +794,27 @@ pub fn fb_info() -> Option<FramebufferInfo> {
 /// Get the number of registered layers
 pub fn layer_count() -> usize {
     *LAYER_COUNT.lock()
+}
+
+/// Get the current buffering mode
+pub fn buffering_mode() -> BufferingMode {
+    *BUFFERING_MODE.lock()
+}
+
+/// Set the buffering mode (double or triple buffering)
+/// Note: Changing mode requires reinitialization for full effect
+pub fn set_buffering_mode(mode: BufferingMode) {
+    *BUFFERING_MODE.lock() = mode;
+    mark_full_redraw();
+}
+
+/// Get the total buffer memory usage in bytes
+pub fn buffer_memory_usage() -> usize {
+    let buf_size = *BACK_BUF_SIZE.lock();
+    match *BUFFERING_MODE.lock() {
+        BufferingMode::Double => buf_size * 2,
+        BufferingMode::Triple => buf_size * 3,
+    }
 }
 
 // ─── Wallpaper Support ─────────────────────────────────────────────────
@@ -728,5 +898,121 @@ fn draw_wallpaper(fb: FramebufferInfo, back_buf: *mut u32) {
         for i in 0..total {
             core::ptr::write_volatile(back_buf.add(i), color);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_buffering_mode_enum() {
+        assert_eq!(BufferingMode::Double as u8, 0);
+        assert_eq!(BufferingMode::Triple as u8, 1);
+    }
+
+    #[test]
+    fn test_buffering_mode_partial_eq() {
+        assert_eq!(BufferingMode::Double, BufferingMode::Double);
+        assert_eq!(BufferingMode::Triple, BufferingMode::Triple);
+        assert_ne!(BufferingMode::Double, BufferingMode::Triple);
+    }
+
+    #[test]
+    fn test_buffering_mode_debug() {
+        let double_str = format!("{:?}", BufferingMode::Double);
+        let triple_str = format!("{:?}", BufferingMode::Triple);
+        assert_eq!(double_str, "Double");
+        assert_eq!(triple_str, "Triple");
+    }
+
+    #[test]
+    fn test_dirty_rect_zero() {
+        let rect = DirtyRect::zero();
+        assert_eq!(rect.x, 0);
+        assert_eq!(rect.y, 0);
+        assert_eq!(rect.w, 0);
+        assert_eq!(rect.h, 0);
+    }
+
+    #[test]
+    fn test_dirty_rect_overlaps() {
+        let rect1 = DirtyRect { x: 10, y: 10, w: 100, h: 100 };
+        let rect2 = DirtyRect { x: 50, y: 50, w: 100, h: 100 };
+        let rect3 = DirtyRect { x: 200, y: 200, w: 100, h: 100 };
+
+        assert!(rect1.overlaps(&rect2));
+        assert!(rect2.overlaps(&rect1));
+        assert!(!rect1.overlaps(&rect3));
+        assert!(!rect3.overlaps(&rect1));
+    }
+
+    #[test]
+    fn test_dirty_rect_merge() {
+        let rect1 = DirtyRect { x: 10, y: 10, w: 100, h: 100 };
+        let rect2 = DirtyRect { x: 50, y: 50, w: 100, h: 100 };
+        let merged = rect1.merge(&rect2);
+
+        assert_eq!(merged.x, 10);
+        assert_eq!(merged.y, 10);
+        assert_eq!(merged.w, 140); // max(110, 150) - 10 = 140
+        assert_eq!(merged.h, 140); // max(110, 150) - 10 = 140
+    }
+
+    #[test]
+    fn test_layer_zero() {
+        let layer = Layer::zero();
+        assert_eq!(layer.id, 0);
+        assert_eq!(layer.x, 0);
+        assert_eq!(layer.y, 0);
+        assert_eq!(layer.w, 0);
+        assert_eq!(layer.h, 0);
+        assert_eq!(layer.z_order, 0);
+        assert!(!layer.visible);
+        assert!(!layer.has_alpha);
+        assert_eq!(layer.opacity, 255);
+    }
+
+    #[test]
+    fn test_layer_bounds() {
+        let layer = Layer {
+            id: 1,
+            x: 100,
+            y: 200,
+            w: 800,
+            h: 600,
+            z_order: 0,
+            visible: true,
+            has_alpha: false,
+            opacity: 255,
+        };
+        let bounds = layer.bounds();
+        assert_eq!(bounds.x, 100);
+        assert_eq!(bounds.y, 200);
+        assert_eq!(bounds.w, 800);
+        assert_eq!(bounds.h, 600);
+    }
+
+    #[test]
+    fn test_hotplug_state_enum() {
+        assert_eq!(HotplugState::Disconnected as u8, 0);
+        assert_eq!(HotplugState::Connected as u8, 1);
+    }
+
+    #[test]
+    fn test_hdmi_audio_infoframe_default() {
+        let info = HdmiAudioInfoFrame {
+            coding_type: 1, // PCM
+            sample_rate: 3, // 48kHz
+            sample_size: 2, // 20-bit
+            channels: 2,    // stereo
+            speaker_placement: 0,
+            channel_allocation: 0,
+            level_shift: 0,
+            downmix_inhibit: false,
+        };
+        assert_eq!(info.coding_type, 1);
+        assert_eq!(info.sample_rate, 3);
+        assert_eq!(info.channels, 2);
     }
 }
