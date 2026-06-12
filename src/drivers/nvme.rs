@@ -341,7 +341,8 @@ impl Default for NvmeQueue {
     }
 }
 
-/// Create a queue pair with allocated memory
+impl NvmeQueue {
+    /// Create a queue pair with allocated memory
     pub fn create(qid: u16, depth: u16) -> Option<Self> {
         let sq_size = depth as usize * size_of::<NvmeCmd>();
         let cq_size = depth as usize * size_of::<NvmeCqe>();
@@ -414,8 +415,7 @@ impl Default for NvmeQueue {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// NVMe Controller State
+/// NVMe Controller State
 // ═══════════════════════════════════════════════════════════════════
 
 /// NVMe controller instance
