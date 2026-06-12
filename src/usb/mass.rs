@@ -212,7 +212,13 @@ impl CommandBlockWrapper {
 
     /// Create a CBW for TEST UNIT READY
     pub fn test_unit_ready(tag: u32, lun: u8) -> Self {
-        Self::new(tag, 0, true, lun, &[ScsiOpcode::TestUnitReady as u8, 0, 0, 0, 0, 0])
+        Self::new(
+            tag,
+            0,
+            true,
+            lun,
+            &[ScsiOpcode::TestUnitReady as u8, 0, 0, 0, 0, 0],
+        )
     }
 
     /// Create a CBW for REQUEST SENSE
@@ -452,7 +458,7 @@ fn register_device(slot_id: u8, port: u8, subclass: u8, protocol: u8) {
                 block_size: BLOCK_SIZE,
                 last_lba: 0,
                 removable: false,
-                ep_in: 1, // Default to EP1 IN
+                ep_in: 1,  // Default to EP1 IN
                 ep_out: 2, // Default to EP2 OUT
                 tag_counter: 0,
                 initialized: false,

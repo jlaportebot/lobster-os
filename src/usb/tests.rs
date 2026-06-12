@@ -5,11 +5,11 @@
 
 #[cfg(all(feature = "qemu", target_arch = "aarch64"))]
 pub mod usb_tests {
+    use crate::println;
     use crate::qemu_test::*;
     use crate::test_assert;
     use crate::test_assert_eq;
     use crate::test_suite;
-    use crate::println;
     use crate::usb::hub::*;
     use crate::usb::mass::*;
 
@@ -94,8 +94,8 @@ pub mod usb_tests {
             0x20, // Additional length = 32
             0x00, 0x00, 0x00, // Reserved
             b'L', b'O', b'B', b'S', b'T', b'E', b'R', b' ', // Vendor: "LOBSTER "
-            b'U', b'S', b'B', b' ', b'D', b'R', b'I', b'V',
-            b'E', b' ', b'1', b'0', b'2', b'4', b' ', b' ', // Product: "USB DRIVE 1024  "
+            b'U', b'S', b'B', b' ', b'D', b'R', b'I', b'V', b'E', b' ', b'1', b'0', b'2', b'4',
+            b' ', b' ', // Product: "USB DRIVE 1024  "
             b'1', b'.', b'0', b'0', // Revision: "1.00"
         ];
 
@@ -158,8 +158,8 @@ pub mod usb_tests {
 
     fn test_mass_scsi_sense_no_sense() -> TestResult {
         let bytes = [
-            0x70, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x70, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
         ];
         let sense = ScsiSense::from_bytes(&bytes).expect("parse failed");
         test_assert!(sense.is_no_sense());
@@ -168,8 +168,8 @@ pub mod usb_tests {
 
     fn test_mass_scsi_sense_unit_attention() -> TestResult {
         let bytes = [
-            0x70, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x0A,
-            0x00, 0x00, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x70, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x28, 0x00,
+            0x00, 0x00, 0x00, 0x00,
         ];
         let sense = ScsiSense::from_bytes(&bytes).expect("parse failed");
         test_assert!(sense.is_unit_attention());
@@ -199,8 +199,8 @@ pub mod usb_tests {
 
     fn test_mass_csw_failed() -> TestResult {
         let bytes: [u8; 13] = [
-            0x55, 0x53, 0x42, 0x53, 0x01, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x01, // Status = FAILED
+            0x55, 0x53, 0x42, 0x53, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x01, // Status = FAILED
         ];
         let csw = CommandStatusWrapper::from_bytes(&bytes).expect("parse failed");
         test_assert!(csw.is_failed());
@@ -210,8 +210,8 @@ pub mod usb_tests {
 
     fn test_mass_csw_phase_error() -> TestResult {
         let bytes: [u8; 13] = [
-            0x55, 0x53, 0x42, 0x53, 0x01, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x02, // Status = PHASE ERROR
+            0x55, 0x53, 0x42, 0x53, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x02, // Status = PHASE ERROR
         ];
         let csw = CommandStatusWrapper::from_bytes(&bytes).expect("parse failed");
         test_assert!(csw.is_phase_error());
@@ -221,9 +221,7 @@ pub mod usb_tests {
     fn test_mass_csw_invalid_signature() -> TestResult {
         let bytes: [u8; 13] = [
             0xAA, 0xBB, 0xCC, 0xDD, // Bad signature
-            0x01, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00,
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
         let csw = CommandStatusWrapper::from_bytes(&bytes).expect("parse failed");
         test_assert!(!csw.valid_signature());

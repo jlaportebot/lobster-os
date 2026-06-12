@@ -70,7 +70,8 @@ impl HubDescriptor {
         let mut port_pwr_ctrl_mask = [0u8; 2];
 
         device_removable[..bitmap_len].copy_from_slice(&bytes[7..7 + bitmap_len]);
-        port_pwr_ctrl_mask[..bitmap_len].copy_from_slice(&bytes[7 + bitmap_len..7 + 2 * bitmap_len]);
+        port_pwr_ctrl_mask[..bitmap_len]
+            .copy_from_slice(&bytes[7 + bitmap_len..7 + 2 * bitmap_len]);
 
         Some(HubDescriptor {
             b_length,
@@ -196,10 +197,10 @@ impl HubPortStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HubPortSpeed {
     Unknown,
-    Low,    // 1.5 Mbps
-    Full,   // 12 Mbps
-    High,   // 480 Mbps
-    Super,  // 5 Gbps (USB 3.0)
+    Low,   // 1.5 Mbps
+    Full,  // 12 Mbps
+    High,  // 480 Mbps
+    Super, // 5 Gbps (USB 3.0)
 }
 
 impl HubPortSpeed {
@@ -245,11 +246,11 @@ pub enum HubFeature {
     PortReset = 0x14,
     PortPower = 0x18,
     PortLowSpeed = 0x19,
-    PortConnectionChange = 0x20, // C_PortConnection
-    PortEnableChange = 0x21,     // C_PortEnable
-    PortSuspendChange = 0x22,    // C_PortSuspend
+    PortConnectionChange = 0x20,  // C_PortConnection
+    PortEnableChange = 0x21,      // C_PortEnable
+    PortSuspendChange = 0x22,     // C_PortSuspend
     PortOverCurrentChange = 0x23, // C_PortOverCurrent
-    PortResetChange = 0x24,      // C_PortReset
+    PortResetChange = 0x24,       // C_PortReset
     PortTest = 0x25,
     PortIndicator = 0x26,
 }
@@ -259,8 +260,8 @@ pub enum HubFeature {
 pub struct HubDevice {
     pub active: bool,
     pub slot_id: u8,
-    pub port: u8,          // Root hub port this hub is connected to
-    pub hub_addr: u8,      // USB address of the hub
+    pub port: u8,     // Root hub port this hub is connected to
+    pub hub_addr: u8, // USB address of the hub
     pub nbr_ports: u8,
     pub tt_think_time: u8,
     pub per_port_power: bool,
@@ -280,7 +281,10 @@ impl HubDevice {
         per_port_power: false,
         per_port_overcurrent: false,
         compound_device: false,
-        port_status: [HubPortStatus { w_port_status: 0, w_port_change: 0 }; MAX_HUB_PORTS],
+        port_status: [HubPortStatus {
+            w_port_status: 0,
+            w_port_change: 0,
+        }; MAX_HUB_PORTS],
     };
 }
 
@@ -362,11 +366,17 @@ fn register_hub(slot_id: u8, root_port: u8, desc: HubDescriptor) {
                 per_port_power: desc.per_port_power_switching(),
                 per_port_overcurrent: desc.per_port_overcurrent(),
                 compound_device: desc.compound_device(),
-                port_status: [HubPortStatus { w_port_status: 0, w_port_change: 0 }; MAX_HUB_PORTS],
+                port_status: [HubPortStatus {
+                    w_port_status: 0,
+                    w_port_change: 0,
+                }; MAX_HUB_PORTS],
             });
             println!(
                 "[hub] Registered hub: slot={}, ports={}, per_port_power={}, compound={}",
-                slot_id, desc.b_nbr_ports, desc.per_port_power_switching(), desc.compound_device()
+                slot_id,
+                desc.b_nbr_ports,
+                desc.per_port_power_switching(),
+                desc.compound_device()
             );
             return;
         }
@@ -460,7 +470,10 @@ fn enumerate_hub_port(hub_slot_id: u8, port: u8) {
     // 6. Set configuration
     // 7. If it's a hub, recursively register it
 
-    println!("[hub] Enumerating device on hub slot {} port {}", hub_slot_id, port);
+    println!(
+        "[hub] Enumerating device on hub slot {} port {}",
+        hub_slot_id, port
+    );
 }
 
 /// Clear a port feature on hub
@@ -471,7 +484,10 @@ fn clear_port_feature(slot_id: u8, port: u8, feature: HubFeature) {
     // wValue = feature selector
     // wIndex = port number
     // wLength = 0
-    println!("[hub] ClearFeature: slot={}, port={}, feature={:?}", slot_id, port, feature);
+    println!(
+        "[hub] ClearFeature: slot={}, port={}, feature={:?}",
+        slot_id, port, feature
+    );
 }
 
 /// Set a port feature on hub
@@ -482,7 +498,10 @@ fn set_port_feature(slot_id: u8, port: u8, feature: HubFeature) {
     // wValue = feature selector
     // wIndex = port number
     // wLength = 0
-    println!("[hub] SetFeature: slot={}, port={}, feature={:?}", slot_id, port, feature);
+    println!(
+        "[hub] SetFeature: slot={}, port={}, feature={:?}",
+        slot_id, port, feature
+    );
 }
 
 /// Reset a hub port
