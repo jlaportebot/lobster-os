@@ -77,6 +77,186 @@ const POWER_DOMAIN_USB: u32 = 0;
 const POWER_DOMAIN_UART0: u32 = 2;
 const POWER_DOMAIN_UART1: u32 = 3;
 
+// ─── VSYNC / Frame Timing ───────────────────────────────────────
+/// Display timing information for VSYNC calculation
+#[derive(Clone, Copy, Debug)]
+pub struct DisplayTiming {
+    pub h_active: u32,
+    pub h_front_porch: u32,
+    pub h_sync_pulse: u32,
+    pub h_back_porch: u32,
+    pub v_active: u32,
+    pub v_front_porch: u32,
+    pub v_sync_pulse: u32,
+    pub v_back_porch: u32,
+    pub pixel_clock_hz: u32,
+    pub flags: u32, // interlaced, vsync polarity, hsync polarity
+}
+
+impl DisplayTiming {
+    /// Calculate total horizontal pixels per line
+    pub fn h_total(&self) -> u32 {
+        self.h_active + self.h_front_porch + self.h_sync_pulse + self.h_back_porch
+    }
+
+    /// Calculate total vertical lines per frame
+    pub fn v_total(&self) -> u32 {
+        self.v_active + self.v_front_porch + self.v_sync_pulse + self.v_back_porch
+    }
+
+    /// Calculate refresh rate in Hz (from pixel clock and timing)
+    pub fn refresh_rate_hz(&self) -> u32 {
+        if self.h_total() == 0 || self.v_total() == 0 {
+            return 60; // fallback
+        }
+        self.pixel_clock_hz / (self.h_total() * self.v_total())
+    }
+
+    /// Calculate frame time in microseconds
+    pub fn frame_time_us(&self) -> u32 {
+        let rate = self.refresh_rate_hz();
+        if rate == 0 {
+            return 16667; // ~60Hz fallback
+        }
+        1_000_000 / rate
+    }
+}
+
+static mut DISPLAY_TIMING: Option<DisplayTiming> = None;
+
+/// Calculate display timing from current display settings and pixel clock
+pub fn calculate_display_timing() -> Option<DisplayTiming> {
+    unsafe {
+        let disp = DISPLAY_INFO;
+        // Better: query pixel clock directly
+        let pixel_clock = query_clock_rate(CLOCK_ID_PIXEL);
+
+        if disp.width == 0 || disp.height == 0 || pixel_clock == 0 {
+            return None;
+        }
+
+        // Estimate timing from standard CVT/GTF formulas
+        // For now, use simplified calculation based on common timings
+        let h_active = disp.width;
+        let v_active = disp.height;
+
+        // Standard reduced blanking timings (CVT-RB)
+        let h_front_porch = 48;
+        let h_sync_pulse = 32;
+        let h_back_porch = 80;
+        let v_front_porch = 3;
+        let v_sync_pulse = 5;
+        let v_back_porch = 23;
+
+        let timing = DisplayTiming {
+            h_active,
+            h_front_porch,
+            h_sync_pulse,
+            h_back_porch,
+            v_active,
+            v_front_porch,
+            v_sync_pulse,
+            v_back_porch,
+            pixel_clock_hz: pixel_clock,
+            flags: 0,
+        };
+
+        DISPLAY_TIMING = Some(timing);
+        Some(timing)
+    }
+}
+
+/// Get the cached display timing
+pub fn display_timing() -> Option<DisplayTiming> {
+    unsafe { DISPLAY_TIMING }
+}
+
+/// Wait for the next VSYNC using high-resolution timer
+/// Returns the timestamp (microseconds) when VSYNC occurred
+pub fn wait_for_vsync() -> u64 {
+    let timing = unsafe { DISPLAY_TIMING };
+    let frame_us = match timing {
+        Some(t) => t.frame_time_us(),
+        None => 16667, // ~60Hz fallback
+    };
+
+    let start_us = crate::arch::timer::Timer::system_time_us();
+    let frame_us64 = frame_us as u64;
+
+    // Calculate when next VSYNC should occur
+    let elapsed_since_vsync = start_us % frame_us64;
+    let target_us = start_us + (frame_us64 - elapsed_since_vsync);
+
+    // Busy-wait with yield to avoid hogging CPU
+    loop {
+        let now = crate::arch::timer::Timer::system_time_us();
+        if now >= target_us {
+            return now;
+        }
+        // Short spin for precision near target
+        if target_us - now < 100 {
+            crate::arch::cpu::nop();
+        } else {
+            crate::arch::cpu::wfe();
+        }
+    }
+}
+
+/// Wait for VSYNC with timeout
+/// Returns Some(timestamp) on VSYNC, None on timeout
+pub fn wait_for_vsync_timeout(timeout_us: u64) -> Option<u64> {
+    let timing = unsafe { DISPLAY_TIMING };
+    let frame_us = match timing {
+        Some(t) => t.frame_time_us(),
+        None => 16667,
+    };
+
+    let start_us = crate::arch::timer::Timer::system_time_us();
+    let frame_us64 = frame_us as u64;
+    let deadline = start_us + timeout_us;
+
+    loop {
+        let now = crate::arch::timer::Timer::system_time_us();
+        if now >= deadline {
+            return None;
+        }
+
+        let elapsed_since_vsync = now % frame_us64;
+        let target_us = now + (frame_us64 - elapsed_since_vsync);
+
+        if target_us <= deadline {
+            // Wait for this VSYNC
+            loop {
+                let now2 = crate::arch::timer::Timer::system_time_us();
+                if now2 >= target_us {
+                    return Some(now2);
+                }
+                if deadline - now2 < 100 {
+                    crate::arch::cpu::nop();
+                } else {
+                    crate::arch::cpu::wfe();
+                }
+            }
+        }
+        // Next VSYNC would be after deadline
+        crate::arch::cpu::wfe();
+    }
+}
+
+/// Get estimated refresh rate in Hz
+pub fn refresh_rate_hz() -> u32 {
+    unsafe { DISPLAY_TIMING }
+        .map(|t| t.refresh_rate_hz())
+        .unwrap_or(60)
+}
+
+/// Get estimated frame time in microseconds
+pub fn frame_time_us() -> u32 {
+    unsafe { DISPLAY_TIMING }
+        .map(|t| t.frame_time_us())
+        .unwrap_or(16667)
+}
+
 // ─── Property Message Buffer ────────────────────────────────────
 /// Maximum number of tags per message
 const MAX_TAGS: usize = 16;
@@ -1029,6 +1209,9 @@ pub fn init() {
             }
         );
 
+        // Calculate display timing for VSYNC
+        let _ = calculate_display_timing();
+
         GPU_INITIALIZED = true;
     }
 }
@@ -1075,6 +1258,9 @@ pub fn configure_display(width: u32, height: u32, bpp: u32, rgb: bool) -> bool {
         DISPLAY_INFO.fb_addr = fb_addr;
         DISPLAY_INFO.fb_size = fb_size;
         DISPLAY_INFO.pixel_order = if rgb { 1 } else { 0 };
+
+        // Recalculate display timing for VSYNC
+        let _ = calculate_display_timing();
 
         true
     }

@@ -10,6 +10,7 @@
 use crate::display::fb::FramebufferInfo;
 use crate::display::graphics;
 use crate::println;
+use crate::sync::spinlock::Spinlock;
 use alloc::vec::Vec;
 
 /// Maximum dirty rectangles per frame
@@ -17,6 +18,9 @@ const MAX_DIRTY: usize = 8;
 
 /// Maximum number of layers (windows) the compositor tracks
 const MAX_LAYERS: usize = 8;
+
+/// Maximum frame history for timing statistics
+const MAX_FRAME_HISTORY: usize = 120;
 
 /// Buffering mode
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,6 +33,338 @@ pub enum BufferingMode {
 
 /// Default buffering mode
 const DEFAULT_BUFFERING: BufferingMode = BufferingMode::Triple;
+
+// ─── Frame Timing Metrics ──────────────────────────────────────────────
+
+/// Frame timing snapshot
+#[derive(Clone, Copy, Debug)]
+pub struct FrameTiming {
+    /// Frame number
+    pub frame_number: u64,
+    /// Composition time (microseconds)
+    pub compose_us: u64,
+    /// Buffer blit/present time (microseconds)
+    pub present_us: u64,
+    /// VSYNC wait time (microseconds)
+    pub vsync_wait_us: u64,
+    /// Total frame time (microseconds)
+    pub total_us: u64,
+    /// Timestamp when frame started (system timer µs)
+    pub start_timestamp_us: u64,
+    /// Timestamp when frame completed (system timer µs)
+    pub end_timestamp_us: u64,
+}
+
+/// Frame statistics
+#[derive(Clone, Copy, Debug)]
+pub struct FrameStats {
+    /// Total frames rendered
+    pub total_frames: u64,
+    /// Average frame time (µs)
+    pub avg_frame_us: u64,
+    /// Minimum frame time (µs)
+    pub min_frame_us: u64,
+    /// Maximum frame time (µs)
+    pub max_frame_us: u64,
+    /// Current FPS (frames per second)
+    pub fps: f32,
+    /// Average composition time (µs)
+    pub avg_compose_us: u64,
+    /// Average present time (µs)
+    pub avg_present_us: u64,
+    /// Average VSYNC wait time (µs)
+    pub avg_vsync_wait_us: u64,
+}
+
+/// Frame timing history for statistics
+static FRAME_HISTORY: Spinlock<[FrameTiming; MAX_FRAME_HISTORY]> =
+    Spinlock::new([const { FrameTiming::zero() }; MAX_FRAME_HISTORY]);
+static FRAME_HISTORY_COUNT: Spinlock<usize> = Spinlock::new(0);
+static FRAME_HISTORY_HEAD: Spinlock<usize> = Spinlock::new(0);
+
+impl FrameTiming {
+    pub const fn zero() -> Self {
+        FrameTiming {
+            frame_number: 0,
+            compose_us: 0,
+            present_us: 0,
+            vsync_wait_us: 0,
+            total_us: 0,
+            start_timestamp_us: 0,
+            end_timestamp_us: 0,
+        }
+    }
+}
+
+/// Record a frame timing entry
+fn record_frame_timing(timing: FrameTiming) {
+    let mut history = FRAME_HISTORY.lock();
+    let mut count = FRAME_HISTORY_COUNT.lock();
+    let mut head = FRAME_HISTORY_HEAD.lock();
+
+    history[*head] = timing;
+    *head = (*head + 1) % MAX_FRAME_HISTORY;
+    if *count < MAX_FRAME_HISTORY {
+        *count += 1;
+    }
+}
+
+/// Get current frame statistics
+pub fn frame_stats() -> FrameStats {
+    let history = FRAME_HISTORY.lock();
+    let count = *FRAME_HISTORY_COUNT.lock();
+
+    if count == 0 {
+        return FrameStats {
+            total_frames: 0,
+            avg_frame_us: 0,
+            min_frame_us: 0,
+            max_frame_us: 0,
+            fps: 0.0,
+            avg_compose_us: 0,
+            avg_present_us: 0,
+            avg_vsync_wait_us: 0,
+        };
+    }
+
+    let mut total_us = 0u64;
+    let mut min_us = u64::MAX;
+    let mut max_us = 0u64;
+    let mut total_compose = 0u64;
+    let mut total_present = 0u64;
+    let mut total_vsync = 0u64;
+
+    for i in 0..count {
+        let t = history[i];
+        total_us += t.total_us;
+        total_compose += t.compose_us;
+        total_present += t.present_us;
+        total_vsync += t.vsync_wait_us;
+        min_us = min_us.min(t.total_us);
+        max_us = max_us.max(t.total_us);
+    }
+
+    let frames = count as u64;
+    let avg_frame = total_us / frames;
+    let avg_compose = total_compose / frames;
+    let avg_present = total_present / frames;
+    let avg_vsync = total_vsync / frames;
+
+    // Calculate FPS from average frame time
+    let fps = if avg_frame > 0 {
+        1_000_000.0 / avg_frame as f32
+    } else {
+        0.0
+    };
+
+    FrameStats {
+        total_frames: frames,
+        avg_frame_us: avg_frame,
+        min_frame_us: if min_us == u64::MAX { 0 } else { min_us },
+        max_frame_us: max_us,
+        fps,
+        avg_compose_us: avg_compose,
+        avg_present_us: avg_present,
+        avg_vsync_wait_us: avg_vsync,
+    }
+}
+
+/// Get frame timing history for external inspection
+pub fn frame_history() -> alloc::vec::Vec<FrameTiming> {
+    let history = FRAME_HISTORY.lock();
+    let count = *FRAME_HISTORY_COUNT.lock();
+    let head = *FRAME_HISTORY_HEAD.lock();
+
+    let mut result = alloc::vec::Vec::with_capacity(count);
+    for i in 0..count {
+        let idx = (head + MAX_FRAME_HISTORY - count + i) % MAX_FRAME_HISTORY;
+        result.push(history[idx]);
+    }
+    result
+}
+
+/// Reset frame timing statistics
+pub fn reset_frame_stats() {
+    *FRAME_HISTORY_COUNT.lock() = 0;
+    *FRAME_HISTORY_HEAD.lock() = 0;
+}
+
+// ─── Hardware Cursor ──────────────────────────────────────────────────
+
+/// Hardware cursor state
+#[derive(Clone, Copy, Debug)]
+pub struct HardwareCursor {
+    pub enabled: bool,
+    pub x: u32,
+    pub y: u32,
+    pub hotspot_x: u32,
+    pub hotspot_y: u32,
+    pub image_ptr: *mut u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+static mut HW_CURSOR: HardwareCursor = HardwareCursor {
+    enabled: false,
+    x: 0,
+    y: 0,
+    hotspot_x: 0,
+    hotspot_y: 0,
+    image_ptr: core::ptr::null_mut(),
+    width: 0,
+    height: 0,
+};
+
+/// Default 32x32 arrow cursor (RGBA, 32-bit)
+/// This is a simple arrow cursor pattern
+const CURSOR_WIDTH: u32 = 32;
+const CURSOR_HEIGHT: u32 = 32;
+
+/// Create the default arrow cursor image data
+fn create_default_cursor() -> alloc::vec::Vec<u32> {
+    let mut cursor = alloc::vec::Vec::with_capacity((CURSOR_WIDTH * CURSOR_HEIGHT) as usize);
+
+    // Arrow cursor pattern (white with black outline, transparent elsewhere)
+    // Using a simple pattern: 0 = transparent, 0xFFFFFFFF = white, 0xFF000000 = black
+    for y in 0..CURSOR_HEIGHT {
+        for x in 0..CURSOR_WIDTH {
+            let color = if x == 0 && y <= 31 {
+                0xFF000000 // Black outline left edge
+            } else if x == 1 && y <= 30 {
+                0xFFFFFFFF // White fill
+            } else if x == 2 && y <= 29 {
+                0xFFFFFFFF
+            } else if x == 3 && y <= 28 {
+                0xFFFFFFFF
+            } else if x == 4 && y <= 27 {
+                0xFFFFFFFF
+            } else if x == 5 && y <= 26 {
+                0xFFFFFFFF
+            } else if x == 6 && y <= 25 {
+                0xFFFFFFFF
+            } else if x == 7 && y <= 24 {
+                0xFFFFFFFF
+            } else if x == 8 && y <= 23 {
+                0xFFFFFFFF
+            } else if x == 9 && y <= 22 {
+                0xFFFFFFFF
+            } else if x == 10 && y <= 21 {
+                0xFFFFFFFF
+            } else if x == 11 && y <= 20 {
+                0xFFFFFFFF
+            } else if x == 12 && y <= 19 {
+                0xFFFFFFFF
+            } else if x == 13 && y <= 18 {
+                0xFFFFFFFF
+            } else if x == 14 && y <= 17 {
+                0xFFFFFFFF
+            } else if x == 15 && y <= 16 {
+                0xFFFFFFFF
+            } else {
+                0x00000000 // Transparent
+            };
+            cursor.push(color);
+        }
+    }
+
+    cursor
+}
+
+/// Initialize the hardware cursor
+fn init_hardware_cursor(fb: FramebufferInfo) {
+    unsafe {
+        // Create cursor image in heap memory
+        let cursor_data = create_default_cursor();
+        let layout =
+            core::alloc::Layout::from_size_align((cursor_data.len() * 4) as usize, 16).unwrap();
+
+        let ptr = crate::memory::heap::heap_alloc(layout);
+        if ptr.is_null() {
+            println!("[compositor] Failed to allocate cursor memory");
+            return;
+        }
+
+        // Copy cursor data to allocated memory
+        core::ptr::copy_nonoverlapping(cursor_data.as_ptr(), ptr as *mut u32, cursor_data.len());
+
+        // Configure hardware cursor via GPU driver
+        let cursor_info = crate::drivers::gpu::CursorInfo {
+            width: CURSOR_WIDTH,
+            height: CURSOR_HEIGHT,
+            format: 0,    // 32-bit RGBA
+            hotspot_x: 1, // Arrow tip at (1, 1)
+            hotspot_y: 1,
+            data_ptr: ptr as u64,
+        };
+
+        if crate::drivers::gpu::set_cursor_info(&cursor_info) {
+            HW_CURSOR.enabled = true;
+            HW_CURSOR.image_ptr = ptr as *mut u32;
+            HW_CURSOR.width = CURSOR_WIDTH;
+            HW_CURSOR.height = CURSOR_HEIGHT;
+            HW_CURSOR.hotspot_x = 1;
+            HW_CURSOR.hotspot_y = 1;
+            HW_CURSOR.x = fb.width / 2;
+            HW_CURSOR.y = fb.height / 2;
+
+            // Show cursor at center
+            let _ = crate::drivers::gpu::set_cursor_state(
+                crate::drivers::gpu::CursorState::Visible,
+                HW_CURSOR.x,
+                HW_CURSOR.y,
+            );
+
+            println!("[compositor] Hardware cursor enabled (32x32)");
+        } else {
+            println!("[compositor] Failed to enable hardware cursor");
+            // Note: heap_dealloc may not exist, so we don't free on failure
+        }
+    }
+}
+
+/// Update hardware cursor position
+pub fn set_hardware_cursor_pos(x: u32, y: u32) {
+    unsafe {
+        if !HW_CURSOR.enabled {
+            return;
+        }
+        HW_CURSOR.x = x;
+        HW_CURSOR.y = y;
+        let _ =
+            crate::drivers::gpu::set_cursor_state(crate::drivers::gpu::CursorState::Visible, x, y);
+    }
+}
+
+/// Hide hardware cursor
+pub fn hide_hardware_cursor() {
+    unsafe {
+        if HW_CURSOR.enabled {
+            let _ = crate::drivers::gpu::set_cursor_state(
+                crate::drivers::gpu::CursorState::Hidden,
+                0,
+                0,
+            );
+        }
+    }
+}
+
+/// Show hardware cursor at current position
+pub fn show_hardware_cursor() {
+    unsafe {
+        if HW_CURSOR.enabled {
+            let _ = crate::drivers::gpu::set_cursor_state(
+                crate::drivers::gpu::CursorState::Visible,
+                HW_CURSOR.x,
+                HW_CURSOR.y,
+            );
+        }
+    }
+}
+
+/// Check if hardware cursor is enabled
+pub fn is_hardware_cursor_enabled() -> bool {
+    unsafe { HW_CURSOR.enabled }
+}
 
 // ─── Dirty Rectangle ──────────────────────────────────────────────────
 
@@ -117,8 +453,6 @@ impl Layer {
 }
 
 // ─── Compositor State ──────────────────────────────────────────────────
-
-use crate::sync::spinlock::Spinlock;
 
 /// Wrapper for raw pointer to make it Send + Sync
 struct RawPtr(*mut u32);
@@ -217,6 +551,9 @@ pub fn init(fb: FramebufferInfo) {
         back_ptr as u64,
         buf_size / 1024
     );
+
+    // Initialize hardware cursor
+    init_hardware_cursor(*fb);
 }
 
 /// Add a new layer (window) to the compositor
@@ -369,6 +706,12 @@ pub fn mark_full_redraw() {
 
 /// Composite all visible layers and present to the framebuffer
 pub fn composite() {
+    let frame_start = crate::arch::timer::Timer::system_time_us();
+    let frame_number = unsafe { FRAME_COUNTER };
+    unsafe {
+        FRAME_COUNTER += 1;
+    }
+
     let fb = {
         let fb_info = FB_INFO.lock();
         match *fb_info {
@@ -386,6 +729,8 @@ pub fn composite() {
     };
 
     let do_full = *FULL_REDRAW.lock();
+
+    let compose_start = crate::arch::timer::Timer::system_time_us();
 
     if do_full {
         // Full redraw: draw wallpaper first
@@ -405,10 +750,26 @@ pub fn composite() {
         }
 
         // Triple buffering: rotate buffers and present
+        let present_start = crate::arch::timer::Timer::system_time_us();
         rotate_and_present(fb, back_buffer);
+        let present_end = crate::arch::timer::Timer::system_time_us();
 
         *FULL_REDRAW.lock() = false;
         *DIRTY_COUNT.lock() = 0;
+
+        let frame_end = crate::arch::timer::Timer::system_time_us();
+        record_frame_timing(FrameTiming {
+            frame_number,
+            compose_us: present_start - compose_start,
+            present_us: present_end - present_start,
+            vsync_wait_us: present_end
+                - frame_start
+                - (present_start - compose_start)
+                - (present_end - present_start),
+            total_us: frame_end - frame_start,
+            start_timestamp_us: frame_start,
+            end_timestamp_us: frame_end,
+        });
     } else if *DIRTY_COUNT.lock() > 0 {
         // Partial redraw: only repaint dirty regions
         let dirty_count = *DIRTY_COUNT.lock();
@@ -444,15 +805,37 @@ pub fn composite() {
         }
 
         // Triple buffering: rotate buffers and present dirty rects
+        let present_start = crate::arch::timer::Timer::system_time_us();
         rotate_and_present_dirty(fb, back_buffer, &dirty_list);
+        let present_end = crate::arch::timer::Timer::system_time_us();
 
         *DIRTY_COUNT.lock() = 0;
+
+        let frame_end = crate::arch::timer::Timer::system_time_us();
+        record_frame_timing(FrameTiming {
+            frame_number,
+            compose_us: present_start - compose_start,
+            present_us: present_end - present_start,
+            vsync_wait_us: present_end
+                - frame_start
+                - (present_start - compose_start)
+                - (present_end - present_start),
+            total_us: frame_end - frame_start,
+            start_timestamp_us: frame_start,
+            end_timestamp_us: frame_end,
+        });
     }
 }
+
+/// Frame counter for timing
+static mut FRAME_COUNTER: u64 = 0;
 
 /// Rotate triple buffers and present the front buffer to the display
 /// Rotation: back -> middle -> front -> back (for next frame)
 fn rotate_and_present(fb: FramebufferInfo, back_buffer: *mut u32) {
+    // Wait for VSYNC before presenting to avoid tearing
+    let _ = crate::drivers::gpu::wait_for_vsync();
+
     let mode = *BUFFERING_MODE.lock();
     match mode {
         BufferingMode::Double => {
@@ -508,6 +891,9 @@ fn rotate_and_present(fb: FramebufferInfo, back_buffer: *mut u32) {
 
 /// Rotate triple buffers and present only dirty rects
 fn rotate_and_present_dirty(fb: FramebufferInfo, back_buffer: *mut u32, dirty_list: &[DirtyRect]) {
+    // Wait for VSYNC before presenting to avoid tearing
+    let _ = crate::drivers::gpu::wait_for_vsync();
+
     let mode = *BUFFERING_MODE.lock();
     match mode {
         BufferingMode::Double => {
@@ -620,6 +1006,23 @@ fn render_layer(layer: &Layer, fb: FramebufferInfo) {
         buf.as_ref().expect("back buffer not initialized").0
     };
 
+    // Check if layer has alpha (for transparent windows)
+    if layer.has_alpha {
+        // Render with alpha blending using layer opacity
+        render_layer_alpha(layer, fb, back_buf, theme);
+    } else {
+        // Opaque window rendering (original behavior)
+        render_layer_opaque(layer, fb, back_buf, theme);
+    }
+}
+
+/// Render an opaque layer (no alpha blending)
+fn render_layer_opaque(
+    layer: &Layer,
+    fb: FramebufferInfo,
+    back_buf: *mut u32,
+    theme: &crate::wm::theme::Theme,
+) {
     // Window background
     fill_back_buffer_rect(
         fb,
@@ -665,6 +1068,251 @@ fn render_layer(layer: &Layer, fb: FramebufferInfo) {
             theme.title_text,
             theme.title_bar,
         );
+    }
+}
+
+/// Render a layer with alpha blending (Porter-Duff over operator)
+fn render_layer_alpha(
+    layer: &Layer,
+    fb: FramebufferInfo,
+    back_buf: *mut u32,
+    theme: &crate::wm::theme::Theme,
+) {
+    let opacity = layer.opacity as u32; // 0-255
+    let inv_opacity = 255 - opacity;
+
+    // Helper: blend a source color over destination with opacity
+    let blend_pixel = |src: u32, dst: u32| -> u32 {
+        let src_a = opacity;
+        let _dst_a = 255; // Destination is always opaque in back buffer
+
+        // Porter-Duff "over" operator with premultiplied alpha
+        // result = src * src_alpha + dst * (1 - src_alpha)
+        let src_r = (src >> 16) & 0xFF;
+        let src_g = (src >> 8) & 0xFF;
+        let src_b = src & 0xFF;
+
+        let dst_r = (dst >> 16) & 0xFF;
+        let dst_g = (dst >> 8) & 0xFF;
+        let dst_b = dst & 0xFF;
+
+        let r = (src_r * src_a + dst_r * inv_opacity) / 255;
+        let g = (src_g * src_a + dst_g * inv_opacity) / 255;
+        let b = (src_b * src_a + dst_b * inv_opacity) / 255;
+
+        0xFF000000 | (r << 16) | (g << 8) | b
+    };
+
+    // Window background with alpha
+    fill_back_buffer_rect_alpha(
+        fb,
+        back_buf,
+        layer.x,
+        layer.y,
+        layer.w,
+        layer.h,
+        theme.win_bg,
+        blend_pixel,
+    );
+
+    // Window title bar with alpha
+    if layer.h > 24 {
+        fill_back_buffer_rect_alpha(
+            fb,
+            back_buf,
+            layer.x,
+            layer.y,
+            layer.w,
+            24,
+            theme.title_bar,
+            blend_pixel,
+        );
+    }
+
+    // Window border with alpha
+    draw_back_buffer_rect_outline_alpha(
+        fb,
+        back_buf,
+        layer.x,
+        layer.y,
+        layer.w,
+        layer.h,
+        theme.win_border,
+        blend_pixel,
+    );
+
+    // Close button with alpha
+    if layer.w > 30 && layer.h > 20 {
+        let btn_x = layer.x + layer.w - 22;
+        let btn_y = layer.y + 4;
+        fill_back_buffer_rect_alpha(
+            fb,
+            back_buf,
+            btn_x,
+            btn_y,
+            16,
+            16,
+            theme.close_btn,
+            blend_pixel,
+        );
+    }
+
+    // Title text — alpha blended
+    let title = crate::wm::window::get_title(layer.id);
+    if !title.is_empty() && layer.w > 40 {
+        draw_text_alpha(
+            &fb,
+            back_buf,
+            layer.x + 8,
+            layer.y + 4,
+            title,
+            theme.title_text,
+            theme.title_bar,
+            blend_pixel,
+        );
+    }
+}
+
+/// Fill a rectangle in the back buffer with alpha blending
+fn fill_back_buffer_rect_alpha<F>(
+    fb: FramebufferInfo,
+    back_buf: *mut u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    color: u32,
+    blend: F,
+) where
+    F: Fn(u32, u32) -> u32,
+{
+    unsafe {
+        if back_buf.is_null() {
+            return;
+        }
+        let pitch = fb.width;
+        for dy in 0..h {
+            let py = y + dy;
+            if py >= fb.height {
+                break;
+            }
+            for dx in 0..w {
+                let px = x + dx;
+                if px >= fb.width {
+                    break;
+                }
+                let idx = (py * pitch + px) as usize;
+                let back_buf_size = *BACK_BUF_SIZE.lock();
+                if idx < back_buf_size / 4 {
+                    let dst = core::ptr::read_volatile(back_buf.add(idx));
+                    let blended = blend(color, dst);
+                    core::ptr::write_volatile(back_buf.add(idx), blended);
+                }
+            }
+        }
+    }
+}
+
+/// Draw a rectangle outline in the back buffer with alpha blending
+fn draw_back_buffer_rect_outline_alpha<F>(
+    fb: FramebufferInfo,
+    back_buf: *mut u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    color: u32,
+    blend: F,
+) where
+    F: Fn(u32, u32) -> u32,
+{
+    // Top and bottom
+    for dx in 0..w {
+        let px = x + dx;
+        if px >= fb.width {
+            break;
+        }
+        set_back_pixel_alpha(fb, back_buf, px, y, color, &blend);
+        if y + h > 0 {
+            set_back_pixel_alpha(fb, back_buf, px, y + h - 1, color, &blend);
+        }
+    }
+    // Left and right
+    for dy in 0..h {
+        let py = y + dy;
+        if py >= fb.height {
+            break;
+        }
+        set_back_pixel_alpha(fb, back_buf, x, py, color, &blend);
+        if x + w > 0 {
+            set_back_pixel_alpha(fb, back_buf, x + w - 1, py, color, &blend);
+        }
+    }
+}
+
+/// Set a single pixel in the back buffer with alpha blending
+fn set_back_pixel_alpha<F>(
+    fb: FramebufferInfo,
+    back_buf: *mut u32,
+    x: u32,
+    y: u32,
+    color: u32,
+    blend: &F,
+) where
+    F: Fn(u32, u32) -> u32,
+{
+    unsafe {
+        if x >= fb.width || y >= fb.height {
+            return;
+        }
+        let idx = (y * fb.width + x) as usize;
+        let back_buf_size = *BACK_BUF_SIZE.lock();
+        if idx < back_buf_size / 4 {
+            let dst = core::ptr::read_volatile(back_buf.add(idx));
+            let blended = blend(color, dst);
+            core::ptr::write_volatile(back_buf.add(idx), blended);
+        }
+    }
+}
+
+/// Draw text with alpha blending
+fn draw_text_alpha<F>(
+    fb: &FramebufferInfo,
+    back_buf: *mut u32,
+    x: u32,
+    y: u32,
+    text: &str,
+    fg: u32,
+    bg: u32,
+    blend: F,
+) where
+    F: Fn(u32, u32) -> u32,
+{
+    use crate::display::console::{CHAR_HEIGHT, CHAR_WIDTH, FONT};
+
+    let mut cx = x;
+    for c in text.chars() {
+        let code = c as usize;
+        if code < 128 {
+            let glyph = &FONT[code];
+            for row in 0..CHAR_HEIGHT {
+                let row_bits = glyph[row as usize];
+                for col in 0..CHAR_WIDTH {
+                    let px = cx + col;
+                    let py = y + row;
+                    if px >= fb.width || py >= fb.height {
+                        continue;
+                    }
+                    let color = if (row_bits >> (7 - col)) & 1 != 0 {
+                        fg
+                    } else {
+                        bg
+                    };
+                    set_back_pixel_alpha(*fb, back_buf, px, py, color, &blend);
+                }
+            }
+        }
+        cx += CHAR_WIDTH;
     }
 }
 
@@ -1045,5 +1693,219 @@ mod tests {
         assert_eq!(info.coding_type, 1);
         assert_eq!(info.sample_rate, 3);
         assert_eq!(info.channels, 2);
+    }
+
+    #[test]
+    fn test_frame_timing_zero() {
+        let timing = FrameTiming::zero();
+        assert_eq!(timing.frame_number, 0);
+        assert_eq!(timing.compose_us, 0);
+        assert_eq!(timing.present_us, 0);
+        assert_eq!(timing.vsync_wait_us, 0);
+        assert_eq!(timing.total_us, 0);
+        assert_eq!(timing.start_timestamp_us, 0);
+        assert_eq!(timing.end_timestamp_us, 0);
+    }
+
+    #[test]
+    fn test_frame_timing_struct() {
+        let timing = FrameTiming {
+            frame_number: 42,
+            compose_us: 1000,
+            present_us: 500,
+            vsync_wait_us: 2000,
+            total_us: 3500,
+            start_timestamp_us: 1000000,
+            end_timestamp_us: 1003500,
+        };
+        assert_eq!(timing.frame_number, 42);
+        assert_eq!(timing.compose_us, 1000);
+        assert_eq!(timing.present_us, 500);
+        assert_eq!(timing.vsync_wait_us, 2000);
+        assert_eq!(timing.total_us, 3500);
+    }
+
+    #[test]
+    fn test_frame_stats_zero() {
+        reset_frame_stats();
+        let stats = frame_stats();
+        assert_eq!(stats.total_frames, 0);
+        assert_eq!(stats.avg_frame_us, 0);
+        assert_eq!(stats.min_frame_us, 0);
+        assert_eq!(stats.max_frame_us, 0);
+        assert_eq!(stats.fps, 0.0);
+        assert_eq!(stats.avg_compose_us, 0);
+        assert_eq!(stats.avg_present_us, 0);
+        assert_eq!(stats.avg_vsync_wait_us, 0);
+    }
+
+    #[test]
+    fn test_frame_stats_recording() {
+        reset_frame_stats();
+
+        // Record a few frames
+        record_frame_timing(FrameTiming {
+            frame_number: 1,
+            compose_us: 1000,
+            present_us: 500,
+            vsync_wait_us: 2000,
+            total_us: 3500,
+            start_timestamp_us: 1000000,
+            end_timestamp_us: 1003500,
+        });
+        record_frame_timing(FrameTiming {
+            frame_number: 2,
+            compose_us: 1100,
+            present_us: 600,
+            vsync_wait_us: 2100,
+            total_us: 3800,
+            start_timestamp_us: 1003500,
+            end_timestamp_us: 1007300,
+        });
+        record_frame_timing(FrameTiming {
+            frame_number: 3,
+            compose_us: 900,
+            present_us: 400,
+            vsync_wait_us: 1900,
+            total_us: 3200,
+            start_timestamp_us: 1007300,
+            end_timestamp_us: 1010500,
+        });
+
+        let stats = frame_stats();
+        assert_eq!(stats.total_frames, 3);
+        assert_eq!(stats.avg_compose_us, 1000); // (1000+1100+900)/3
+        assert_eq!(stats.avg_present_us, 500); // (500+600+400)/3
+        assert_eq!(stats.avg_vsync_wait_us, 2000); // (2000+2100+1900)/3
+        assert_eq!(stats.min_frame_us, 3200);
+        assert_eq!(stats.max_frame_us, 3800);
+        // FPS = 1_000_000 / avg_frame_us ≈ 1_000_000 / 3500 ≈ 285
+        assert!((stats.fps - 285.7).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_frame_history() {
+        reset_frame_stats();
+
+        record_frame_timing(FrameTiming {
+            frame_number: 1,
+            compose_us: 1000,
+            present_us: 500,
+            vsync_wait_us: 2000,
+            total_us: 3500,
+            start_timestamp_us: 1000000,
+            end_timestamp_us: 1003500,
+        });
+        record_frame_timing(FrameTiming {
+            frame_number: 2,
+            compose_us: 1100,
+            present_us: 600,
+            vsync_wait_us: 2100,
+            total_us: 3800,
+            start_timestamp_us: 1003500,
+            end_timestamp_us: 1007300,
+        });
+
+        let history = frame_history();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].frame_number, 1);
+        assert_eq!(history[1].frame_number, 2);
+    }
+
+    #[test]
+    fn test_hardware_cursor_struct() {
+        let cursor = HardwareCursor {
+            enabled: true,
+            x: 100,
+            y: 200,
+            hotspot_x: 1,
+            hotspot_y: 1,
+            image_ptr: 0x1000 as *mut u32,
+            width: 32,
+            height: 32,
+        };
+        assert!(cursor.enabled);
+        assert_eq!(cursor.x, 100);
+        assert_eq!(cursor.y, 200);
+        assert_eq!(cursor.width, 32);
+        assert_eq!(cursor.height, 32);
+    }
+
+    #[test]
+    fn test_alpha_blending_pixel() {
+        // Test alpha blending: 50% white over black = gray
+        let src = 0xFFFFFFFF; // White
+        let dst = 0xFF000000; // Black
+        let opacity: u32 = 128; // 50%
+        let inv_opacity = 255 - opacity;
+
+        let src_r = (src >> 16) & 0xFF;
+        let src_g = (src >> 8) & 0xFF;
+        let src_b = src & 0xFF;
+
+        let dst_r = (dst >> 16) & 0xFF;
+        let dst_g = (dst >> 8) & 0xFF;
+        let dst_b = dst & 0xFF;
+
+        let r = (src_r * opacity + dst_r * inv_opacity) / 255;
+        let g = (src_g * opacity + dst_g * inv_opacity) / 255;
+        let b = (src_b * opacity + dst_b * inv_opacity) / 255;
+
+        let blended = 0xFF000000 | (r << 16) | (g << 8) | b;
+
+        // 50% of 255 = ~127, so we expect ~127 for each channel
+        assert!((r as i32 - 127).abs() <= 2);
+        assert!((g as i32 - 127).abs() <= 2);
+        assert!((b as i32 - 127).abs() <= 2);
+    }
+
+    #[test]
+    fn test_alpha_blending_opaque() {
+        // Test alpha blending: 100% opacity = source color
+        let src = 0xFF123456;
+        let dst = 0xFFABCDEF;
+        let opacity: u32 = 255;
+        let inv_opacity = 255 - opacity;
+
+        let src_r = (src >> 16) & 0xFF;
+        let src_g = (src >> 8) & 0xFF;
+        let src_b = src & 0xFF;
+
+        let dst_r = (dst >> 16) & 0xFF;
+        let dst_g = (dst >> 8) & 0xFF;
+        let dst_b = dst & 0xFF;
+
+        let r = (src_r * opacity + dst_r * inv_opacity) / 255;
+        let g = (src_g * opacity + dst_g * inv_opacity) / 255;
+        let b = (src_b * opacity + dst_b * inv_opacity) / 255;
+
+        let blended = 0xFF000000 | (r << 16) | (g << 8) | b;
+
+        assert_eq!(blended, src);
+    }
+
+    #[test]
+    fn test_alpha_blending_transparent() {
+        // Test alpha blending: 0% opacity = destination color
+        let src = 0xFF123456;
+        let dst = 0xFFABCDEF;
+        let opacity: u32 = 0;
+        let inv_opacity = 255 - opacity;
+
+        let src_r = (src >> 16) & 0xFF;
+        let src_g = (src >> 8) & 0xFF;
+        let src_b = src & 0xFF;
+
+        let dst_r = (dst >> 16) & 0xFF;
+        let dst_g = (dst >> 8) & 0xFF;
+        let dst_b = dst & 0xFF;
+
+        let r = (src_r * opacity + dst_r * inv_opacity) / 255;
+        let g = (src_g * opacity + dst_g * inv_opacity) / 255;
+        let b = (src_b * opacity + dst_b * inv_opacity) / 255;
+
+        let blended = 0xFF000000 | (r << 16) | (g << 8) | b;
+
+        assert_eq!(blended, dst);
     }
 }
