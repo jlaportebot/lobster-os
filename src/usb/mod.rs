@@ -1,13 +1,20 @@
 //! USB subsystem for LobsterOS
 //!
-//! Provides xHCI host controller driver and HID (keyboard/mouse) support
+//! Provides xHCI host controller driver and device class drivers
 //! for the BCM2712 SoC (Raspberry Pi 5).
 //!
 //! - xhci: xHCI host controller driver (command/event rings, enumeration)
 //! - hid: HID boot-protocol driver (keyboard, mouse)
+//! - hub: USB Hub class driver (port management, TT support)
+//! - mass: USB Mass Storage class driver (Bulk-Only Transport, SCSI)
 
 pub mod hid;
+pub mod hub;
+pub mod mass;
 pub mod xhci;
+
+#[cfg(feature = "qemu")]
+pub mod tests;
 
 use crate::println;
 

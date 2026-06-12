@@ -13,6 +13,9 @@ pub mod qemu_tests {
     // Include GENET tests module
     include!("genet_tests.rs");
 
+    // Include USB Hub tests module
+    include!("usb_hub_tests.rs");
+
     /// Test memory allocator basic functionality
     fn test_heap_allocation() -> TestResult {
         use core::alloc::{GlobalAlloc, Layout};
@@ -345,6 +348,18 @@ pub mod qemu_tests {
             "graphics_blit" => display_tests::test_graphics_blit,
             "console_font" => display_tests::test_console_font,
             "graphics_draw_text" => display_tests::test_graphics_draw_text,
+            // USB Hub tests
+            "usb_hub_descriptor" => usb_hub_tests::test_usb_hub_descriptor,
+            "usb_hub_descriptor_per_port" => usb_hub_tests::test_usb_hub_descriptor_per_port,
+            "usb_hub_descriptor_too_short" => usb_hub_tests::test_usb_hub_descriptor_too_short,
+            "usb_hub_descriptor_flags" => usb_hub_tests::test_usb_hub_descriptor_flags,
+            "usb_hub_port_status" => usb_hub_tests::test_usb_hub_port_status,
+            "usb_hub_port_status_too_short" => usb_hub_tests::test_usb_hub_port_status_too_short,
+            "usb_hub_port_change" => usb_hub_tests::test_usb_hub_port_change,
+            "usb_hub_port_speed_enum" => usb_hub_tests::test_usb_hub_port_speed_enum,
+            "usb_hub_port_speed_from_status" => usb_hub_tests::test_usb_hub_port_speed_from_status,
+            "usb_hub_class_requests" => usb_hub_tests::test_usb_hub_class_requests,
+            "usb_hub_feature_selectors" => usb_hub_tests::test_usb_hub_feature_selectors,
         );
         register_tests(tests);
     }
