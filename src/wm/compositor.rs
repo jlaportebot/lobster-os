@@ -178,7 +178,9 @@ pub fn init(fb: FramebufferInfo) {
         return;
     }
     *BACK_BUF.lock() = Some(RawPtr(back_ptr as *mut u32));
-    unsafe { core::ptr::write_bytes(back_ptr, 0, buf_size); }
+    unsafe {
+        core::ptr::write_bytes(back_ptr, 0, buf_size);
+    }
 
     // Allocate middle buffer (triple buffering)
     let middle_ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
@@ -190,7 +192,9 @@ pub fn init(fb: FramebufferInfo) {
         return;
     }
     *MIDDLE_BUF.lock() = Some(RawPtr(middle_ptr as *mut u32));
-    unsafe { core::ptr::write_bytes(middle_ptr, 0, buf_size); }
+    unsafe {
+        core::ptr::write_bytes(middle_ptr, 0, buf_size);
+    }
 
     // Allocate front buffer (initially same as back)
     let front_ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
@@ -202,7 +206,9 @@ pub fn init(fb: FramebufferInfo) {
         return;
     }
     *FRONT_BUF.lock() = Some(RawPtr(front_ptr as *mut u32));
-    unsafe { core::ptr::write_bytes(front_ptr, 0, buf_size); }
+    unsafe {
+        core::ptr::write_bytes(front_ptr, 0, buf_size);
+    }
 
     println!(
         "[compositor] Triple buffering: front={:#x} middle={:#x} back={:#x} ({} KB each)",
@@ -493,9 +499,9 @@ fn rotate_and_present(fb: FramebufferInfo, back_buffer: *mut u32) {
             let middle_ptr = middle_buf_lock.take();
             let front_ptr = front_buf_lock.take();
 
-            *middle_buf_lock = back_ptr;   // back -> middle
-            *front_buf_lock = middle_ptr;  // middle -> front
-            *back_buf_lock = front_ptr;    // front -> back (will be rendered to next)
+            *middle_buf_lock = back_ptr; // back -> middle
+            *front_buf_lock = middle_ptr; // middle -> front
+            *back_buf_lock = front_ptr; // front -> back (will be rendered to next)
         }
     }
 }
@@ -937,9 +943,24 @@ mod tests {
 
     #[test]
     fn test_dirty_rect_overlaps() {
-        let rect1 = DirtyRect { x: 10, y: 10, w: 100, h: 100 };
-        let rect2 = DirtyRect { x: 50, y: 50, w: 100, h: 100 };
-        let rect3 = DirtyRect { x: 200, y: 200, w: 100, h: 100 };
+        let rect1 = DirtyRect {
+            x: 10,
+            y: 10,
+            w: 100,
+            h: 100,
+        };
+        let rect2 = DirtyRect {
+            x: 50,
+            y: 50,
+            w: 100,
+            h: 100,
+        };
+        let rect3 = DirtyRect {
+            x: 200,
+            y: 200,
+            w: 100,
+            h: 100,
+        };
 
         assert!(rect1.overlaps(&rect2));
         assert!(rect2.overlaps(&rect1));
@@ -949,8 +970,18 @@ mod tests {
 
     #[test]
     fn test_dirty_rect_merge() {
-        let rect1 = DirtyRect { x: 10, y: 10, w: 100, h: 100 };
-        let rect2 = DirtyRect { x: 50, y: 50, w: 100, h: 100 };
+        let rect1 = DirtyRect {
+            x: 10,
+            y: 10,
+            w: 100,
+            h: 100,
+        };
+        let rect2 = DirtyRect {
+            x: 50,
+            y: 50,
+            w: 100,
+            h: 100,
+        };
         let merged = rect1.merge(&rect2);
 
         assert_eq!(merged.x, 10);

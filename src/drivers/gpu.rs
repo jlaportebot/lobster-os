@@ -610,8 +610,14 @@ pub struct EdidInfo {
 /// Parse a 128-byte EDID block into structured data
 pub fn parse_edid(block: &[u8; 128]) -> Result<EdidInfo, &'static str> {
     // Verify header: 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00
-    if block[0] != 0x00 || block[1] != 0xFF || block[2] != 0xFF || block[3] != 0xFF
-        || block[4] != 0xFF || block[5] != 0xFF || block[6] != 0xFF || block[7] != 0x00
+    if block[0] != 0x00
+        || block[1] != 0xFF
+        || block[2] != 0xFF
+        || block[3] != 0xFF
+        || block[4] != 0xFF
+        || block[5] != 0xFF
+        || block[6] != 0xFF
+        || block[7] != 0x00
     {
         return Err("Invalid EDID header");
     }
@@ -661,7 +667,8 @@ pub fn parse_edid(block: &[u8; 128]) -> Result<EdidInfo, &'static str> {
         if offset + 1 < 128 {
             let h = block[offset];
             let v = block[offset + 1];
-            if h != 0x01 && v != 0x01 { // 0x0101 means unused
+            if h != 0x01 && v != 0x01 {
+                // 0x0101 means unused
                 standard_timings[i] = (h as u16, v);
             }
         }
@@ -1196,9 +1203,9 @@ mod tests {
 
         // Display parameters
         edid[20] = 0xA0; // Digital input, DFP 1.x
-        edid[21] = 53;   // 53 cm horizontal
-        edid[22] = 30;   // 30 cm vertical
-        edid[23] = 78;   // Gamma 2.2
+        edid[21] = 53; // 53 cm horizontal
+        edid[22] = 30; // 30 cm vertical
+        edid[23] = 78; // Gamma 2.2
         edid[24] = 0x0A; // Standby, suspend, RGB, preferred timing
 
         // Color characteristics (simplified)
@@ -1277,7 +1284,11 @@ mod tests {
     fn test_parse_edid_valid_1920x1080() {
         let edid = test_edid_1920x1080();
         let result = parse_edid(&edid);
-        assert!(result.is_ok(), "Failed to parse valid EDID: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse valid EDID: {:?}",
+            result.err()
+        );
 
         let info = result.unwrap();
         assert_eq!(info.version.major, 1);
