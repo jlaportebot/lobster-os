@@ -148,6 +148,12 @@ impl TrapFrame {
     }
 }
 
+impl Default for TrapFrame {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Process ID type
 pub type Pid = u64;
 

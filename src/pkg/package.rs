@@ -25,14 +25,15 @@ impl core::fmt::Display for PackageArch {
     }
 }
 
-impl PackageArch {
-    pub fn from_str(s: &str) -> Self {
+impl core::str::FromStr for PackageArch {
+    type Err = &'static str;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "aarch64" => PackageArch::Aarch64,
-            "x86_64" => PackageArch::X86_64,
-            "armv7" => PackageArch::Armv7,
-            "riscv64" => PackageArch::Riscv64,
-            _ => PackageArch::Any,
+            "aarch64" => Ok(PackageArch::Aarch64),
+            "x86_64" => Ok(PackageArch::X86_64),
+            "armv7" => Ok(PackageArch::Armv7),
+            "riscv64" => Ok(PackageArch::Riscv64),
+            _ => Ok(PackageArch::Any),
         }
     }
 }

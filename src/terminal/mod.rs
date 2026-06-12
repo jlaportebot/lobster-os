@@ -31,8 +31,15 @@ impl Terminal {
             input_len: 0,
         }
     }
+}
 
-    /// Feed a byte to the VT100 parser
+impl Default for Terminal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Feed a byte to the VT100 parser
     pub fn feed_byte(&mut self, byte: u8) {
         self.parser.feed(byte, &mut self.screen);
     }

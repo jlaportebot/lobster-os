@@ -1807,6 +1807,17 @@ impl MkfsOptions {
     }
 }
 
+impl Default for MkfsOptions {
+    fn default() -> Self {
+        Self {
+            block_size: 4096,
+            num_inodes: 0,
+            volume_name: [0u8; 16],
+            reserved_blocks_percent: 5,
+        }
+    }
+}
+
 /// Create an ext2 filesystem on a block device partition.
 ///
 /// This writes the superblock, block group descriptors, bitmaps, inode table,

@@ -36,6 +36,12 @@ impl SpinlockRaw {
     }
 }
 
+impl Default for SpinlockRaw {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A RAII guard that unlocks the spinlock when dropped
 pub struct SpinlockRawGuard<'a> {
     spinlock: &'a SpinlockRaw,
@@ -81,6 +87,12 @@ impl IrqSafeSpinlock {
             spinlock: self,
             irq_enabled: irq_state,
         }
+    }
+}
+
+impl Default for IrqSafeSpinlock {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

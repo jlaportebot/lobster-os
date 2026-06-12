@@ -27,6 +27,13 @@ impl Parser {
             final_byte: 0,
         }
     }
+}
+
+impl Default for Parser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
     pub fn feed(&mut self, byte: u8, screen: &mut ScreenBuffer) {
         match self.state {
