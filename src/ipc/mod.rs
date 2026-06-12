@@ -348,7 +348,8 @@ impl Default for FdTable {
     }
 }
 
-/// Allocate the lowest available fd
+impl FdTable {
+    /// Allocate the lowest available fd
     pub fn alloc_fd(&mut self, kind: FdKind, index: u64, flags: u32) -> Option<usize> {
         for i in 0..MAX_FDS_PER_PROC {
             if self.entries[i].kind == FdKind::None {
