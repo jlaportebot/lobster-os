@@ -211,7 +211,6 @@ pub fn init(fb: FramebufferInfo) {
     }
 
     println!(
-        "[compositor] Triple buffering: front={:#x} middle={:#x} back={:#x} ({} KB each)",
         front_ptr as u64,
         middle_ptr as u64,
         back_ptr as u64,
