@@ -416,8 +416,8 @@ impl NvmeQueue {
 }
 
 /// NVMe Controller State
-// ═══════════════════════════════════════════════════════════════════
-
+/// ═══════════════════════════════════════════════════════════════════
+///
 /// NVMe controller instance
 pub struct NvmeController {
     /// MMIO base address (mapped BAR0)

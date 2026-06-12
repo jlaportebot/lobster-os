@@ -507,6 +507,12 @@ pub struct WidgetTable {
     next_id: WidgetId,
 }
 
+impl Default for WidgetTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WidgetTable {
     /// Create an empty widget table
     pub const fn new() -> Self {
@@ -520,15 +526,8 @@ impl WidgetTable {
             next_id: 1,
         }
     }
-}
 
-impl Default for WidgetTable {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Add a button and return its ID
+    /// Add a button and return its ID
     pub fn add_button(&mut self, x: u32, y: u32, w: u32, h: u32, text: &str) -> Option<WidgetId> {
         let id = self.next_id;
         self.next_id += 1;

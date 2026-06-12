@@ -97,7 +97,7 @@ pub unsafe extern "C" fn kernel_init(dtb_ptr: u64) -> ! {
 /// Secondary core initialization — called from boot.S for cores 1-3
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
-pub unsafe extern "C" fn secondary_core_init(core_id: u64) -> ! {
+pub unsafe extern "C" fn secondary_core_init(_core_id: u64) -> ! {
     // For now, just halt
     loop {
         core::arch::asm!("wfe");

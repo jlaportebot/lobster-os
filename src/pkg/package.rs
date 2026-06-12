@@ -2,6 +2,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::str::FromStr;
 
 /// Package architecture
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,7 +280,7 @@ impl InstalledPackage {
             metadata: PackageMetadata {
                 name: String::from(parts[0]),
                 version: String::from(parts[1]),
-                arch: PackageArch::from_str(parts[2]),
+                arch: PackageArch::from_str(parts[2]).unwrap_or(PackageArch::Any),
                 description: String::from(parts[5]),
                 maintainer: String::new(),
                 license: String::new(),
