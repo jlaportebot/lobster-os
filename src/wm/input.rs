@@ -145,6 +145,9 @@ fn handle_mouse_move(dx: i16, dy: i16) {
         };
     }
 
+    // Update hardware cursor position
+    compositor::set_hardware_cursor_pos(unsafe { CURSOR_X }, unsafe { CURSOR_Y });
+
     // Delegate to window module's existing handle_event
     crate::wm::window::handle_event(HidEvent::MouseMove { dx, dy });
 }
