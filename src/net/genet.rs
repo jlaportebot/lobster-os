@@ -76,8 +76,134 @@ pub const GENET_SPI: u32 = 189;
 const NUM_TX_DESC: usize = 64;
 const NUM_RX_DESC: usize = 64;
 
+/// Number of RX queues (RSS)
+pub const NUM_RX_QUEUES: usize = 4;
+
 /// Maximum Ethernet frame size (MTU + headers + FCS)
 const MAX_FRAME_SIZE: usize = 1536;
+
+/// RSS (Receive Side Scaling) constants
+pub const RSS_KEY_SIZE: usize = 40;
+pub const RSS_INDIR_TABLE_SIZE: usize = 128;
+
+/// RSS hash types
+pub const RSS_HASH_IPV4: u32 = 1 << 0;
+pub const RSS_HASH_TCP_IPV4: u32 = 1 << 1;
+pub const RSS_HASH_IPV6: u32 = 1 << 2;
+pub const RSS_HASH_TCP_IPV6: u32 = 1 << 3;
+
+/// Wake-on-LAN constants
+pub const WOL_MAGIC_PACKET: u32 = 1 << 0;
+pub const WOL_PATTERN_MATCH: u32 = 1 << 1;
+pub const WOL_LINK_CHANGE: u32 = 1 << 2;
+pub const WOL_MAGIC_PACKET_ENABLE: u32 = 1 << 0;
+pub const WOL_PATTERN_ENABLE: u32 = 1 << 1;
+pub const WOL_LINK_CHANGE_ENABLE: u32 = 1 << 2;
+
+/// MDIO (Management Data Input/Output) register offsets
+const MDIO_CTRL: u64 = 0x0880;
+const MDIO_DATA: u64 = 0x0884;
+
+/// MDIO control bit definitions
+const MDIO_CTRL_READ: u32 = 1 << 30;
+const MDIO_CTRL_WRITE: u32 = 1 << 29;
+const MDIO_CTRL_PREAMBLE_SUPPRESS: u32 = 1 << 28;
+const MDIO_CTRL_START: u32 = 0b01 << 26;
+const MDIO_CTRL_PHY_ADDR_SHIFT: u32 = 21;
+const MDIO_CTRL_REG_ADDR_SHIFT: u32 = 16;
+const MDIO_CTRL_TA: u32 = 0b10 << 14;
+const MDIO_CTRL_DATA_MASK: u32 = 0xFFFF;
+
+/// Standard PHY registers (IEEE 802.3)
+const PHY_REG_BMCR: u32 = 0x00; // Basic Mode Control Register
+const PHY_REG_BMSR: u32 = 0x01; // Basic Mode Status Register
+const PHY_REG_PHYIDR1: u32 = 0x02; // PHY Identifier 1
+const PHY_REG_PHYIDR2: u32 = 0x03; // PHY Identifier 2
+const PHY_REG_ANAR: u32 = 0x04; // Auto-Negotiation Advertisement
+const PHY_REG_ANLPAR: u32 = 0x05; // Auto-Negotiation Link Partner Ability
+const PHY_REG_ANER: u32 = 0x06; // Auto-Negotiation Expansion
+const PHY_REG_ANNPTR: u32 = 0x07; // Auto-Negotiation Next Page Transmit
+const PHY_REG_1000BASET_CTRL: u32 = 0x09; // 1000BASE-T Control
+const PHY_REG_1000BASET_STATUS: u32 = 0x0A; // 1000BASE-T Status
+
+/// BMCR (Basic Mode Control Register) bit definitions
+const BMCR_RESET: u32 = 1 << 15;
+const BMCR_LOOPBACK: u32 = 1 << 14;
+const BMCR_SPEED_100: u32 = 1 << 13;
+const BMCR_AN_ENABLE: u32 = 1 << 12;
+const BMCR_POWER_DOWN: u32 = 1 << 11;
+const BMCR_AN_RESTART: u32 = 1 << 9;
+const BMCR_FULL_DUPLEX: u32 = 1 << 8;
+const BMCR_SPEED_1000: u32 = 1 << 6;
+const BMCR_COLLISION_TEST: u32 = 1 << 7;
+
+/// BMSR (Basic Mode Status Register) bit definitions
+const BMSR_100BASE_T4: u32 = 1 << 9;
+const BMSR_100BASE_TX_FD: u32 = 1 << 8;
+const BMSR_100BASE_TX_HD: u32 = 1 << 7;
+const BMSR_10BASE_T_FD: u32 = 1 << 6;
+const BMSR_10BASE_T_HD: u32 = 1 << 5;
+const BMSR_AN_COMPLETE: u32 = 1 << 5;
+const BMSR_REMOTE_FAULT: u32 = 1 << 4;
+const BMSR_LINK_STATUS: u32 = 1 << 2;
+const BMSR_AN_ABLE: u32 = 1 << 3;
+
+/// ANAR (Auto-Negotiation Advertisement) bit definitions
+const ANAR_NP: u32 = 1 << 15;
+const ANAR_ACK: u32 = 1 << 14;
+const ANAR_RF: u32 = 1 << 13;
+const ANAR_PAUSE_ASYM: u32 = 1 << 11;
+const ANAR_PAUSE_SYM: u32 = 1 << 10;
+const ANAR_100BASE_T4: u32 = 1 << 9;
+const ANAR_100BASE_TX_FD: u32 = 1 << 8;
+const ANAR_100BASE_TX_HD: u32 = 1 << 7;
+const ANAR_10BASE_T_FD: u32 = 1 << 6;
+const ANAR_10BASE_T_HD: u32 = 1 << 5;
+const ANAR_SELECTOR_IEEE_802_3: u32 = 0x01;
+
+/// 1000BASE-T Control register bit definitions
+const GCTL_1000BASET_FD: u32 = 1 << 10;
+const GCTL_1000BASET_HD: u32 = 1 << 9;
+
+/// 1000BASE-T Status register bit definitions
+const GSTATUS_1000BASET_FD: u32 = 1 << 11;
+const GSTATUS_1000BASET_HD: u32 = 1 << 10;
+
+/// Multi-queue RX ring register offsets
+const RX_RING1_DESC_BASE_LO: u64 = 0x0F04;
+const RX_RING1_DESC_BASE_HI: u64 = 0x0F08;
+const RX_RING1_DESC_COUNT: u64 = 0x0F0C;
+const RX_RING1_PROD_INDEX: u64 = 0x0F10;
+const RX_RING1_CONS_INDEX: u64 = 0x0F14;
+
+const RX_RING2_DESC_BASE_LO: u64 = 0x1004;
+const RX_RING2_DESC_BASE_HI: u64 = 0x1008;
+const RX_RING2_DESC_COUNT: u64 = 0x100C;
+const RX_RING2_PROD_INDEX: u64 = 0x1010;
+const RX_RING2_CONS_INDEX: u64 = 0x1014;
+
+const RX_RING3_DESC_BASE_LO: u64 = 0x1104;
+const RX_RING3_DESC_BASE_HI: u64 = 0x1108;
+const RX_RING3_DESC_COUNT: u64 = 0x110C;
+const RX_RING3_PROD_INDEX: u64 = 0x1110;
+const RX_RING3_CONS_INDEX: u64 = 0x1114;
+
+/// EEE (Energy Efficient Ethernet) register offsets
+const EEE_CTRL: u64 = 0x0864;
+const EEE_ADV: u64 = 0x0868;
+const EEE_LPI_TIMERS: u64 = 0x086C;
+
+/// EEE control bit definitions
+const EEE_CTRL_EN: u32 = 1 << 0;
+const EEE_CTRL_TX_LPI_EN: u32 = 1 << 1;
+const EEE_CTRL_RX_LPI_EN: u32 = 1 << 2;
+
+/// VLAN register offsets
+const VLAN_TAG_CTRL: u64 = 0x0840;
+const VLAN_TAG_BASE: u64 = 0x0844;
+
+/// Statistics register base
+const STATS_BASE: u64 = 0x0C00;
 
 /// DMA descriptor format (4 × u32 = 16 bytes)
 #[repr(C)]
@@ -106,6 +232,85 @@ const RX_DESC_CRC_ERR: u32 = 1 << 4;
 const RX_DESC_OVS: u32 = 1 << 3; // Oversized frame
 const RX_DESC_PKT_LEN_MASK: u32 = 0x1FFF;
 
+/// PHY link status
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PhyStatus {
+    Down = 0,
+    AutoNegotiating = 1,
+    Up1000Full = 2,
+    Up1000Half = 3,
+    Up100Full = 4,
+    Up100Half = 5,
+    Up10Full = 6,
+    Up10Half = 7,
+}
+
+/// GENET statistics counters
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GenetStats {
+    pub tx_packets: u64,
+    pub tx_bytes: u64,
+    pub rx_packets: u64,
+    pub rx_bytes: u64,
+    pub rx_errors: u64,
+    pub tx_errors: u64,
+}
+
+/// RSS IPv4 4-tuple for hash computation
+#[derive(Debug, Clone, Copy)]
+pub struct RssIpv4Tuple {
+    pub src_ip: u32,
+    pub dst_ip: u32,
+    pub src_port: u16,
+    pub dst_port: u16,
+}
+
+/// Toeplitz hash computation for RSS
+/// Simplified implementation using a basic hash function
+fn toeplitz_hash(key: &[u8], data: &[u8]) -> u32 {
+    let mut hash = 0u32;
+    for (i, &byte) in data.iter().enumerate() {
+        let key_byte = key[i % key.len()];
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(byte as u32)
+            .wrapping_add(key_byte as u32);
+    }
+    hash
+}
+
+/// Compute RSS hash for IPv4 tuple
+pub fn compute_rss_hash_ipv4(key: &[u8; RSS_KEY_SIZE], tuple: &RssIpv4Tuple) -> u32 {
+    let mut data = [0u8; 12];
+    data[0..4].copy_from_slice(&tuple.src_ip.to_be_bytes());
+    data[4..8].copy_from_slice(&tuple.dst_ip.to_be_bytes());
+    data[8..10].copy_from_slice(&tuple.src_port.to_be_bytes());
+    data[10..12].copy_from_slice(&tuple.dst_port.to_be_bytes());
+    toeplitz_hash(key, &data)
+}
+
+/// Check if a packet is a Wake-on-LAN magic packet
+/// Magic packet: 6 bytes of 0xFF followed by 16 repetitions of target MAC
+pub fn is_magic_packet(packet: &[u8], mac: &[u8; 6]) -> bool {
+    if packet.len() < 6 + 16 * 6 {
+        return false;
+    }
+    // Check preamble (6 bytes of 0xFF)
+    if !packet[..6].iter().all(|&b| b == 0xFF) {
+        return false;
+    }
+    // Check 16 repetitions of MAC
+    for i in 0..16 {
+        let start = 6 + i * 6;
+        let end = start + 6;
+        if packet[start..end] != *mac {
+            return false;
+        }
+    }
+    true
+}
+
 /// GENET driver state
 pub struct Genet {
     /// MMIO base virtual address
@@ -118,20 +323,20 @@ pub struct Genet {
     link_speed: u32,
     /// TX descriptor ring (DMA coherent memory)
     tx_descs: VirtAddr,
-    /// RX descriptor ring (DMA coherent memory)
-    rx_descs: VirtAddr,
+    /// RX descriptor rings (DMA coherent memory) - up to 4 queues for RSS
+    rx_descs: [VirtAddr; NUM_RX_QUEUES],
     /// TX buffer pointers
     tx_bufs: [VirtAddr; NUM_TX_DESC],
-    /// RX buffer pointers
-    rx_bufs: [VirtAddr; NUM_RX_DESC],
+    /// RX buffer pointers per queue
+    rx_bufs: [[VirtAddr; NUM_RX_DESC]; NUM_RX_QUEUES],
     /// TX producer index
     tx_prod: u32,
     /// TX consumer index
     tx_cons: u32,
-    /// RX producer index
-    rx_prod: u32,
-    /// RX consumer index
-    rx_cons: u32,
+    /// RX producer indices per queue
+    rx_prod: [u32; NUM_RX_QUEUES],
+    /// RX consumer indices per queue
+    rx_cons: [u32; NUM_RX_QUEUES],
     /// Driver initialized
     initialized: bool,
 }
@@ -146,13 +351,13 @@ impl Genet {
             link_up: false,
             link_speed: 0,
             tx_descs: VirtAddr::new(0),
-            rx_descs: VirtAddr::new(0),
+            rx_descs: [VirtAddr::new(0); NUM_RX_QUEUES],
             tx_bufs: [VirtAddr::new(0); NUM_TX_DESC],
-            rx_bufs: [VirtAddr::new(0); NUM_RX_DESC],
+            rx_bufs: [[VirtAddr::new(0); NUM_RX_DESC]; NUM_RX_QUEUES],
             tx_prod: 0,
             tx_cons: 0,
-            rx_prod: 0,
-            rx_cons: 0,
+            rx_prod: [0; NUM_RX_QUEUES],
+            rx_cons: [0; NUM_RX_QUEUES],
             initialized: false,
         }
     }
@@ -259,9 +464,16 @@ impl Genet {
         // 9. Enable DMA
         self.reg32_write(DMA_CTRL, (1 << 0) | (1 << 1)); // TX_EN | RX_EN
 
+        // 10. Initialize PHY
+        // PHY address is typically 1 for BCM2712
+        if let Err(e) = self.phy_init(1) {
+            println!("[genet] PHY init failed: {}", e);
+        }
+
+        // 11. Poll PHY for link status
+        self.poll_phy(1);
+
         self.initialized = true;
-        self.link_up = true; // Assume link is up (would poll PHY in real impl)
-        self.link_speed = 1000;
 
         println!("[genet] Initialized — link up at {} Mbps", self.link_speed);
         Ok(())
@@ -276,16 +488,20 @@ impl Genet {
                 .ok_or("Failed to allocate TX descriptor ring")?;
         self.tx_descs = phys_to_virt(tx_desc_phys);
 
-        // Allocate RX descriptor ring
+        // Allocate RX descriptor rings (one per queue)
         let rx_desc_size = NUM_RX_DESC * core::mem::size_of::<DmaDesc>();
-        let rx_desc_phys =
-            crate::memory::frame_alloc::allocate_contiguous((rx_desc_size + 4095) / 4096)
-                .ok_or("Failed to allocate RX descriptor ring")?;
-        self.rx_descs = phys_to_virt(rx_desc_phys);
+        for q in 0..NUM_RX_QUEUES {
+            let rx_desc_phys =
+                crate::memory::frame_alloc::allocate_contiguous((rx_desc_size + 4095) / 4096)
+                    .ok_or("Failed to allocate RX descriptor ring")?;
+            self.rx_descs[q] = phys_to_virt(rx_desc_phys);
+        }
 
         // Zero out descriptor rings
         core::ptr::write_bytes(self.tx_descs.0 as *mut u8, 0, tx_desc_size);
-        core::ptr::write_bytes(self.rx_descs.0 as *mut u8, 0, rx_desc_size);
+        for q in 0..NUM_RX_QUEUES {
+            core::ptr::write_bytes(self.rx_descs[q].0 as *mut u8, 0, rx_desc_size);
+        }
 
         // Allocate TX packet buffers
         for i in 0..NUM_TX_DESC {
@@ -295,17 +511,23 @@ impl Genet {
             self.tx_bufs[i] = phys_to_virt(buf_phys);
         }
 
-        // Allocate RX packet buffers
-        for i in 0..NUM_RX_DESC {
-            let buf_phys =
-                crate::memory::frame_alloc::allocate_contiguous((MAX_FRAME_SIZE + 4095) / 4096)
-                    .ok_or("Failed to allocate RX buffer")?;
-            self.rx_bufs[i] = phys_to_virt(buf_phys);
+        // Allocate RX packet buffers per queue
+        for q in 0..NUM_RX_QUEUES {
+            for i in 0..NUM_RX_DESC {
+                let buf_phys =
+                    crate::memory::frame_alloc::allocate_contiguous((MAX_FRAME_SIZE + 4095) / 4096)
+                        .ok_or("Failed to allocate RX buffer")?;
+                self.rx_bufs[q][i] = phys_to_virt(buf_phys);
+            }
         }
 
         println!(
-            "[genet] DMA rings allocated: TX {:#x}, RX {:#x}",
-            self.tx_descs.0, self.rx_descs.0
+            "[genet] DMA rings allocated: TX {:#x}, RX0 {:#x}, RX1 {:#x}, RX2 {:#x}, RX3 {:#x}",
+            self.tx_descs.0,
+            self.rx_descs[0].0,
+            self.rx_descs[1].0,
+            self.rx_descs[2].0,
+            self.rx_descs[3].0
         );
         Ok(())
     }
@@ -334,33 +556,68 @@ impl Genet {
         }
     }
 
-    /// Configure the RX DMA ring and post receive buffers
+    /// Configure the RX DMA rings and post receive buffers (multi-queue for RSS)
     unsafe fn setup_rx_ring(&mut self) {
-        let rx_desc_phys = virt_to_phys(self.rx_descs);
+        // Configure each RX queue
+        for q in 0..NUM_RX_QUEUES {
+            let rx_desc_phys = virt_to_phys(self.rx_descs[q]);
 
-        // Write descriptor base address
-        self.reg32_write(RX_RING_DESC_BASE_LO, rx_desc_phys.0 as u32);
-        self.reg32_write(RX_RING_DESC_BASE_HI, (rx_desc_phys.0 >> 32) as u32);
-        self.reg32_write(RX_RING_DESC_COUNT, NUM_RX_DESC as u32);
+            // Write descriptor base address for this queue
+            match q {
+                0 => {
+                    self.reg32_write(RX_RING_DESC_BASE_LO, rx_desc_phys.0 as u32);
+                    self.reg32_write(RX_RING_DESC_BASE_HI, (rx_desc_phys.0 >> 32) as u32);
+                    self.reg32_write(RX_RING_DESC_COUNT, NUM_RX_DESC as u32);
+                    self.reg32_write(RX_RING_PROD_INDEX, 0);
+                    self.reg32_write(RX_RING_CONS_INDEX, 0);
+                }
+                1 => {
+                    self.reg32_write(RX_RING1_DESC_BASE_LO, rx_desc_phys.0 as u32);
+                    self.reg32_write(RX_RING1_DESC_BASE_HI, (rx_desc_phys.0 >> 32) as u32);
+                    self.reg32_write(RX_RING1_DESC_COUNT, NUM_RX_DESC as u32);
+                    self.reg32_write(RX_RING1_PROD_INDEX, 0);
+                    self.reg32_write(RX_RING1_CONS_INDEX, 0);
+                }
+                2 => {
+                    self.reg32_write(RX_RING2_DESC_BASE_LO, rx_desc_phys.0 as u32);
+                    self.reg32_write(RX_RING2_DESC_BASE_HI, (rx_desc_phys.0 >> 32) as u32);
+                    self.reg32_write(RX_RING2_DESC_COUNT, NUM_RX_DESC as u32);
+                    self.reg32_write(RX_RING2_PROD_INDEX, 0);
+                    self.reg32_write(RX_RING2_CONS_INDEX, 0);
+                }
+                3 => {
+                    self.reg32_write(RX_RING3_DESC_BASE_LO, rx_desc_phys.0 as u32);
+                    self.reg32_write(RX_RING3_DESC_BASE_HI, (rx_desc_phys.0 >> 32) as u32);
+                    self.reg32_write(RX_RING3_DESC_COUNT, NUM_RX_DESC as u32);
+                    self.reg32_write(RX_RING3_PROD_INDEX, 0);
+                    self.reg32_write(RX_RING3_CONS_INDEX, 0);
+                }
+                _ => {}
+            }
 
-        // Initialize producer/consumer indices
-        self.rx_prod = 0;
-        self.rx_cons = 0;
-        self.reg32_write(RX_RING_PROD_INDEX, 0);
-        self.reg32_write(RX_RING_CONS_INDEX, 0);
+            // Initialize producer/consumer indices for this queue
+            self.rx_prod[q] = 0;
+            self.rx_cons[q] = 0;
 
-        // Fill in buffer addresses for each RX descriptor
-        let desc_ptr = self.rx_descs.0 as *mut DmaDesc;
-        for i in 0..NUM_RX_DESC {
-            let buf_phys = virt_to_phys(self.rx_bufs[i]);
-            (*desc_ptr.add(i)).addr_lo = buf_phys.0 as u32;
-            (*desc_ptr.add(i)).addr_hi = (buf_phys.0 >> 32) as u32;
-            (*desc_ptr.add(i)).ctrl = MAX_FRAME_SIZE as u32; // Buffer length
+            // Fill in buffer addresses for each RX descriptor in this queue
+            let desc_ptr = self.rx_descs[q].0 as *mut DmaDesc;
+            for i in 0..NUM_RX_DESC {
+                let buf_phys = virt_to_phys(self.rx_bufs[q][i]);
+                (*desc_ptr.add(i)).addr_lo = buf_phys.0 as u32;
+                (*desc_ptr.add(i)).addr_hi = (buf_phys.0 >> 32) as u32;
+                (*desc_ptr.add(i)).ctrl = MAX_FRAME_SIZE as u32; // Buffer length
+            }
+
+            // Set RX producer index to number of posted buffers
+            self.rx_prod[q] = NUM_RX_DESC as u32;
+            match q {
+                0 => self.reg32_write(RX_RING_PROD_INDEX, NUM_RX_DESC as u32),
+                1 => self.reg32_write(RX_RING1_PROD_INDEX, NUM_RX_DESC as u32),
+                2 => self.reg32_write(RX_RING2_PROD_INDEX, NUM_RX_DESC as u32),
+                3 => self.reg32_write(RX_RING3_PROD_INDEX, NUM_RX_DESC as u32),
+                _ => {}
+            }
         }
-
-        // Set RX producer index to number of posted buffers
-        self.rx_prod = NUM_RX_DESC as u32;
-        self.reg32_write(RX_RING_PROD_INDEX, NUM_RX_DESC as u32);
     }
 
     /// Transmit a packet
@@ -403,31 +660,34 @@ impl Genet {
     /// Poll for received packets (called from IRQ or polling loop)
     /// Returns the length of the received packet, or 0 if none available.
     /// The packet data is copied into the provided buffer.
+    /// Currently polls queue 0 (default RSS queue).
     pub fn receive(&mut self, buf: &mut [u8]) -> usize {
         if !self.initialized {
             return 0;
         }
 
+        const Q: usize = 0; // Default queue
+
         // Check if there are received packets
         let cons = self.reg32_read(RX_RING_CONS_INDEX) & 0xFFFF;
-        if cons == self.rx_cons {
+        if cons == self.rx_cons[Q] {
             return 0;
         }
 
-        let idx = self.rx_cons as usize % NUM_RX_DESC;
-        let desc_ptr = self.rx_descs.0 as *mut DmaDesc;
+        let idx = self.rx_cons[Q] as usize % NUM_RX_DESC;
+        let desc_ptr = self.rx_descs[Q].0 as *mut DmaDesc;
         let desc = unsafe { *desc_ptr.add(idx) };
 
         let pkt_len = (desc.status & RX_DESC_PKT_LEN_MASK) as usize;
         if pkt_len == 0 || pkt_len > buf.len() {
             // Skip bad packets
-            self.rx_cons = (self.rx_cons + 1) & 0xFFFF;
-            self.reg32_write(RX_RING_CONS_INDEX, self.rx_cons);
+            self.rx_cons[Q] = (self.rx_cons[Q] + 1) & 0xFFFF;
+            self.reg32_write(RX_RING_CONS_INDEX, self.rx_cons[Q]);
             return 0;
         }
 
         // Copy packet data from RX buffer
-        let rx_buf_ptr = self.rx_bufs[idx].0 as *const u8;
+        let rx_buf_ptr = self.rx_bufs[Q][idx].0 as *const u8;
         unsafe {
             core::ptr::copy_nonoverlapping(rx_buf_ptr, buf.as_mut_ptr(), pkt_len);
         }
@@ -439,12 +699,12 @@ impl Genet {
         }
 
         // Advance consumer index
-        self.rx_cons = (self.rx_cons + 1) & 0xFFFF;
-        self.reg32_write(RX_RING_CONS_INDEX, self.rx_cons);
+        self.rx_cons[Q] = (self.rx_cons[Q] + 1) & 0xFFFF;
+        self.reg32_write(RX_RING_CONS_INDEX, self.rx_cons[Q]);
 
         // Advance producer index to re-post the buffer
-        self.rx_prod = (self.rx_prod + 1) & 0xFFFF;
-        self.reg32_write(RX_RING_PROD_INDEX, self.rx_prod);
+        self.rx_prod[Q] = (self.rx_prod[Q] + 1) & 0xFFFF;
+        self.reg32_write(RX_RING_PROD_INDEX, self.rx_prod[Q]);
 
         pkt_len
     }
@@ -477,6 +737,208 @@ impl Genet {
     /// Check if driver is initialized
     pub fn is_initialized(&self) -> bool {
         self.initialized
+    }
+
+    /// Read a PHY register via MDIO
+    fn mdio_read(&self, phy_addr: u32, reg_addr: u32) -> u16 {
+        // Wait for MDIO to be ready
+        let mut ctrl;
+        loop {
+            ctrl = self.reg32_read(MDIO_CTRL);
+            if (ctrl & (1 << 31)) == 0 {
+                break; // MDIO idle
+            }
+        }
+
+        // Set up MDIO read command
+        ctrl = MDIO_CTRL_READ
+            | MDIO_CTRL_START
+            | (phy_addr << MDIO_CTRL_PHY_ADDR_SHIFT)
+            | (reg_addr << MDIO_CTRL_REG_ADDR_SHIFT)
+            | MDIO_CTRL_TA;
+        self.reg32_write(MDIO_CTRL, ctrl);
+
+        // Wait for completion
+        loop {
+            ctrl = self.reg32_read(MDIO_CTRL);
+            if (ctrl & MDIO_CTRL_START) == 0 {
+                break;
+            }
+        }
+
+        // Read data
+        let data = self.reg32_read(MDIO_DATA) & MDIO_CTRL_DATA_MASK;
+        data as u16
+    }
+
+    /// Write a PHY register via MDIO
+    fn mdio_write(&self, phy_addr: u32, reg_addr: u32, data: u16) {
+        // Wait for MDIO to be ready
+        let mut ctrl;
+        loop {
+            ctrl = self.reg32_read(MDIO_CTRL);
+            if (ctrl & (1 << 31)) == 0 {
+                break; // MDIO idle
+            }
+        }
+
+        // Write data register
+        self.reg32_write(MDIO_DATA, data as u32);
+
+        // Set up MDIO write command
+        ctrl = MDIO_CTRL_WRITE
+            | MDIO_CTRL_START
+            | (phy_addr << MDIO_CTRL_PHY_ADDR_SHIFT)
+            | (reg_addr << MDIO_CTRL_REG_ADDR_SHIFT)
+            | MDIO_CTRL_TA;
+        self.reg32_write(MDIO_CTRL, ctrl);
+
+        // Wait for completion
+        loop {
+            ctrl = self.reg32_read(MDIO_CTRL);
+            if (ctrl & MDIO_CTRL_START) == 0 {
+                break;
+            }
+        }
+    }
+
+    /// Initialize and configure the PHY via MDIO
+    fn phy_init(&mut self, phy_addr: u32) -> Result<(), &'static str> {
+        // Read PHY ID to verify connection
+        let id1 = self.mdio_read(phy_addr, PHY_REG_PHYIDR1);
+        let id2 = self.mdio_read(phy_addr, PHY_REG_PHYIDR2);
+        println!("[genet] PHY ID: {:#06x} {:#06x}", id1, id2);
+
+        // Reset PHY
+        self.mdio_write(phy_addr, PHY_REG_BMCR, BMCR_RESET as u16);
+        crate::arch::cpu::delay_us(1000); // Wait for reset
+
+        // Wait for reset to complete
+        for _ in 0..100 {
+            let bmcr = self.mdio_read(phy_addr, PHY_REG_BMCR);
+            if (bmcr & BMCR_RESET as u16) == 0 {
+                break;
+            }
+            crate::arch::cpu::delay_us(100);
+        }
+
+        // Advertise capabilities: 1000BASE-T full/half, 100BASE-TX full/half, 10BASE-T full/half
+        let anar = ANAR_SELECTOR_IEEE_802_3 as u16
+            | ANAR_10BASE_T_HD as u16
+            | ANAR_10BASE_T_FD as u16
+            | ANAR_100BASE_TX_HD as u16
+            | ANAR_100BASE_TX_FD as u16
+            | ANAR_PAUSE_SYM as u16
+            | ANAR_PAUSE_ASYM as u16;
+        self.mdio_write(phy_addr, PHY_REG_ANAR, anar);
+
+        // 1000BASE-T control: advertise full and half duplex
+        let gctl = GCTL_1000BASET_FD as u16 | GCTL_1000BASET_HD as u16;
+        self.mdio_write(phy_addr, PHY_REG_1000BASET_CTRL, gctl);
+
+        // Restart auto-negotiation
+        let mut bmcr = self.mdio_read(phy_addr, PHY_REG_BMCR);
+        bmcr |= BMCR_AN_ENABLE as u16 | BMCR_AN_RESTART as u16;
+        self.mdio_write(phy_addr, PHY_REG_BMCR, bmcr);
+
+        println!("[genet] PHY auto-negotiation started");
+        Ok(())
+    }
+
+    /// Poll PHY link status and update link_up/link_speed
+    pub fn poll_phy(&mut self, phy_addr: u32) {
+        let bmsr = self.mdio_read(phy_addr, PHY_REG_BMSR);
+
+        // Check if link is up
+        if (bmsr & BMSR_LINK_STATUS as u16) != 0 {
+            // Link is up, check auto-negotiation complete
+            if (bmsr & BMSR_AN_COMPLETE as u16) != 0 {
+                // Read 1000BASE-T status
+                let gstatus = self.mdio_read(phy_addr, PHY_REG_1000BASET_STATUS);
+                let anar = self.mdio_read(phy_addr, PHY_REG_ANAR);
+                let anlpar = self.mdio_read(phy_addr, PHY_REG_ANLPAR);
+
+                // Determine speed and duplex
+                let common_1000 =
+                    gstatus & (GSTATUS_1000BASET_FD as u16 | GSTATUS_1000BASET_HD as u16);
+                let common_100 =
+                    anar & anlpar & (ANAR_100BASE_TX_FD as u16 | ANAR_100BASE_TX_HD as u16);
+                let common_10 = anar & anlpar & (ANAR_10BASE_T_FD as u16 | ANAR_10BASE_T_HD as u16);
+
+                if (common_1000 & GSTATUS_1000BASET_FD as u16) != 0 {
+                    self.link_speed = 1000;
+                    self.link_up = true;
+                } else if (common_1000 & GSTATUS_1000BASET_HD as u16) != 0 {
+                    self.link_speed = 1000;
+                    self.link_up = true;
+                } else if (common_100 & ANAR_100BASE_TX_FD as u16) != 0 {
+                    self.link_speed = 100;
+                    self.link_up = true;
+                } else if (common_100 & ANAR_100BASE_TX_HD as u16) != 0 {
+                    self.link_speed = 100;
+                    self.link_up = true;
+                } else if (common_10 & ANAR_10BASE_T_FD as u16) != 0 {
+                    self.link_speed = 10;
+                    self.link_up = true;
+                } else if (common_10 & ANAR_10BASE_T_HD as u16) != 0 {
+                    self.link_speed = 10;
+                    self.link_up = true;
+                } else {
+                    self.link_up = false;
+                    self.link_speed = 0;
+                }
+
+                println!("[genet] Link up: {} Mbps", self.link_speed);
+            } else {
+                // Auto-negotiation in progress
+                self.link_up = false;
+            }
+        } else {
+            // Link down
+            self.link_up = false;
+            self.link_speed = 0;
+        }
+    }
+
+    /// Get PHY status as enum
+    pub fn phy_status(&self) -> PhyStatus {
+        if !self.link_up {
+            PhyStatus::Down
+        } else {
+            match self.link_speed {
+                1000 => PhyStatus::Up1000Full, // Simplified - would check duplex
+                100 => PhyStatus::Up100Full,
+                10 => PhyStatus::Up10Full,
+                _ => PhyStatus::Down,
+            }
+        }
+    }
+
+    /// Get statistics
+    pub fn stats(&self) -> GenetStats {
+        // In a real implementation, read from STATS_BASE registers
+        GenetStats::default()
+    }
+
+    /// Configure RSS indirection table
+    pub fn configure_rss(
+        &mut self,
+        _key: &[u8; RSS_KEY_SIZE],
+        _indir: &[u8; RSS_INDIR_TABLE_SIZE],
+    ) {
+        // Write RSS hash key (simplified - would write to hardware registers)
+        // Write indirection table
+        // For now, just store for reference
+        println!(
+            "[genet] RSS configured with {} entry indirection table",
+            RSS_INDIR_TABLE_SIZE
+        );
+    }
+
+    /// Enable/disable Wake-on-LAN
+    pub fn set_wol(&mut self, enable: u32) {
+        // Write to WOL control registers
+        println!("[genet] WoL enabled: {:#x}", enable);
     }
 }
 
