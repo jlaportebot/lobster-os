@@ -140,7 +140,7 @@ macro_rules! test_case {
 macro_rules! test_suite {
     ($($name:expr => $func:expr),*) => {
         &[
-            $(crate::test_case!($name, $func)),*
+            $($crate::test_case!($name, $func)),*
         ]
     };
 }

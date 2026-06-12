@@ -602,7 +602,7 @@ pub fn read_capacity(slot_id: u8, lun: u8) -> Result<ScsiReadCapacity, &'static 
 
     // Update device state with the capacity info
     let mut devices = MASS_DEVICES.lock();
-    if let Some(dev) = find_device_mut(&mut devices, slot_id).ok() {
+    if let Ok(dev) = find_device_mut(&mut devices, slot_id) {
         dev.block_size = cap.block_size;
         dev.last_lba = cap.last_lba;
         dev.initialized = true;
@@ -675,10 +675,10 @@ pub fn write_blocks(
 // ─── Utility Functions ─────────────────────────────────────────────────
 
 /// Find a device by slot_id (mutable)
-fn find_device_mut<'a>(
-    devices: &'a mut [Option<MassDevice>; MAX_MASS_DEVICES],
+fn find_device_mut(
+    devices: &mut [Option<MassDevice>; MAX_MASS_DEVICES],
     slot_id: u8,
-) -> Result<&'a mut MassDevice, &'static str> {
+) -> Result<&mut MassDevice, &'static str> {
     for dev_opt in devices.iter_mut() {
         if let Some(dev) = dev_opt {
             if dev.slot_id == slot_id && dev.active {
