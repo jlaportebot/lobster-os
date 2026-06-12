@@ -333,7 +333,15 @@ impl NvmeQueue {
             cq_phys: 0,
         }
     }
+}
 
+impl Default for NvmeQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NvmeQueue {
     /// Create a queue pair with allocated memory
     pub fn create(qid: u16, depth: u16) -> Option<Self> {
         let sq_size = depth as usize * size_of::<NvmeCmd>();
@@ -407,10 +415,9 @@ impl NvmeQueue {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// NVMe Controller State
-// ═══════════════════════════════════════════════════════════════════
-
+/// NVMe Controller State
+/// ═══════════════════════════════════════════════════════════════════
+///
 /// NVMe controller instance
 pub struct NvmeController {
     /// MMIO base address (mapped BAR0)
@@ -458,6 +465,12 @@ impl NvmeController {
             initialized: false,
             pcie_dev_idx: 0,
         }
+    }
+}
+
+impl Default for NvmeController {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1123,6 +1136,12 @@ impl SdhciController {
             rca: 0,
             initialized: false,
         }
+    }
+}
+
+impl Default for SdhciController {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

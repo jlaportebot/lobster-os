@@ -70,6 +70,12 @@ impl SigAction {
     }
 }
 
+impl Default for SigAction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Maximum standard signal number
 const MAX_STD_SIG: u64 = 31;
 /// Maximum signal number including realtime

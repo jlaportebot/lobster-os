@@ -237,3 +237,9 @@ impl ScreenBuffer {
         s
     }
 }
+
+impl Default for ScreenBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}

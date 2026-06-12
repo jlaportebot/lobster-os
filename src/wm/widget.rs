@@ -507,6 +507,12 @@ pub struct WidgetTable {
     next_id: WidgetId,
 }
 
+impl Default for WidgetTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WidgetTable {
     /// Create an empty widget table
     pub const fn new() -> Self {

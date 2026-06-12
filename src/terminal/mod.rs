@@ -113,6 +113,12 @@ impl Terminal {
     }
 }
 
+impl Default for Terminal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl core::fmt::Write for Terminal {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         for byte in s.bytes() {

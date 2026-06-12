@@ -49,7 +49,9 @@ fn align4(val: usize) -> usize {
 }
 
 /// Load an initrd from a memory region and populate the VFS under /initrd/
-pub fn load_initrd(base: *const u8, size: usize) -> Result<(), VfsError> {
+/// # Safety
+/// The caller must ensure that `base` is a valid pointer to a cpio archive of at least `size` bytes.
+pub unsafe fn load_initrd(base: *const u8, size: usize) -> Result<(), VfsError> {
     if size < 110 {
         println!("[initrd] Too small to be a valid cpio archive");
         return Err(VfsError::IOError);

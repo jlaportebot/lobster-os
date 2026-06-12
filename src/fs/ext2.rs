@@ -1796,8 +1796,8 @@ pub struct MkfsOptions {
     pub reserved_blocks_percent: u8,
 }
 
-impl MkfsOptions {
-    pub fn default() -> Self {
+impl Default for MkfsOptions {
+    fn default() -> Self {
         Self {
             block_size: 4096,
             num_inodes: 0,

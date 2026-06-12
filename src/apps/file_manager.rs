@@ -231,6 +231,12 @@ impl FileManager {
     }
 }
 
+impl Default for FileManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Normalize a path (resolve . and ..)
 fn normalize_path(path: &str) -> String {
     let mut parts: alloc::vec::Vec<&str> = alloc::vec::Vec::new();

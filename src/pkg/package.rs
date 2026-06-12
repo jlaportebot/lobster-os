@@ -2,6 +2,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::str::FromStr;
 
 /// Package architecture
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,14 +26,15 @@ impl core::fmt::Display for PackageArch {
     }
 }
 
-impl PackageArch {
-    pub fn from_str(s: &str) -> Self {
+impl core::str::FromStr for PackageArch {
+    type Err = &'static str;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "aarch64" => PackageArch::Aarch64,
-            "x86_64" => PackageArch::X86_64,
-            "armv7" => PackageArch::Armv7,
-            "riscv64" => PackageArch::Riscv64,
-            _ => PackageArch::Any,
+            "aarch64" => Ok(PackageArch::Aarch64),
+            "x86_64" => Ok(PackageArch::X86_64),
+            "armv7" => Ok(PackageArch::Armv7),
+            "riscv64" => Ok(PackageArch::Riscv64),
+            _ => Ok(PackageArch::Any),
         }
     }
 }
@@ -278,7 +280,7 @@ impl InstalledPackage {
             metadata: PackageMetadata {
                 name: String::from(parts[0]),
                 version: String::from(parts[1]),
-                arch: PackageArch::from_str(parts[2]),
+                arch: PackageArch::from_str(parts[2]).unwrap_or(PackageArch::Any),
                 description: String::from(parts[5]),
                 maintainer: String::new(),
                 license: String::new(),
