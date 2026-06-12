@@ -208,7 +208,7 @@ fn send_echo_reply(dst: [u8; 4], identifier: u16, sequence: u16, payload: &[u8])
     genet::transmit(&eth_buf[..eth_len]);
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 

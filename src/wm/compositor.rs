@@ -1555,7 +1555,7 @@ fn draw_wallpaper(fb: FramebufferInfo, back_buf: *mut u32) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 

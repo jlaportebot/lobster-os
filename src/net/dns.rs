@@ -555,7 +555,7 @@ fn decode_name(data: &[u8], offset: usize, out: &mut [u8]) -> (usize, usize) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 

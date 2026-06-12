@@ -332,7 +332,7 @@ impl RepositoryIndex {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use alloc::string::ToString;

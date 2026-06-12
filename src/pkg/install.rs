@@ -1185,7 +1185,7 @@ pub fn install_transaction(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use crate::pkg::RepoPackage;

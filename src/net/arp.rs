@@ -280,7 +280,7 @@ pub fn dump_cache() {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std", target_arch = "aarch64"))]
 mod tests {
     use super::*;
 

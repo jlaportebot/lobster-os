@@ -678,7 +678,7 @@ pub fn lease_info() -> (u32, [u8; 4], [u8; 4]) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 

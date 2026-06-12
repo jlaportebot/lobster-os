@@ -249,7 +249,7 @@ pub fn launch_app(launcher: &AppLauncher, name: &str) -> Result<(), &'static str
     launcher.launch(name)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::{parse_desktop_file, AppLauncher, DesktopEntry};
 

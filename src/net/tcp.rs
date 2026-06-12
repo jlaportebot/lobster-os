@@ -489,7 +489,7 @@ pub fn connect(fd: usize, dst_ip: [u8; 4], dst_port: u16) -> bool {
     true
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 

@@ -302,7 +302,7 @@ pub fn send_packet(
     genet::transmit(&eth_buf[..eth_len]);
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 

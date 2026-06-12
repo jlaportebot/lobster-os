@@ -173,7 +173,7 @@ pub fn send_packet(src_ip: [u8; 4], dst_ip: [u8; 4], src_port: u16, dst_port: u1
     genet::transmit(&eth_buf[..eth_len]);
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 

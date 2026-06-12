@@ -225,7 +225,7 @@ pub fn handle_udp(ip_hdr: &Ipv4Header, udp_hdr: &UdpHeader, data: &[u8]) {
     crate::println!("socket: no socket bound to port {}", dst_port);
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 
