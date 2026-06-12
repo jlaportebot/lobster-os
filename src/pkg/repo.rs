@@ -601,7 +601,7 @@ pub fn download_package(_url: &str, _buffer: &mut [u8]) -> Result<usize, RepoErr
     Err(RepoError::NotImplemented)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use alloc::string::ToString;

@@ -2954,7 +2954,7 @@ pub fn wifi_power_save_state() -> u8 {
 // ─── Tests ────────────────────────────────────────────────────────────
 // These tests run on host (with std feature) and verify crypto correctness.
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::sha1::{hmac_sha1, sha1_hash};
     use super::{derive_ptk, pbkdf2_hmac_sha1, prf_512};

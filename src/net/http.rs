@@ -454,7 +454,7 @@ pub fn get_header<'a>(headers: &'a [u8], name: &str) -> Option<&'a [u8]> {
     None
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 
