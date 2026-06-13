@@ -46,7 +46,7 @@
 //! 42 = fcntl(fd, cmd, arg)
 
 use crate::println;
-use crate::sched;
+use crate::sched::{self, TrapFrame};
 
 /// Syscall numbers
 pub const SYS_EXIT: u64 = 0;
@@ -117,6 +117,21 @@ pub const SYS_GET_NO_NEW_PRIVS: u64 = 62;
 
 /// Maximum syscall number
 const MAX_SYSCALL: u64 = 62;
+
+// Global pointer to current trap frame during syscall handling (for sigreturn)
+static mut CURRENT_TRAP_FRAME: *mut TrapFrame = core::ptr::null_mut();
+
+/// Set the current trap frame for syscall handling
+pub fn set_current_trap_frame(regs: *mut TrapFrame) {
+    unsafe {
+        CURRENT_TRAP_FRAME = regs;
+    }
+}
+
+/// Get the current trap frame
+pub fn get_current_trap_frame() -> *mut TrapFrame {
+    unsafe { CURRENT_TRAP_FRAME }
+}
 
 /// Dispatch a syscall from EL0
 ///
@@ -617,14 +632,13 @@ fn sys_sigaction(sig: u32, handler: u64) -> u64 {
 /// Restores the saved trap frame from the user stack
 fn sys_rt_sigreturn() -> u64 {
     use crate::sched::signal::sigreturn;
-    let pid = crate::sched::current_pid();
-    let _task_idx = match crate::sched::find_task_index(pid) {
-        Some(i) => i,
-        None => return u64::MAX,
-    };
+    let regs = crate::sched::syscall::get_current_trap_frame();
+    if regs.is_null() {
+        return u64::MAX;
+    }
 
-    // Call sigreturn to restore the trap frame
-    match sigreturn() {
+    // SAFETY: `regs` is a valid pointer to the current trap frame
+    match unsafe { sigreturn(regs) } {
         Ok(()) => 0,
         Err(_) => u64::MAX,
     }

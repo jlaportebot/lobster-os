@@ -1780,6 +1780,62 @@ pub fn probe_and_mount_rootfs() {
     println!("[fs] No mountable root filesystem found");
 }
 
+/// Probe all registered partition devices for ext2 and mount the first one found as /etc.
+/// Called from kernel_main after block devices and VFS are initialized.
+/// This provides a persistent /etc for configuration files (WiFi, users, packages, etc.)
+pub fn probe_and_mount_etc() {
+    let part_count = crate::fs::block_dev::partition_count();
+    if part_count == 0 {
+        println!("[ext2] No partitions found, skipping /etc mount");
+        return;
+    }
+
+    for i in 0..part_count {
+        if let Some(part) = crate::fs::block_dev::get_partition_device(i) {
+            let start_lba_bytes = part.start_lba * 512;
+            let name_len = part.name_len;
+            let name_str = core::str::from_utf8(&part.device_name[..name_len]).unwrap_or("?");
+
+            println!(
+                "[ext2] Probing partition '{}' (LBA {}) for ext2 (/etc mount)...",
+                name_str, part.start_lba
+            );
+
+            if probe_ext2(part.parent_index, start_lba_bytes) {
+                println!("[ext2] Found ext2 filesystem on partition '{}'", name_str);
+                match mount(part.parent_index, start_lba_bytes, "/etc") {
+                    Ok(()) => {
+                        println!("[ext2] /etc filesystem mounted successfully");
+                        // Ensure /etc/wifi directory exists for WiFi persistence
+                        let _ = crate::fs::vfs::create_dir("/etc/wifi");
+                        println!("[ext2] Created /etc/wifi directory");
+                        return;
+                    }
+                    Err(e) => {
+                        println!("[ext2] Failed to mount /etc: {:?}", e);
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+
+    // No ext2 partition found for /etc — try FAT32 as fallback
+    println!("[ext2] No ext2 partition for /etc, trying FAT32...");
+    for i in 0..part_count {
+        if let Some(part) = crate::fs::block_dev::get_partition_device(i) {
+            let start_lba_bytes = part.start_lba * 512;
+            if crate::fs::fat32::mount(part.parent_index, start_lba_bytes, "/etc").is_ok() {
+                println!("[fs] FAT32 partition mounted at /etc");
+                let _ = crate::fs::vfs::create_dir("/etc/wifi");
+                return;
+            }
+        }
+    }
+
+    println!("[fs] No mountable /etc filesystem found, /etc will be on initrd (read-only)");
+}
+
 // ═══════════════════════════════════════════════════════════════
 // mkfs — create an ext2 filesystem on a block device
 // ═══════════════════════════════════════════════════════════════

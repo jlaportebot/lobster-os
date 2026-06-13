@@ -2561,14 +2561,39 @@ pub fn pty_ioctl(idx: usize, cmd: u64, arg: u64) -> i64 {
             // TIOCGWINSZ - get window size
             0x5413 => {
                 // arg is pointer to winsize struct
-                // For now, just return success
+                // struct winsize { unsigned short ws_row, ws_col, ws_xpixel, ws_ypixel; }
+                let ws_row = pty.ws_row;
+                let ws_col = pty.ws_col;
+                let ws_xpixel = pty.ws_xpixel;
+                let ws_ypixel = pty.ws_ypixel;
+                unsafe {
+                    let ptr = arg as *mut u16;
+                    *ptr = ws_row;
+                    *ptr.add(1) = ws_col;
+                    *ptr.add(2) = ws_xpixel;
+                    *ptr.add(3) = ws_ypixel;
+                }
                 0
             }
             // TIOCSWINSZ - set window size
-            0x5414 => 0,
+            0x5414 => {
+                // arg is pointer to winsize struct
+                unsafe {
+                    let ptr = arg as *const u16;
+                    pty.ws_row = *ptr;
+                    pty.ws_col = *ptr.add(1);
+                    pty.ws_xpixel = *ptr.add(2);
+                    pty.ws_ypixel = *ptr.add(3);
+                }
+                // TODO: Send SIGWINCH to foreground process group
+                0
+            }
             // TIOCGPGRP - get process group
             0x540F => {
                 // arg is pointer to pid_t
+                unsafe {
+                    *(arg as *mut u32) = pty.pgrp;
+                }
                 0
             }
             // TIOCSPGRP - set process group

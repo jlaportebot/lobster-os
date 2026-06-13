@@ -127,11 +127,24 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
             }
 
             // Dispatch the syscall
+            crate::sched::syscall::set_current_trap_frame(regs as *mut crate::sched::TrapFrame);
             let ret = crate::sched::syscall::dispatch(syscall_num, &args);
 
             // Write return value back to x0 in the saved frame
             if !regs.is_null() {
                 *regs.add(0) = ret;
+            }
+
+            // Clear the trap frame pointer
+            crate::sched::syscall::set_current_trap_frame(core::ptr::null_mut());
+
+            // Check for and deliver pending signals before returning to user space
+            // SAFETY: `regs` is a valid pointer to the current trap frame on the exception stack
+            if unsafe {
+                crate::sched::signal::deliver_pending_signals(regs as *mut crate::sched::TrapFrame)
+            } {
+                // Signal was delivered, ELR/SPSR/regs have been modified
+                // Return to the signal handler instead of the original instruction
             }
         }
         EC_DATA_ABORT => {

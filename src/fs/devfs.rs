@@ -163,7 +163,7 @@ fn dev_urandom_write(buf: *const u8, len: usize) -> usize {
 
 /// /dev/ptmx ioctl — handle TIOCSPTLCK (lock/unlock pt), TIOCGPTN (get PTY number)
 /// Returns 0 on success, negative errno on error
-fn dev_ptmx_ioctl(cmd: u64, _arg: u64) -> i64 {
+fn dev_ptmx_ioctl(cmd: u64, arg: u64) -> i64 {
     // TIOCSPTLCK (0x40045431) - lock/unlock slave PTY
     // TIOCGPTN (0x80045430) - get PTY number
     // TIOCSPTLCK is used to unlock the slave PTY after opening ptmx
@@ -179,9 +179,21 @@ fn dev_ptmx_ioctl(cmd: u64, _arg: u64) -> i64 {
         0x80045430 => {
             // TIOCGPTN
             // arg is pointer to int to store PTY number
-            // For now, return a fixed number - in real impl, allocate a new PTY
-            // The actual PTY allocation happens in ipc::pty_open()
-            0
+            // Allocate a new PTY pair via IPC
+            if let Some((master_idx, slave_idx)) = crate::ipc::pty_open() {
+                // Write the PTY number to the user-space pointer
+                let pty_num = master_idx as i32;
+                unsafe {
+                    *(arg as *mut i32) = pty_num;
+                }
+                println!(
+                    "[devfs] PTY allocated: master={}, slave={}",
+                    master_idx, slave_idx
+                );
+                0
+            } else {
+                -12 // -ENOMEM
+            }
         }
         _ => -25, // -ENOTTY
     }
@@ -385,6 +397,12 @@ pub fn init() {
         },
         0o666,
     );
+
+    // /dev/pts directory (created by devpts filesystem)
+    // Individual PTY slave devices (pts/0, pts/1, ...) are created dynamically
+    // when PTY pairs are allocated via /dev/ptmx
+    crate::fs::vfs::create_dir("/dev/pts").ok();
+    println!("[devfs] Created /dev/pts directory");
 
     // Seed PRNG with timer value
     unsafe {
