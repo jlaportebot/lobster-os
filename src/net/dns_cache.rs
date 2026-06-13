@@ -3,7 +3,7 @@
 //! Provides a thread-safe DNS cache for resolved A records with TTL expiration.
 //! Uses a simple array-based LRU eviction policy suitable for no_std environments.
 
-use spin::Mutex;
+use crate::sync::Spinlock;
 
 /// Maximum cached DNS entries
 const DNS_CACHE_SIZE: usize = 16;
@@ -67,8 +67,8 @@ impl DnsCacheEntry {
 }
 
 /// Global DNS cache protected by a spinlock for SMP safety
-static DNS_CACHE: Mutex<[DnsCacheEntry; DNS_CACHE_SIZE]> =
-    Mutex::new([DnsCacheEntry::empty(); DNS_CACHE_SIZE]);
+static DNS_CACHE: Spinlock<[DnsCacheEntry; DNS_CACHE_SIZE]> =
+    Spinlock::new([DnsCacheEntry::empty(); DNS_CACHE_SIZE]);
 
 /// System time provider - uses the architecture timer
 fn now_ms() -> u64 {
