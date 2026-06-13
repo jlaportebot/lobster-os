@@ -306,11 +306,81 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::smp::init_core0();
     crate::smp::boot_secondary_cores();
 
-    // 12. Initialize network stack
+    // 12. Initialize SDIO bus (for WiFi)
+    crate::println!("[sdio] Initializing SDIO2 controller...");
+    unsafe {
+        if let Err(e) = crate::drivers::sdio::init() {
+            crate::println!("[sdio] SDIO init failed: {:?}", e);
+        } else {
+            crate::println!("[sdio] SDIO2 controller ready");
+        }
+    }
+
+    // 13. Initialize WiFi driver
+    crate::println!("[wifi] Initializing WiFi driver...");
+    unsafe {
+        if let Err(e) = crate::drivers::wifi::init() {
+            crate::println!("[wifi] WiFi init failed: {:?}", e);
+        } else {
+            crate::println!("[wifi] WiFi driver ready");
+        }
+    }
+
+    // 14. Initialize network interface table
+    crate::println!("[iface] Registering network interfaces...");
+    unsafe { crate::net::iface::init() };
+
+    // 15. Auto-connect to saved WiFi networks
+    crate::println!("[wifi] Attempting auto-connect to saved networks...");
+    if let Err(e) = crate::drivers::wifi::auto_connect() {
+        crate::println!("[wifi] Auto-connect failed: {:?}", e);
+    } else {
+        crate::println!("[wifi] Auto-connect successful!");
+    }
+
+    // 16. Initialize network stack
     crate::println!("[net] Initializing network stack...");
     unsafe { crate::net::init() };
 
-    // 13. Initialize USB
+    // 17. Initialize eMMC/SD card (block device for persistent storage)
+    crate::println!("[emmc] Initializing eMMC2 controller...");
+    unsafe {
+        if let Err(e) = crate::drivers::emmc::init() {
+            crate::println!("[emmc] eMMC init failed: {:?}", e);
+        } else {
+            crate::println!("[emmc] eMMC2 controller ready");
+            // Register block device partitions for ext2 mount
+            crate::fs::block_dev::register_partitions(0);
+        }
+    }
+
+    // 18. Mount persistent /etc from ext2 partition (if available)
+    crate::println!("[ext2] Probing for persistent /etc filesystem...");
+    crate::fs::ext2::probe_and_mount_etc();
+
+    // 19. Initialize package manager repositories from /etc/pkg/repos.conf
+    crate::println!("[pkg] Loading repository configuration...");
+    {
+        let mut repo_mgr = crate::pkg::repo::RepositoryManager::new();
+        if let Err(e) = repo_mgr.load_config() {
+            crate::println!("[pkg] Failed to load repo config: {:?}", e);
+        }
+        // Add default repository if none configured
+        if repo_mgr.list_repos().is_empty() {
+            let mut default_repo = crate::pkg::repo::RepositoryConfig::new(
+                "lobster-main",
+                "https://github.com/jlaportebot/lobster-os/releases/download/pkg-repo",
+            );
+            default_repo.enabled = true;
+            default_repo.priority = 10;
+            repo_mgr.add_repo(default_repo);
+            // Save default config
+            let _ = repo_mgr.save_config();
+            crate::println!("[pkg] Added default repository");
+        }
+    }
+
+    // 20. Initialize USB
     crate::println!("[usb] Initializing USB stack...");
     crate::usb::init();
 

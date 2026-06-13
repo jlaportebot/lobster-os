@@ -12,7 +12,7 @@
 //! - signal_handlers: [u64; 64] (per-signal handler, SIG_DFL=0 or SIG_IGN=1 or user addr)
 
 use crate::println;
-use crate::sched::{self, find_task_index, TASK_TABLE};
+use crate::sched::{self, find_task_index, Task, TrapFrame, TASK_TABLE};
 
 // ── Signal action constants ──
 pub const SIG_DFL: u64 = 0; // Default action
@@ -251,7 +251,9 @@ pub fn sigprocmask(how: u64, set: Option<u64>, oldset: Option<&mut u64>) -> i64 
 /// Check for and deliver pending signals
 /// Called before exception return to user space
 /// Returns true if a signal was delivered (and ELR/SPSR should be modified)
-pub fn deliver_pending_signals() -> bool {
+/// # Safety
+/// `regs` must be a valid pointer to a TrapFrame that lives long enough
+pub unsafe fn deliver_pending_signals(regs: *mut TrapFrame) -> bool {
     let task_idx = match find_task_index(sched::current_pid()) {
         Some(idx) => idx,
         None => return false,
@@ -321,26 +323,74 @@ pub fn deliver_pending_signals() -> bool {
                         }
                     }
 
-                    // User-defined handler: modify trap frame to jump to handler
-                    // In a full implementation, we would:
-                    // 1. Save the current ELR/SPSR onto the user stack (sigreturn frame)
-                    // 2. Set ELR = handler address
-                    // 3. Set x0 = signal number
-                    // 4. Set SPSR = EL0t
-                    // For now, log and treat as terminate
-                    println!(
-                        "[signal] PID {}: user handler for signal {} at {:#x} (sigreturn not yet implemented)",
-                        sched::current_pid(), sig, handler
-                    );
-                    task.exit_signal = sig;
-                    sched::kill(sched::current_pid());
-                    return true;
+                    // User-defined handler: set up signal frame
+                    if let Some(regs) = regs.as_mut() {
+                        setup_signal_frame(regs, sig, handler, task);
+                        println!(
+                            "[signal] PID {}: delivering signal {} to handler {:#x}",
+                            sched::current_pid(),
+                            sig,
+                            handler
+                        );
+                        return true;
+                    }
                 }
             }
         }
     }
 
     false
+}
+
+/// Set up signal frame on user stack for handler execution
+/// This saves the current context and prepares for signal handler call
+fn setup_signal_frame(regs: &mut TrapFrame, sig: u64, handler: u64, task: &mut Task) {
+    // The user stack pointer
+    let sp = regs.sp;
+
+    // Align stack to 16 bytes (AArch64 requirement)
+    let aligned_sp = (sp - 16) & !0xF;
+
+    // Calculate space needed for sigreturn frame
+    // We need to save: TrapFrame + signal info + ucontext
+    // For simplicity, we'll save just the TrapFrame
+    let frame_size = core::mem::size_of::<TrapFrame>() as u64 + 128; // Extra space for siginfo/ucontext
+    let frame_sp = (aligned_sp - frame_size) & !0xF;
+
+    // Copy the current TrapFrame to user stack (sigreturn frame)
+    // This is what sigreturn will restore
+    let frame_ptr = frame_sp as *mut u8;
+    unsafe {
+        // Write the TrapFrame to user stack
+        core::ptr::copy_nonoverlapping(
+            regs as *const TrapFrame as *const u8,
+            frame_ptr,
+            core::mem::size_of::<TrapFrame>(),
+        );
+    }
+
+    // Set up signal handler call:
+    // x0 = signal number
+    // x1 = siginfo_t* (simplified, use 0 for now)
+    // x2 = ucontext_t* (point to saved TrapFrame)
+    regs.x0 = sig;
+    regs.x1 = 0; // siginfo_t pointer (not implemented)
+    regs.x2 = frame_sp; // ucontext_t pointer (points to saved TrapFrame)
+
+    // Set ELR to signal handler
+    regs.elr = handler;
+
+    // Set SPSR for EL0t (EL0 with SPSel=0, D=A=I=F=0)
+    // M[3:0] = 0000 (EL0t)
+    // DAIF = 0 (interrupts enabled)
+    regs.spsr = 0x0000;
+
+    // Set new user stack pointer
+    regs.sp = frame_sp;
+
+    // Mark that we're in a signal handler (for sigreturn)
+    // We could use a flag in Task, but for now just note it
+    task.signal_handlers[sig as usize] |= 1 << 63; // High bit = in handler
 }
 
 /// Send a signal to the current process (from kernel, e.g. page fault → SIGSEGV)
@@ -351,27 +401,36 @@ pub fn signal_self(sig: u64) {
 
 /// sigreturn() — restore context from signal handler
 /// Called from sys_rt_sigreturn syscall to restore the trap frame
-pub fn sigreturn() -> Result<(), &'static str> {
+/// # Safety
+/// `regs` must be a valid pointer to a TrapFrame that lives long enough
+pub unsafe fn sigreturn(regs: *mut TrapFrame) -> Result<(), &'static str> {
     let pid = sched::current_pid();
     let task_idx = match sched::find_task_index(pid) {
         Some(i) => i,
         None => return Err("Task not found"),
     };
 
-    // The sigreturn frame is at the current user stack pointer
-    // We need to read the frame from user stack and restore registers
     unsafe {
         if let Some(ref mut task) = TASK_TABLE[task_idx] {
-            let _sp = task.regs.sp;
+            let sp = (*regs).sp;
 
             // Read the sigreturn frame from user stack
-            // Frame layout (simplified):
-            // x0-x30, sp, elr, spsr
-            // For now, just return success - a full implementation would restore all registers
-            // from the user stack frame
+            // The frame was saved at sp by setup_signal_frame
+            let frame_ptr = sp as *const TrapFrame;
+            let saved_frame = core::ptr::read_volatile(frame_ptr);
 
-            // TODO: Read frame from user stack at sp and restore task.regs
-            // For now, just return OK
+            // Restore the trap frame
+            *regs = saved_frame;
+
+            // Clear the "in handler" flag
+            // Find which signal we're returning from
+            for sig in 1..=MAX_SIG {
+                let handler = task.signal_handlers[sig as usize];
+                if handler & (1 << 63) != 0 {
+                    task.signal_handlers[sig as usize] &= !(1 << 63);
+                    break;
+                }
+            }
         }
     }
 

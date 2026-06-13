@@ -714,3 +714,46 @@ pub fn init() {
     }
     println!("[block_dev] Block device subsystem initialized");
 }
+
+/// Register all partitions from a block device by parsing its partition table
+/// Call this after registering a block device (e.g., after emmc::init())
+pub fn register_partitions(device_index: usize) -> Result<usize, BlockError> {
+    let dev = get_device(device_index).ok_or(BlockError::NoMedia)?;
+
+    let partitions = detect_partitions(dev);
+    let mut registered = 0;
+
+    for (i, part_info) in partitions.iter().enumerate() {
+        if let Some(info) = part_info {
+            if info.size_blocks == 0 {
+                continue;
+            }
+
+            let name = match info.type_name() {
+                "Linux filesystem" | "Linux native" => "ext2",
+                "Microsoft Basic Data (FAT32)" | "FAT32" | "FAT16" | "FAT12" => "fat32",
+                "Linux swap" => "swap",
+                "Extended" => "extended",
+                _ => "part",
+            };
+
+            let partition_name = alloc::format!("{}{}", name, i);
+            let pdev = PartitionBlockDevice::new(
+                device_index,
+                info.start_lba,
+                info.size_blocks,
+                &partition_name,
+            );
+
+            if register_partition_device(pdev).is_ok() {
+                registered += 1;
+            }
+        }
+    }
+
+    println!(
+        "[block_dev] Registered {} partitions from device {}",
+        registered, device_index
+    );
+    Ok(registered)
+}
