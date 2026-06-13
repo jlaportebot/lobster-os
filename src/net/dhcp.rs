@@ -657,7 +657,7 @@ pub fn lease_tick() {
                     crate::println!("dhcp: lease expired, restarting discovery");
                     DHCP_STATE.state = DhcpStateEnum::Idle;
                     // Flush DNS cache since network config may change
-                    crate::net::dns::cache_flush();
+                    crate::net::dns_cache::cache_flush();
                     // Restart DHCP
                     discover();
                 }

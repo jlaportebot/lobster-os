@@ -4,6 +4,7 @@
 //! No_std compatible - uses only core.
 
 use crate::net::config;
+use crate::net::dns_cache::{cache_insert, cache_lookup};
 use crate::net::socket::{self, SocketType};
 use core::sync::atomic::{AtomicU16, Ordering};
 
@@ -54,115 +55,6 @@ pub struct DnsAnswer {
 
 /// Transaction ID counter
 static QUERY_ID_COUNTER: AtomicU16 = AtomicU16::new(0x1234);
-
-// ═══════════════════════════════════════════════
-// DNS Cache — stores resolved A records with TTL
-// ═══════════════════════════════════════════════
-
-/// Maximum cached DNS entries
-const DNS_CACHE_SIZE: usize = 16;
-
-/// Maximum domain name stored in cache
-const DNS_CACHE_NAME_LEN: usize = 128;
-
-/// A single DNS cache entry
-#[derive(Clone, Copy)]
-struct DnsCacheEntry {
-    /// Domain name (zero-terminated)
-    name: [u8; DNS_CACHE_NAME_LEN],
-    /// Resolved IPv4 address
-    ip: [u8; 4],
-    /// TTL in seconds from the DNS response
-    ttl: u32,
-    /// Timestamp when cached (system ticks, approximate)
-    cached_at: u64,
-    /// Whether this entry is occupied
-    valid: bool,
-}
-
-const DNS_CACHE_ZERO: DnsCacheEntry = DnsCacheEntry {
-    name: [0u8; DNS_CACHE_NAME_LEN],
-    ip: [0u8; 4],
-    ttl: 0,
-    cached_at: 0,
-    valid: false,
-};
-
-static mut DNS_CACHE: [DnsCacheEntry; DNS_CACHE_SIZE] = [DNS_CACHE_ZERO; DNS_CACHE_SIZE];
-
-/// Look up a domain in the DNS cache
-/// Returns Some(ip) if found and not expired, None otherwise
-pub fn cache_lookup(domain: &str) -> Option<[u8; 4]> {
-    let now = crate::arch::timer::Timer::uptime_ms();
-    unsafe {
-        for (i, entry) in DNS_CACHE.iter().enumerate() {
-            if !entry.valid {
-                continue;
-            }
-            // Compare domain name
-            let name_len = entry
-                .name
-                .iter()
-                .position(|&b| b == 0)
-                .unwrap_or(DNS_CACHE_NAME_LEN);
-            if name_len != domain.len() {
-                continue;
-            }
-            if &entry.name[..name_len] != domain.as_bytes() {
-                continue;
-            }
-            // Check TTL expiry
-            let elapsed_secs = ((now - entry.cached_at) / 1000) as u32;
-            if elapsed_secs > entry.ttl {
-                DNS_CACHE[i].valid = false; // Expire
-                continue;
-            }
-            return Some(entry.ip);
-        }
-    }
-    None
-}
-
-/// Insert a resolved record into the DNS cache
-fn cache_insert(domain: &str, ip: [u8; 4], ttl: u32) {
-    let now = crate::arch::timer::Timer::uptime_ms();
-    unsafe {
-        // Find an empty slot, or evict the oldest entry
-        let mut oldest_idx = 0;
-        let mut oldest_time = u64::MAX;
-        let mut empty_idx: Option<usize> = None;
-
-        for (i, entry) in DNS_CACHE.iter().enumerate() {
-            if !entry.valid {
-                empty_idx = Some(i);
-                break;
-            }
-            if entry.cached_at < oldest_time {
-                oldest_time = entry.cached_at;
-                oldest_idx = i;
-            }
-        }
-
-        let idx = empty_idx.unwrap_or(oldest_idx);
-        let entry = &mut DNS_CACHE[idx];
-        entry.name = [0u8; DNS_CACHE_NAME_LEN];
-        let copy_len = domain.len().min(DNS_CACHE_NAME_LEN);
-        entry.name[..copy_len].copy_from_slice(&domain.as_bytes()[..copy_len]);
-        entry.ip = ip;
-        entry.ttl = ttl;
-        entry.cached_at = now;
-        entry.valid = true;
-    }
-}
-
-/// Invalidate the entire DNS cache (e.g. on DHCP reconfigure)
-pub fn cache_flush() {
-    unsafe {
-        for entry in DNS_CACHE.iter_mut() {
-            entry.valid = false;
-        }
-    }
-}
 
 /// Initialize DNS module
 pub fn init() {
