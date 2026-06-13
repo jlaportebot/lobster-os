@@ -9,6 +9,7 @@
 
 use crate::memory::frame_alloc;
 use crate::memory::{phys_to_virt, PhysAddr, VirtAddr, PAGE_SIZE};
+use crate::net::dhcp;
 use crate::println;
 use core::arch::asm;
 
@@ -822,6 +823,9 @@ pub fn on_timer_tick() {
             false
         }
     };
+
+    // Check DHCP lease timers for renewal/rebinding
+    dhcp::lease_tick();
 
     if should_switch {
         // Request a context switch (will happen on exception return)
