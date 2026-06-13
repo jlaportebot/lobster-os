@@ -354,6 +354,22 @@ pub fn init() {
 /// Idle task — runs when nothing else is ready
 fn idle_task_entry() -> ! {
     loop {
+        // Poll WiFi data frames and process network events
+        if crate::drivers::wifi::is_up() {
+            crate::drivers::wifi::poll();
+            // Process any received WiFi data frames through the network stack
+            let mut buf = [0u8; 1536];
+            if crate::net::iface::receive(
+                crate::net::iface::find_by_type(crate::net::iface::IfaceType::Wifi).unwrap_or(0),
+                &mut buf,
+            ) > 0
+            {
+                // Frame received - process it
+                if let Some(frame) = crate::net::eth::EthernetFrame::parse(&buf) {
+                    crate::net::process_frame(frame, &buf);
+                }
+            }
+        }
         crate::arch::cpu::wfe();
     }
 }

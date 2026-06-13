@@ -125,7 +125,7 @@ pub fn poll() {
 
 #[cfg(target_arch = "aarch64")]
 /// Process a received Ethernet frame
-fn process_frame(frame: eth::EthernetFrame, data: &[u8]) {
+pub fn process_frame(frame: eth::EthernetFrame, data: &[u8]) {
     match frame.ether_type {
         eth::ETHER_TYPE_ARP => {
             arp::handle_packet(&data[eth::HEADER_LEN..]);
@@ -133,6 +133,13 @@ fn process_frame(frame: eth::EthernetFrame, data: &[u8]) {
         eth::ETHER_TYPE_IPV4 => {
             if let Some(ip_hdr) = ipv4::parse(&data[eth::HEADER_LEN..]) {
                 process_ipv4(ip_hdr, &data[eth::HEADER_LEN..]);
+            }
+        }
+        eth::ETHER_TYPE_EAPOL => {
+            // EAPOL frames for WPA 4-way handshake
+            // Delegate to WiFi driver for handshake processing
+            if iface::find_by_type(iface::IfaceType::Wifi).is_some() {
+                crate::drivers::wifi::process_eapol_frame(&data[eth::HEADER_LEN..], frame.src_mac);
             }
         }
         eth::ETHER_TYPE_IPV6 => {

@@ -7,6 +7,8 @@
 pub const ETHER_TYPE_IPV4: u16 = 0x0800;
 pub const ETHER_TYPE_ARP: u16 = 0x0806;
 pub const ETHER_TYPE_IPV6: u16 = 0x86DD;
+/// EAPOL (802.1X) for WPA/WPA2/WPA3 4-way handshake
+pub const ETHER_TYPE_EAPOL: u16 = 0x888E;
 pub const HEADER_LEN: usize = 14;
 
 /// Ethernet frame header

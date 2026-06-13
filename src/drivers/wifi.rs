@@ -1024,8 +1024,18 @@ unsafe fn send_eapol_m4() -> Result<(), WifiError> {
     Ok(())
 }
 
-/// Process incoming EAPOL frame from firmware event
-fn process_eapol_frame(data: &[u8]) {
+/// Process incoming EAPOL frame from network stack
+/// This is the public entry point called from net::process_frame
+pub fn process_eapol_frame(data: &[u8], src_mac: [u8; 6]) {
+    unsafe {
+        // Store AP MAC from Ethernet source address
+        WIFI.ap_mac = src_mac;
+        process_eapol_frame_internal(data);
+    }
+}
+
+/// Internal EAPOL frame processing
+fn process_eapol_frame_internal(data: &[u8]) {
     if let Some((frame, key_data)) = parse_eapol_key_frame(data) {
         // Determine handshake message number from key_info
         let is_pairwise = frame.key_info & EAPOL_KEY_TYPE_MASK != 0;
@@ -2010,8 +2020,15 @@ unsafe fn process_event_frame(data: &[u8]) {
                     let status = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
                     if status == 0 {
                         WIFI.state = WifiState::Connected;
-                        WIFI.link_up = true;
-                        println!("[wifi] Event: SET_SSID success");
+                        // For WPA2, link_up is set after 4-way handshake completes.
+                        // For open networks (PMK is zero), set link_up immediately.
+                        let is_open = WIFI.pmk.iter().all(|&b| b == 0);
+                        if is_open {
+                            WIFI.link_up = true;
+                            println!("[wifi] Event: SET_SSID success (open network, link up)");
+                        } else {
+                            println!("[wifi] Event: SET_SSID success (WPA2, waiting for 4-way handshake)");
+                        }
                     } else {
                         WIFI.state = WifiState::Disconnected;
                         println!("[wifi] Event: SET_SSID failed (status={})", status);
@@ -2026,13 +2043,22 @@ unsafe fn process_event_frame(data: &[u8]) {
             EVT_LINK => {
                 if data.len() >= 14 {
                     let link_state = data[13];
-                    WIFI.link_up = link_state != 0;
-                    println!(
-                        "[wifi] Event: link {}",
-                        if WIFI.link_up { "UP" } else { "DOWN" }
-                    );
+                    // For WPA2, don't trust link event until handshake completes
+                    let is_open = WIFI.pmk.iter().all(|&b| b == 0);
+                    if is_open {
+                        WIFI.link_up = link_state != 0;
+                        println!(
+                            "[wifi] Event: link {}",
+                            if WIFI.link_up { "UP" } else { "DOWN" }
+                        );
+                    } else {
+                        println!(
+                            "[wifi] Event: link {} (WPA2, deferring to handshake)",
+                            if link_state != 0 { "UP" } else { "DOWN" }
+                        );
+                    }
                     // If link up, update current AP info (BSSID, RSSI from event data)
-                    if WIFI.link_up && data.len() >= 22 {
+                    if link_state != 0 && data.len() >= 22 {
                         // RSSI typically at offset 14-15 in link event
                         let rssi = i16::from_le_bytes([data[14], data[15]]) as i8;
                         if rssi != 0 {
@@ -2067,8 +2093,17 @@ unsafe fn process_event_frame(data: &[u8]) {
                     let status = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
                     if status == 0 {
                         WIFI.state = WifiState::Connected;
-                        WIFI.link_up = true;
-                        println!("[wifi] Event: JOIN success");
+                        // For WPA2, link_up is set after 4-way handshake completes.
+                        // For open networks (PMK is zero), set link_up immediately.
+                        let is_open = WIFI.pmk.iter().all(|&b| b == 0);
+                        if is_open {
+                            WIFI.link_up = true;
+                            println!("[wifi] Event: JOIN success (open network, link up)");
+                        } else {
+                            println!(
+                                "[wifi] Event: JOIN success (WPA2, waiting for 4-way handshake)"
+                            );
+                        }
                     } else {
                         println!("[wifi] Event: JOIN failed (status={})", status);
                     }
