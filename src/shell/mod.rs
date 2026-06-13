@@ -1992,6 +1992,21 @@ fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
             match crate::drivers::wifi::connect(ssid, password) {
                 Ok(()) => {
                     crate::println!("Connected successfully!");
+                    // Wait for 4-way handshake to complete (link_up = true)
+                    Uart10::puts("Waiting for handshake...\r\n");
+                    let mut handshake_timeout = 5_000_000u64; // ~50 seconds
+                    while !crate::drivers::wifi::link_up() {
+                        if handshake_timeout == 0 {
+                            Uart10::puts("Handshake timeout\r\n");
+                            break;
+                        }
+                        handshake_timeout -= 1;
+                        crate::arch::cpu::delay_us(10);
+                        crate::drivers::wifi::poll();
+                    }
+                    if crate::drivers::wifi::link_up() {
+                        crate::println!("Handshake complete, link up!");
+                    }
                     // Run DHCP to get IP address
                     Uart10::puts("Requesting DHCP lease...\r\n");
                     if crate::net::dhcp::discover() {
