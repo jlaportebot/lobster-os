@@ -466,6 +466,36 @@ impl NvmeController {
             pcie_dev_idx: 0,
         }
     }
+
+    /// Read a single LBA (logical block) into a 512-byte buffer
+    pub fn read_lba(&self, lba: u64, buf: &mut [u8; 512]) -> Result<(), &'static str> {
+        if !self.initialized {
+            return Err("NVMe not initialized");
+        }
+        if lba >= self.namespace_size {
+            return Err("LBA out of range");
+        }
+        let ret = read(lba, 1, buf.as_mut_ptr() as *mut u8);
+        if ret < 0 {
+            return Err("Read failed");
+        }
+        Ok(())
+    }
+
+    /// Write a single LBA (logical block) from a 512-byte buffer
+    pub fn write_lba(&self, lba: u64, buf: &[u8; 512]) -> Result<(), &'static str> {
+        if !self.initialized {
+            return Err("NVMe not initialized");
+        }
+        if lba >= self.namespace_size {
+            return Err("LBA out of range");
+        }
+        let ret = write(lba, 1, buf.as_ptr() as *const u8);
+        if ret < 0 {
+            return Err("Write failed");
+        }
+        Ok(())
+    }
 }
 
 impl Default for NvmeController {
@@ -1711,4 +1741,90 @@ pub fn nvme_sector_size() -> u32 {
 /// Get NVMe capacity in blocks
 pub fn nvme_num_blocks() -> u64 {
     unsafe { NVME_CTRL.namespace_size }
+}
+
+/// NVMe Block Device implementation
+/// Implements the BlockDevice trait for filesystem integration
+pub struct NvmeBlockDevice;
+
+impl crate::fs::block_dev::BlockDevice for NvmeBlockDevice {
+    fn read_block(
+        &self,
+        block: u64,
+        buf: &mut [u8; 512],
+    ) -> Result<(), crate::fs::block_dev::BlockError> {
+        if block >= unsafe { NVME_CTRL.namespace_size } {
+            return Err(crate::fs::block_dev::BlockError::InvalidBlock);
+        }
+        unsafe {
+            NVME_CTRL
+                .read_lba(block, buf)
+                .map_err(|_| crate::fs::block_dev::BlockError::ReadError)
+        }
+    }
+
+    fn write_block(
+        &self,
+        block: u64,
+        buf: &[u8; 512],
+    ) -> Result<(), crate::fs::block_dev::BlockError> {
+        if block >= unsafe { NVME_CTRL.namespace_size } {
+            return Err(crate::fs::block_dev::BlockError::InvalidBlock);
+        }
+        unsafe {
+            NVME_CTRL
+                .write_lba(block, buf)
+                .map_err(|_| crate::fs::block_dev::BlockError::WriteError)
+        }
+    }
+
+    fn block_size(&self) -> usize {
+        512
+    }
+
+    fn total_blocks(&self) -> u64 {
+        unsafe { NVME_CTRL.namespace_size }
+    }
+
+    fn name(&self) -> &str {
+        "nvme0"
+    }
+
+    fn media_present(&self) -> bool {
+        unsafe { NVME_CTRL.initialized }
+    }
+
+    fn device_type(&self) -> &str {
+        "nvme"
+    }
+
+    fn read_only(&self) -> bool {
+        false
+    }
+
+    fn flush(&self) -> Result<(), crate::fs::block_dev::BlockError> {
+        // NVMe flush command would go here
+        Ok(())
+    }
+}
+
+/// Static NVMe block device instance for registration
+pub static NVME_BLOCK_DEVICE: NvmeBlockDevice = NvmeBlockDevice;
+
+/// Initialize NVMe and register as block device
+pub unsafe fn init_and_register_block() -> bool {
+    if init() {
+        // Register as a block device
+        if crate::fs::block_dev::register_device(&NVME_BLOCK_DEVICE).is_ok() {
+            crate::println!("[nvme] Registered as block device");
+            // Register partitions for ext2 mount
+            crate::fs::block_dev::register_partitions(0);
+            true
+        } else {
+            crate::println!("[nvme] Failed to register as block device");
+            false
+        }
+    } else {
+        false
+    }
 }
