@@ -168,6 +168,92 @@ pub fn boot_secondary_cores() {
     println!("[smp] All secondary cores booted");
 }
 
+/// Bring a specific core online (CPU hotplug)
+/// Returns true on success, false if core is already online or fails to boot
+pub fn cpu_online(core_id: usize) -> bool {
+    if core_id >= CORE_COUNT {
+        println!("[smp] Invalid core ID {}", core_id);
+        return false;
+    }
+    if is_core_online(core_id) {
+        println!("[smp] Core {} already online", core_id);
+        return true;
+    }
+
+    println!("[smp] Bringing core {} online...", core_id);
+
+    // Initialize runqueue for this core
+    if !runqueue::reinit_runqueue(core_id) {
+        return false;
+    }
+
+    // Boot the core
+    boot_secondary_core(core_id as u64);
+
+    is_core_online(core_id)
+}
+
+/// Take a specific core offline (CPU hotplug)
+/// Migrates all tasks off the core before stopping it
+/// Returns true on success
+pub fn cpu_offline(core_id: usize) -> bool {
+    if core_id >= CORE_COUNT {
+        println!("[smp] Invalid core ID {}", core_id);
+        return false;
+    }
+    if core_id == 0 {
+        println!("[smp] Cannot take core 0 offline (boot core)");
+        return false;
+    }
+    if !is_core_online(core_id) {
+        println!("[smp] Core {} already offline", core_id);
+        return true;
+    }
+
+    println!("[smp] Taking core {} offline...", core_id);
+
+    // Clear the runqueue and get all PIDs that need migration
+    let pids_to_migrate = runqueue::clear_runqueue(core_id);
+
+    // Migrate all tasks off this core
+    for pid in pids_to_migrate {
+        if pid != 0 {
+            // Migrate to least loaded core
+            let target = runqueue::find_least_loaded_core();
+            if target != core_id {
+                runqueue::migrate_task(pid, core_id, target);
+            }
+        }
+    }
+
+    // Send IPI_STOP to the core
+    crate::smp::ipi::send_stop(core_id as u64);
+
+    // Wait for core to go offline
+    let mut timeout = 1_000_000;
+    while is_core_online(core_id) && timeout > 0 {
+        cpu::delay_us(10);
+        timeout -= 1;
+    }
+
+    if !is_core_online(core_id) {
+        println!("[smp] Core {} offline", core_id);
+        true
+    } else {
+        println!("[smp] Core {} failed to go offline (timeout)", core_id);
+        false
+    }
+}
+
+/// Toggle a core's online state (for testing/debugging)
+pub fn cpu_toggle(core_id: usize) -> bool {
+    if is_core_online(core_id) {
+        cpu_offline(core_id)
+    } else {
+        cpu_online(core_id)
+    }
+}
+
 /// Boot a specific secondary core
 fn boot_secondary_core(core_id: u64) {
     // Calculate the spin-table address for this core

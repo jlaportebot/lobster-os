@@ -269,6 +269,38 @@ pub fn find_least_loaded_core() -> usize {
     best_core
 }
 
+/// Reinitialize a core's runqueue (for CPU hotplug)
+pub fn reinit_runqueue(core_id: usize) -> bool {
+    if core_id >= CORE_COUNT {
+        return false;
+    }
+    unsafe {
+        CORE_RUNQUEUES[core_id] = CoreRunqueue::new();
+        CORE_RUNQUEUES[core_id].enqueue(0); // Add idle task
+    }
+    true
+}
+
+/// Clear a core's runqueue and return all PIDs that were on it
+/// Used when taking a core offline
+pub fn clear_runqueue(core_id: usize) -> alloc::vec::Vec<Pid> {
+    if core_id >= CORE_COUNT {
+        return alloc::vec::Vec::new();
+    }
+    let mut pids = alloc::vec::Vec::new();
+    unsafe {
+        let rq = &mut CORE_RUNQUEUES[core_id];
+        for i in 0..rq.count {
+            let pid = rq.pids[i];
+            if pid != 0 {
+                pids.push(pid);
+            }
+        }
+        rq.count = 0;
+    }
+    pids
+}
+
 /// Core scheduler loop — runs on each secondary core
 /// Picks the next task from the local runqueue and context-switches to it
 pub fn core_scheduler_loop(core_id: u64) -> ! {
