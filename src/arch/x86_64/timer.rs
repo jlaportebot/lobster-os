@@ -55,7 +55,7 @@ impl Timer {
                     "cpuid",
                     in("eax") 0x15u32,
                     out("eax") eax,
-                    out("ebx") ebx,
+                    out(reg) ebx,
                     out("ecx") ecx,
                     out("edx") edx,
                     options(nomem, nostack, preserves_flags)
@@ -79,7 +79,7 @@ impl Timer {
                     "cpuid",
                     in("eax") 0x16u32,
                     out("eax") eax,
-                    out("ebx") ebx,
+                    out(reg) ebx,
                     out("ecx") ecx,
                     out("edx") edx,
                     options(nomem, nostack, preserves_flags)
@@ -151,13 +151,17 @@ impl Timer {
             println!("[timer] Uptime: {}s", secs);
         }
 
-        // Signal scheduler
+        // Signal scheduler (aarch64 only)
+        #[cfg(target_arch = "aarch64")]
         crate::sched::on_timer_tick();
 
-        // Drive SMP per-core timer accounting + load balancing
-        let core_id = crate::smp::current_core_id() as usize;
-        crate::smp::runqueue::on_core_timer_tick(core_id);
-        crate::smp::balance::on_timer_tick();
+        // Drive SMP per-core timer accounting + load balancing (aarch64 only)
+        #[cfg(target_arch = "aarch64")]
+        {
+            let core_id = crate::smp::current_core_id() as usize;
+            crate::smp::runqueue::on_core_timer_tick(core_id);
+            crate::smp::balance::on_timer_tick();
+        }
     }
 }
 

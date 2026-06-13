@@ -25,12 +25,3 @@ fn panic(info: &PanicInfo) -> ! {
         crate::arch::cpu::wfe()
     }
 }
-
-/// Panic handler for std feature (host testing)
-#[cfg(feature = "std")]
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    use std::process;
-    eprintln!("PANIC: {:?}", info);
-    process::abort()
-}
