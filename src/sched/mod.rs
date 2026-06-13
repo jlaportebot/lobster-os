@@ -236,6 +236,16 @@ pub struct Task {
     // ── IPC ──
     /// IPC namespace ID (0 = global)
     pub ipc_ns: u32,
+    /// PID namespace ID (0 = global)
+    pub pid_ns: u32,
+    /// Mount namespace ID (0 = global)
+    pub mnt_ns: u32,
+    /// Network namespace ID (0 = global)
+    pub net_ns: u32,
+    /// UTS namespace ID (0 = global)
+    pub uts_ns: u32,
+    /// User namespace ID (0 = global)
+    pub user_ns: u32,
     /// Pipe read-end file descriptor (or -1)
     pub pipe_read_fd: i64,
     /// Pipe write-end file descriptor (or -1)
@@ -394,7 +404,12 @@ pub fn create_kernel_task(entry: fn() -> !, priority: Priority) -> Option<Pid> {
         ttbr0_phys: 0,
         entry_point: entry as u64,
         is_user: false,
-        ipc_ns: 0, // global namespace
+        ipc_ns: 0,  // global namespace
+        pid_ns: 0,  // global namespace
+        mnt_ns: 0,  // global namespace
+        net_ns: 0,  // global namespace
+        uts_ns: 0,  // global namespace
+        user_ns: 0, // global namespace
         pending_signals: 0,
         signal_mask: 0,
         signal_handlers: [0; SIG_COUNT],
@@ -466,7 +481,12 @@ pub fn create_user_process(entry: u64, ttbr0: u64, priority: Priority) -> Option
         ttbr0_phys: ttbr0,
         entry_point: entry,
         is_user: true,
-        ipc_ns: 0, // global namespace
+        ipc_ns: 0,  // global namespace
+        pid_ns: 0,  // global namespace
+        mnt_ns: 0,  // global namespace
+        net_ns: 0,  // global namespace
+        uts_ns: 0,  // global namespace
+        user_ns: 0, // global namespace
         pending_signals: 0,
         signal_mask: 0,
         signal_handlers: [0; SIG_COUNT],

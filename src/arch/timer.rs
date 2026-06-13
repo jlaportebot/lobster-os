@@ -17,8 +17,39 @@ const TIMER_CLO: u64 = SYSTEM_TIMER_BASE + 0x04;
 const TIMER_CHI: u64 = SYSTEM_TIMER_BASE + 0x08;
 const TIMER_C1: u64 = SYSTEM_TIMER_BASE + 0x10;
 
-/// Default tick interval in microseconds (1 ms = 1000 µs)
+/// Tick interval in microseconds (1 ms = 1000 µs) - default periodic tick
 const TICK_INTERVAL_US: u32 = 1000;
+
+/// Minimum tick interval for tickless idle (64 µs - shortest we can reliably program)
+const TICKLESS_MIN_INTERVAL_US: u32 = 64;
+
+/// Maximum tick interval for tickless idle (10 ms)
+const TICKLESS_MAX_INTERVAL_US: u32 = 10_000;
+
+/// Current tick interval (dynamically adjusted for tickless idle)
+static mut CURRENT_TICK_INTERVAL_US: u32 = TICK_INTERVAL_US;
+
+/// Whether tickless idle is enabled
+static mut TICKLESS_ENABLED: bool = true;
+
+/// Get the current tick interval
+pub fn current_tick_interval() -> u32 {
+    unsafe { CURRENT_TICK_INTERVAL_US }
+}
+
+/// Set the tick interval (for tickless idle)
+pub fn set_tick_interval(us: u32) {
+    unsafe {
+        CURRENT_TICK_INTERVAL_US = us.clamp(TICKLESS_MIN_INTERVAL_US, TICKLESS_MAX_INTERVAL_US);
+    }
+}
+
+/// Enable or disable tickless idle
+pub fn set_tickless_enabled(enabled: bool) {
+    unsafe {
+        TICKLESS_ENABLED = enabled;
+    }
+}
 
 /// Uptime counter (incremented on each timer tick)
 static UPTIME_MS: AtomicU64 = AtomicU64::new(0);
@@ -42,7 +73,8 @@ impl Timer {
 
         // Set compare value = current + tick interval
         let current = mmio_read32(TIMER_CLO);
-        mmio_write32(TIMER_C1, current.wrapping_add(TICK_INTERVAL_US));
+        let tick_interval = current_tick_interval();
+        mmio_write32(TIMER_C1, current.wrapping_add(tick_interval));
 
         // Enable system timer channel 1 in GIC (SPI 65)
         crate::arch::gic::Gic::enable_spi(65);
@@ -86,9 +118,20 @@ impl Timer {
         match irq_id {
             65 => {
                 let uptime = UPTIME_MS.fetch_add(1, Ordering::Relaxed);
+
+                // Tickless idle: dynamically adjust tick interval based on system load
+                let next_interval = if Timer::is_tickless_idle() {
+                    // All cores idle - use longer interval to save power
+                    TICKLESS_MAX_INTERVAL_US
+                } else {
+                    // At least one core has work - use minimum interval for responsiveness
+                    TICK_INTERVAL_US
+                };
+                set_tick_interval(next_interval);
+
                 unsafe {
                     let current = mmio_read32(TIMER_CLO);
-                    mmio_write32(TIMER_C1, current.wrapping_add(TICK_INTERVAL_US));
+                    mmio_write32(TIMER_C1, current.wrapping_add(current_tick_interval()));
                     mmio_write32(TIMER_CS, 1 << 1);
                 }
                 if uptime.is_multiple_of(1000) {
@@ -110,6 +153,32 @@ impl Timer {
             let freq = TIMER_FREQ;
             core::arch::asm!("msr CNTP_TVAL_EL0, {}", in(reg) freq / 1000);
         }
+    }
+
+    /// Check if all cores are idle (only idle task running)
+    /// Used for tickless idle optimization
+    pub fn is_tickless_idle() -> bool {
+        // Check if tickless is enabled
+        if !Self::tickless_enabled() {
+            return false;
+        }
+
+        // Check if all cores are idle (only idle task running)
+        for i in 0..crate::smp::CORE_COUNT {
+            if crate::smp::is_core_online(i) {
+                let load = crate::smp::runqueue::runnable_count(i);
+                if load > 1 {
+                    // More than just idle task
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Check if tickless idle is enabled
+    fn tickless_enabled() -> bool {
+        unsafe { TICKLESS_ENABLED }
     }
 }
 
