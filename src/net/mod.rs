@@ -18,6 +18,7 @@ pub mod dhcp;
 #[cfg(target_arch = "aarch64")]
 pub mod dns;
 #[cfg(target_arch = "aarch64")]
+pub mod dns_cache;
 pub mod eth;
 #[cfg(target_arch = "aarch64")]
 pub mod genet;
