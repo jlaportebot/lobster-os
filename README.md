@@ -12,7 +12,7 @@ A bare-metal Rust operating system for Raspberry Pi 5 (BCM2712), built from scra
 - **Filesystems**: VFS layer, initrd, FAT32, ext2 (with fsck), procfs, sysfs, devfs, block device layer
 - **Shell**: Interactive shell with built-in commands (wifi, net, fs, pkg, proc, wm, help)
 - **Window Manager**: Compositor, overlapping windows, widgets, themes, input handling
-- **Device Drivers**: UART, GPIO, mailbox, timer, GIC, power, EMMC/SD, SDIO, PCIe, NVMe, GPU, WiFi (CYW43455), audio
+- **Device Drivers**: UART, GPIO, mailbox, timer, GIC, power, EMMC/SD, SDIO, PCIe, NVMe, GPU, WiFi (CYW43455), audio (I2S + PWM + mixer)
 - **Package Manager**: Repository format, HTTP index download, installer scaffolding
 - **Process Management**: ELF loader, dynamic linker, signals, syscalls, process hierarchy
 - **Security**: Capability-based security, users/groups, authentication, sessions
@@ -135,11 +135,19 @@ cargo fmt --check
 | USB/XHCI | ✅ Working |
 | Filesystems | ✅ Multiple |
 | Shell | ✅ Functional |
-| WiFi (CYW43455) | 🚧 In progress |
+| WiFi (CYW43455) | ✅ Firmware embedded, driver scaffolding complete |
 | Package manager | 🚧 Scaffolding |
 | NVMe | 🚧 In progress |
 | GPU (V3D) | 🚧 Planned |
-| Audio | 🚧 Planned |
+| Audio (I2S + PWM + Mixer) | ✅ I2S driver + ALSA-like mixer complete |
+
+## Recent Changes (Phase 0 Complete)
+
+- **WiFi Firmware Embedded**: CYW43455 firmware (483KB) + NVRAM config embedded via `include_bytes!`
+- **RP1 I/O Controller Driver**: GPIO (46 pins), UART (6x), I2C (6x), SPI (6x), PWM (4x), I2S (2x), RIO fast GPIO
+- **GPIO Userspace API**: `/dev/gpiochip0` character device with full ioctl support (major 254, minor 0)
+- **I2S Audio Driver**: Stereo TX/RX, configurable sample rates (up to 192kHz), word sizes (16/24/32-bit), master/slave modes, multiple formats (I2S, LJ, RJ, DSP), interrupt handling
+- **Audio Mixer**: ALSA-like API with multi-stream mixing, volume control, PCM playback/capture, /dev/snd/controlC0 + /dev/snd/pcmC0D*p devices
 
 ## License
 

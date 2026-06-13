@@ -466,7 +466,14 @@ pub unsafe extern "C" fn kernel_init(dtb_ptr: u64) -> ! {
         drivers::audio::init();
     }
 
-    // 15. Initialize GPU driver (Pi 5 only)
+    // 15. Initialize audio mixer (ALSA-like API) (Pi 5 only)
+    #[cfg(not(feature = "qemu"))]
+    {
+        println!("[audio] Initializing audio mixer...");
+        drivers::audio_mixer::mixer_init();
+    }
+
+    // 16. Initialize GPU driver (Pi 5 only)
     #[cfg(not(feature = "qemu"))]
     {
         println!("[gpu] Initializing VideoCore VII driver...");
