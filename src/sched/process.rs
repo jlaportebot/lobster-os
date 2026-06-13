@@ -98,6 +98,11 @@ pub fn fork() -> i64 {
         entry_point: parent_task.entry_point,
         is_user: parent_task.is_user,
         ipc_ns: parent_task.ipc_ns,           // Inherit IPC namespace
+        pid_ns: parent_task.pid_ns,           // Inherit PID namespace
+        mnt_ns: parent_task.mnt_ns,           // Inherit mount namespace
+        net_ns: parent_task.net_ns,           // Inherit network namespace
+        uts_ns: parent_task.uts_ns,           // Inherit UTS namespace
+        user_ns: parent_task.user_ns,         // Inherit user namespace
         pending_signals: 0,                   // Child starts with no pending signals
         signal_mask: parent_task.signal_mask, // Inherit signal mask
         signal_handlers: parent_task.signal_handlers, // Inherit handlers
