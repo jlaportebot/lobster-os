@@ -414,6 +414,11 @@ pub unsafe extern "C" fn kernel_init(dtb_ptr: u64) -> ! {
     // 11–15. BCM2712-only subsystems (skip in QEMU)
     #[cfg(not(feature = "qemu"))]
     {
+        // RP1 I/O Controller
+        println!("[rp1] Initializing RP1 I/O controller...");
+        drivers::rp1::init();
+        drivers::rp1::print_status();
+
         // USB
         println!("[usb] Initializing xHCI host controller...");
         usb::xhci::init();

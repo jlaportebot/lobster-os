@@ -1,5 +1,4 @@
 //! Drivers module — hardware peripherals
-//! Drivers module — hardware peripherals
 
 pub mod audio;
 #[cfg(target_arch = "aarch64")]
@@ -7,7 +6,11 @@ pub mod emmc;
 #[cfg(target_arch = "aarch64")]
 pub mod gpio;
 #[cfg(target_arch = "aarch64")]
+pub mod gpiochip;
+#[cfg(target_arch = "aarch64")]
 pub mod gpu;
+#[cfg(target_arch = "aarch64")]
+pub mod i2s;
 #[cfg(target_arch = "aarch64")]
 pub mod mailbox;
 #[cfg(target_arch = "aarch64")]
@@ -16,6 +19,8 @@ pub mod nvme;
 pub mod pcie;
 #[cfg(target_arch = "aarch64")]
 pub mod power;
+#[cfg(target_arch = "aarch64")]
+pub mod rp1;
 #[cfg(target_arch = "aarch64")]
 pub mod sdio;
 #[cfg(target_arch = "aarch64")]

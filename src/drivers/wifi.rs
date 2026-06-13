@@ -465,20 +465,35 @@ impl IoctlRequest {
     }
 }
 
-// ─── Firmware Embedding ────────────────────────────────────────────
-// The actual firmware blobs would normally be embedded here.
-// For now we use placeholder paths — the real firmware files
-// (brcmfmac43455-sdio.bin and brcmfmac43455-sdio.clm_blob)
-// must be placed at these paths before building.
+// ─── Embedded Firmware ──────────────────────────────────────────────
+// Firmware and NVRAM config embedded at compile time via include_bytes!
+// Source: LibreELEC brcmfmac_sdio-firmware (CYW43455)
+// Firmware: brcmfmac43455-sdio.bin (~483KB)
+// NVRAM:  brcmfmac43455-sdio.txt (~1.6KB)
+// CLM blob: Optional, for regulatory domain (not embedded, loaded from FS if present)
 
-// Path constants (for future include_bytes!)
-const FIRMWARE_PATH: &str = "firmware/brcmfmac43455-sdio.bin";
-const CLM_BLOB_PATH: &str = "firmware/brcmfmac43455-sdio.clm_blob";
+/// Embedded CYW43455 firmware binary (brcmfmac43455-sdio.bin)
+const EMBEDDED_FIRMWARE: &[u8] = include_bytes!("../../firmware/brcmfmac43455-sdio.bin");
 
-// Placeholder firmware sizes (actual CYW43455 firmware is ~280KB,
-// CLM blob is ~4KB)
-const FIRMWARE_MAX_SIZE: usize = 300_000;
-const CLM_BLOB_MAX_SIZE: usize = 8_192;
+/// Embedded NVRAM configuration for CYW43455 (brcmfmac43455-sdio.txt)
+const EMBEDDED_NVRAM: &[u8] = include_bytes!("../../firmware/brcmfmac43455-sdio.txt");
+
+/// Firmware size at compile time
+const EMBEDDED_FIRMWARE_SIZE: usize = EMBEDDED_FIRMWARE.len();
+
+/// NVRAM size at compile time
+const EMBEDDED_NVRAM_SIZE: usize = EMBEDDED_NVRAM.len();
+
+// Compile-time assertions to ensure firmware is embedded correctly
+const _: () = assert!(
+    EMBEDDED_FIRMWARE_SIZE > 100_000,
+    "Firmware too small - not embedded correctly"
+);
+const _: () = assert!(EMBEDDED_FIRMWARE_SIZE < 1_000_000, "Firmware too large");
+const _: () = assert!(
+    EMBEDDED_NVRAM_SIZE > 500,
+    "NVRAM too small - not embedded correctly"
+);
 
 // ─── Core Descriptor ───────────────────────────────────────────────
 
@@ -582,6 +597,10 @@ struct WifiController {
     ps_enabled: bool,
     /// Power save state (0=active, 1=doze, 2=waking)
     ps_state: u8,
+    /// Embedded NVRAM configuration data
+    nvram_data: &'static [u8],
+    /// Whether NVRAM data is available
+    has_nvram: bool,
 }
 
 static mut WIFI: WifiController = WifiController {
@@ -634,6 +653,8 @@ static mut WIFI: WifiController = WifiController {
     current_ap_rssi: 0,
     ps_enabled: false,
     ps_state: 0,
+    nvram_data: &[],
+    has_nvram: false,
 };
 
 /// ─── EAPOL Frame Processing ───────────────────────────────────────────
@@ -1133,120 +1154,27 @@ unsafe fn firmware_download() -> Result<(), WifiError> {
     // Initialize SOCSRAM
     socsram_init();
 
-    // Try to load firmware from filesystem (SD card)
-    // Path: /firmware/brcmfmac43455-sdio.bin
-    let firmware = crate::fs::vfs::read_file("/firmware/brcmfmac43455-sdio.bin");
+    // Use embedded firmware and NVRAM
+    let firmware = EMBEDDED_FIRMWARE;
+    let nvram = EMBEDDED_NVRAM;
+
+    println!(
+        "[wifi] Using embedded firmware: {} bytes, NVRAM: {} bytes",
+        firmware.len(),
+        nvram.len()
+    );
+
+    // Try to load optional CLM blob from filesystem
     let clm_blob = crate::fs::vfs::read_file("/firmware/brcmfmac43455-sdio.clm_blob");
 
-    let firmware_loaded = match (firmware, clm_blob) {
-        (Ok(fw), Ok(clm)) => {
-            println!(
-                "[wifi] Loaded firmware from filesystem: {} bytes, CLM: {} bytes",
-                fw.len(),
-                clm.len()
-            );
-            download_firmware_to_chip(&fw, &clm)?;
-            true
-        }
-        (Ok(fw), Err(_)) => {
-            println!(
-                "[wifi] Loaded firmware from filesystem: {} bytes (no CLM blob)",
-                fw.len()
-            );
-            download_firmware_to_chip(&fw, &[])?;
-            true
-        }
-        (Err(_), Ok(clm)) => {
-            println!(
-                "[wifi] Loaded CLM blob only: {} bytes (no firmware)",
-                clm.len()
-            );
-            false
-        }
-        (Err(_), Err(_)) => {
-            println!("[wifi] Firmware files not found on filesystem, checking for pre-loaded firmware...");
-            false
-        }
-    };
+    // Download firmware to chip
+    let clm_blob = clm_blob.unwrap_or_default();
+    download_firmware_to_chip(firmware, &clm_blob)?;
 
-    if !firmware_loaded {
-        // Check if ARM CR4 is in reset (ready for firmware)
-        let status = bp_read32(WIFI.arm_core.wrap_addr + AI_IOSTATUS);
-        if (status & ARMCR4_BRESET) == 0 {
-            println!("[wifi] WARNING: ARM core not in reset before firmware load");
-        }
-
-        // Firmware download address — the ARM CR4 starts executing from
-        // the base of SOCSRAM (typically 0x00000000 in chip address space)
-        let fw_base_addr: u32 = 0x00000000;
-        let ram_base = WIFI.socsram_core.base_addr;
-
-        println!("[wifi] Firmware load address: {:#010x}", fw_base_addr);
-        println!("[wifi] SOCSRAM base: {:#010x}", ram_base);
-
-        // Verify the chip is in a state where it would accept firmware
-        // by writing a test pattern to SOCSRAM and reading it back
-        let test_pattern: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
-        bp_write_block(ram_base, &test_pattern, 4)?;
-
-        let mut readback = [0u8; 4];
-        bp_read_block(ram_base, &mut readback, 4)?;
-
-        if readback == test_pattern {
-            println!("[wifi] SOCSRAM read/write verified — firmware download path ready");
-        } else {
-            println!(
-                "[wifi] WARNING: SOCSRAM readback mismatch: {:02x?} != {:02x?}",
-                readback, test_pattern
-            );
-            // Don't fail — some chips have different bank access patterns
-        }
-
-        // === CLM blob download ===
-        // The CLM (Country Locale Matrix) blob contains regulatory data.
-        // It's downloaded to a specific region of SOCSRAM after firmware.
-        // The firmware tells us the CLM address via a shared structure.
-
-        // For a minimal working driver, we skip actual firmware download
-        // and assume the firmware has been pre-loaded (e.g., by the
-        // VideoCore bootloader or a previous OS).
-        //
-        // In a production driver, this would:
-        // 1. Load firmware from embedded data or filesystem
-        // 2. Write it to SOCSRAM in 4KB blocks
-        // 3. Write CLM blob after firmware
-        // 4. Verify download CRC
-        // 5. Set firmware entry point
-        // 6. Start ARM core
-
-        println!("[wifi] Firmware download path configured (firmware must be loaded externally)");
-        println!(
-            "[wifi] Place {} and {} on SD card at /firmware/",
-            FIRMWARE_PATH, CLM_BLOB_PATH
-        );
-    }
-
-    // Start ARM core (even without firmware, to see if it responds)
-    arm_cr4_start();
-
-    // Wait for firmware to signal ready
-    let mut timeout = 500_000u64; // ~5 seconds
-    loop {
-        // Check SDIO IntStatus for firmware ready bit
-        let intstatus = bp_read32(WIFI.sdio_core.base_addr + 0x20);
-        if (intstatus & 0x40) != 0 {
-            // F2_READY
-            println!("[wifi] Firmware signaled ready!");
-            break;
-        }
-        if timeout == 0 {
-            println!("[wifi] WARNING: firmware ready timeout — may need firmware load");
-            // Don't fail — the chip might still work with bootloader firmware
-            break;
-        }
-        timeout -= 1;
-        cpu_nop();
-    }
+    // NVRAM is passed to firmware via IOCTL after firmware is running
+    // Store NVRAM for later use during IOCTL configuration
+    WIFI.nvram_data = nvram;
+    WIFI.has_nvram = true;
 
     WIFI.state = WifiState::FirmwareLoaded;
     Ok(())
