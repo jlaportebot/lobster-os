@@ -1,9 +1,9 @@
 //! Authentication for LobsterOS
 
-use crate::users::shadow;
 use crate::users::passwd;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use crate::users::shadow;
+use alloc::format;
+use alloc::string::String;
 
 /// Authentication errors
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +15,13 @@ pub enum AuthError {
     PasswordExpired,
     ShadowMismatch,
     InternalError,
+    IoError,
+}
+
+impl From<crate::fs::vfs::VfsError> for AuthError {
+    fn from(_: crate::fs::vfs::VfsError) -> Self {
+        AuthError::IoError
+    }
 }
 
 impl core::fmt::Display for AuthError {
@@ -27,6 +34,7 @@ impl core::fmt::Display for AuthError {
             AuthError::PasswordExpired => write!(f, "Password expired"),
             AuthError::ShadowMismatch => write!(f, "Shadow entry mismatch"),
             AuthError::InternalError => write!(f, "Internal error"),
+            AuthError::IoError => write!(f, "I/O error"),
         }
     }
 }
@@ -40,13 +48,22 @@ pub fn hash_password(password: &str) -> String {
     // let salt = generate_salt();
     // let hash = argon2::hash(password, &salt);
     // format!("$argon2id$v=19$m=65536,t=3,p=4${}${}$", salt_b64, hash_b64)
-    
+
     // Placeholder: simple hash using SHA256
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(password.as_bytes());
     let hash = hasher.finalize();
-    format!("$sha256${}", hex::encode(hash))
+    format!("$sha256${}", encode_hex(&hash))
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    let mut result = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        result.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+        result.push(char::from_digit((b & 0xF) as u32, 16).unwrap());
+    }
+    result
 }
 
 /// Verify a password against a hash
@@ -67,12 +84,10 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
 /// Login a user with username and password
 pub fn login_user(username: &str, password: &str) -> Result<passwd::PasswdEntry, AuthError> {
     // Find user in /etc/passwd
-    let user = passwd::find_user(username)
-        .ok_or(AuthError::UserNotFound)?;
+    let user = passwd::find_user(username).ok_or(AuthError::UserNotFound)?;
 
     // Find shadow entry
-    let shadow_entry = shadow::find_shadow(username)
-        .ok_or(AuthError::ShadowMismatch)?;
+    let shadow_entry = shadow::find_shadow(username).ok_or(AuthError::ShadowMismatch)?;
 
     // Check if account is locked
     if shadow_entry.is_locked() {
@@ -102,7 +117,11 @@ pub fn login_user(username: &str, password: &str) -> Result<passwd::PasswdEntry,
 }
 
 /// Change a user's password
-pub fn change_password(username: &str, old_password: &str, new_password: &str) -> Result<(), AuthError> {
+pub fn change_password(
+    username: &str,
+    old_password: &str,
+    new_password: &str,
+) -> Result<(), AuthError> {
     // Verify old password first
     login_user(username, old_password)?;
 
@@ -119,7 +138,10 @@ pub fn change_password(username: &str, old_password: &str, new_password: &str) -
         }
     }
     crate::users::shadow::write_shadow_file(&entries)?;
-    crate::println!("[auth] Password changed for {} and written to /etc/shadow", username);
+    crate::println!(
+        "[auth] Password changed for {} and written to /etc/shadow",
+        username
+    );
     Ok(())
 }
 
@@ -135,7 +157,7 @@ pub fn can_sudo(username: &str) -> bool {
     if username == "root" {
         return true;
     }
-    
+
     let groups = crate::users::group::get_user_groups(username);
     groups.iter().any(|g| g.name == "wheel" || g.name == "sudo")
 }
@@ -147,8 +169,7 @@ pub fn sudo_uid(username: &str, target_user: Option<&str>) -> Result<u32, AuthEr
     }
 
     let target = target_user.unwrap_or("root");
-    let target_entry = passwd::find_user(target)
-        .ok_or(AuthError::UserNotFound)?;
+    let target_entry = passwd::find_user(target).ok_or(AuthError::UserNotFound)?;
 
     Ok(target_entry.uid)
 }

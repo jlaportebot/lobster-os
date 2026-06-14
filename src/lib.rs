@@ -87,6 +87,8 @@ pub mod smp;
 #[cfg(target_arch = "aarch64")]
 pub mod usb;
 #[cfg(target_arch = "aarch64")]
+pub mod users;
+#[cfg(target_arch = "aarch64")]
 pub mod wm;
 
 // x86_64 stubs for host testing

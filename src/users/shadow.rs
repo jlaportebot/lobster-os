@@ -8,14 +8,14 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone)]
 pub struct ShadowEntry {
     pub username: String,
-    pub password_hash: String,   // Argon2id hash: $argon2id$v=19$m=65536,t=3,p=4$salt$hash
-    pub last_change: i64,        // Days since epoch of last password change
-    pub min_age: i64,            // Minimum days before password can be changed
-    pub max_age: i64,            // Maximum days before password must be changed
-    pub warning: i64,            // Days before expiry to warn
-    pub inactive: i64,           // Days after expiry before account disabled
-    pub expire: i64,             // Days since epoch when account expires
-    pub reserved: String,        // Reserved for future use
+    pub password_hash: String, // Argon2id hash: $argon2id$v=19$m=65536,t=3,p=4$salt$hash
+    pub last_change: i64,      // Days since epoch of last password change
+    pub min_age: i64,          // Minimum days before password can be changed
+    pub max_age: i64,          // Maximum days before password must be changed
+    pub warning: i64,          // Days before expiry to warn
+    pub inactive: i64,         // Days after expiry before account disabled
+    pub expire: i64,           // Days since epoch when account expires
+    pub reserved: String,      // Reserved for future use
 }
 
 impl ShadowEntry {
@@ -70,7 +70,7 @@ pub fn parse_shadow_line(line: &str) -> Option<ShadowEntry> {
         last_change: parts[2].parse().unwrap_or(0),
         min_age: parts[3].parse().unwrap_or(0),
         max_age: parts[4].parse().unwrap_or(99999),
-        warning: parts[4].parse().unwrap_or(7),  // Note: parts[5] is warning
+        warning: parts[4].parse().unwrap_or(7), // Note: parts[5] is warning
         inactive: parts[5].parse().unwrap_or(-1),
         expire: parts[6].parse().unwrap_or(-1),
         reserved: parts[7].to_string(),
@@ -79,17 +79,15 @@ pub fn parse_shadow_line(line: &str) -> Option<ShadowEntry> {
 
 /// Parse entire /etc/shadow content
 pub fn parse_shadow(content: &str) -> Vec<ShadowEntry> {
-    content
-        .lines()
-        .filter_map(parse_shadow_line)
-        .collect()
+    content.lines().filter_map(parse_shadow_line).collect()
 }
 
 /// Read and parse /etc/shadow from VFS
 pub fn read_shadow_file() -> Result<Vec<ShadowEntry>, crate::fs::vfs::VfsError> {
     match read_file("/etc/shadow") {
         Ok(data) => {
-            let content = core::str::from_utf8(&data).map_err(|_| crate::fs::vfs::VfsError::IoError)?;
+            let content =
+                core::str::from_utf8(&data).map_err(|_| crate::fs::vfs::VfsError::IOError)?;
             Ok(parse_shadow(content))
         }
         Err(e) => Err(e),

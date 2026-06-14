@@ -8,9 +8,9 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone)]
 pub struct GroupEntry {
     pub name: String,
-    pub password: String,        // Usually "x" or "*"
+    pub password: String, // Usually "x" or "*"
     pub gid: u32,
-    pub members: Vec<String>,    // List of usernames
+    pub members: Vec<String>, // List of usernames
 }
 
 impl GroupEntry {
@@ -73,7 +73,8 @@ pub fn parse_group(content: &str) -> Vec<GroupEntry> {
 pub fn read_group_file() -> Result<Vec<GroupEntry>, crate::fs::vfs::VfsError> {
     match read_file("/etc/group") {
         Ok(data) => {
-            let content = core::str::from_utf8(&data).map_err(|_| crate::fs::vfs::VfsError::IoError)?;
+            let content =
+                core::str::from_utf8(&data).map_err(|_| crate::fs::vfs::VfsError::IOError)?;
             Ok(parse_group(content))
         }
         Err(e) => Err(e),
@@ -82,18 +83,12 @@ pub fn read_group_file() -> Result<Vec<GroupEntry>, crate::fs::vfs::VfsError> {
 
 /// Find a group by name
 pub fn find_group(name: &str) -> Option<GroupEntry> {
-    read_group_file()
-        .ok()?
-        .into_iter()
-        .find(|g| g.name == name)
+    read_group_file().ok()?.into_iter().find(|g| g.name == name)
 }
 
 /// Find a group by GID
 pub fn find_group_by_gid(gid: u32) -> Option<GroupEntry> {
-    read_group_file()
-        .ok()?
-        .into_iter()
-        .find(|g| g.gid == gid)
+    read_group_file().ok()?.into_iter().find(|g| g.gid == gid)
 }
 
 /// Get all groups
@@ -116,6 +111,33 @@ pub fn get_user_groups(username: &str) -> Vec<GroupEntry> {
 
 /// Get primary group for a user (from /etc/passwd gid)
 pub fn get_primary_group(uid: u32) -> Option<GroupEntry> {
-    crate::users::passwd::find_user_by_uid(uid)
-        .and_then(|u| find_group_by_gid(u.gid))
+    crate::users::passwd::find_user_by_uid(uid).and_then(|u| find_group_by_gid(u.gid))
+}
+
+/// Write /etc/group file from group entries
+pub fn write_group_file(entries: &[GroupEntry]) -> Result<(), crate::fs::vfs::VfsError> {
+    use crate::fs::vfs::{create_dir, open, write};
+
+    // Ensure /etc directory exists
+    let _ = create_dir("/etc");
+
+    // Open or create the group file
+    let fd = open("/etc/group", 0x02 | 0x400)?; // O_WRONLY | O_CREAT
+
+    // Build group content
+    let mut content = String::new();
+    for entry in entries {
+        let members = entry.members.join(",");
+        content.push_str(&alloc::format!(
+            "{}:x:{}:{}\n",
+            entry.name,
+            entry.gid,
+            members
+        ));
+    }
+
+    // Write to file
+    write(fd, content.as_bytes())?;
+    crate::fs::vfs::close(fd)?;
+    Ok(())
 }

@@ -2,7 +2,6 @@
 //! Handles TTY allocation, login sessions, utmp/wtmp logging
 
 use crate::arch::timer::Timer;
-use crate::users::passwd;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -12,10 +11,10 @@ pub const MAX_SESSIONS: usize = 16;
 /// Session types
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SessionType {
-    Login,      // User login session
-    Tty,        // Raw TTY session
-    Ssh,        // SSH session (future)
-    Serial,     // Serial console
+    Login,  // User login session
+    Tty,    // Raw TTY session
+    Ssh,    // SSH session (future)
+    Serial, // Serial console
 }
 
 /// Session entry
@@ -23,46 +22,50 @@ pub enum SessionType {
 pub struct Session {
     pub id: usize,
     pub session_type: SessionType,
-    pub tty: String,           // e.g., "tty1", "ttyS0"
+    pub tty: String, // e.g., "tty1", "ttyS0"
     pub username: String,
     pub pid: u64,
-    pub start_time: u64,       // Timer uptime_ms()
+    pub start_time: u64, // Timer uptime_ms()
     pub active: bool,
 }
 
 /// UTMP entry (current logins)
 #[derive(Debug, Clone)]
 pub struct UtmpEntry {
-    pub ut_type: i16,          // Type of login
-    pub ut_pid: i32,           // Process ID
-    pub ut_line: [u8; 32],     // TTY name
-    pub ut_id: [u8; 4],        // Inittab ID
-    pub ut_user: [u8; 32],     // Username
-    pub ut_host: [u8; 256],    // Hostname
-    pub ut_exit: i32,          // Exit status
-    pub ut_session: i32,       // Session ID
-    pub ut_tv_sec: i64,        // Time entry was made
-    pub ut_addr: [u8; 4],      // IP address
+    pub ut_type: i16,       // Type of login
+    pub ut_pid: i32,        // Process ID
+    pub ut_line: [u8; 32],  // TTY name
+    pub ut_id: [u8; 4],     // Inittab ID
+    pub ut_user: [u8; 32],  // Username
+    pub ut_host: [u8; 256], // Hostname
+    pub ut_exit: i32,       // Exit status
+    pub ut_session: i32,    // Session ID
+    pub ut_tv_sec: i64,     // Time entry was made
+    pub ut_addr: [u8; 4],   // IP address
 }
 
 impl UtmpEntry {
     pub fn new_login(pid: u64, tty: &str, user: &str) -> Self {
-        let mut entry = Self::default();
-        entry.ut_type = 7; // USER_PROCESS
-        entry.ut_pid = pid as i32;
+        let mut entry = Self {
+            ut_type: 7, // USER_PROCESS
+            ut_pid: pid as i32,
+            ut_tv_sec: (Timer::uptime_ms() / 1000) as i64,
+            ut_session: pid as i32,
+            ..Default::default()
+        };
         entry.ut_line[..tty.len().min(32)].copy_from_slice(tty.as_bytes());
         entry.ut_user[..user.len().min(32)].copy_from_slice(user.as_bytes());
-        entry.ut_tv_sec = (Timer::uptime_ms() / 1000) as i64;
-        entry.ut_session = pid as i32;
         entry
     }
 
     pub fn new_dead_process(pid: u64, tty: &str) -> Self {
-        let mut entry = Self::default();
-        entry.ut_type = 8; // DEAD_PROCESS
-        entry.ut_pid = pid as i32;
+        let mut entry = Self {
+            ut_type: 8, // DEAD_PROCESS
+            ut_pid: pid as i32,
+            ut_tv_sec: (Timer::uptime_ms() / 1000) as i64,
+            ..Default::default()
+        };
         entry.ut_line[..tty.len().min(32)].copy_from_slice(tty.as_bytes());
-        entry.ut_tv_sec = (Timer::uptime_ms() / 1000) as i64;
         entry
     }
 }
@@ -125,7 +128,7 @@ struct SessionManager {
 }
 
 static mut SESSION_MANAGER: SessionManager = SessionManager {
-    sessions: [None; MAX_SESSIONS],
+    sessions: [const { None }; MAX_SESSIONS],
     next_id: 1,
     utmp_entries: Vec::new(),
     wtmp_entries: Vec::new(),
@@ -134,7 +137,7 @@ static mut SESSION_MANAGER: SessionManager = SessionManager {
 /// Initialize session manager
 pub fn init() {
     unsafe {
-        SESSION_MANAGER.sessions = [None; MAX_SESSIONS];
+        SESSION_MANAGER.sessions = core::array::from_fn(|_| None);
         SESSION_MANAGER.next_id = 1;
         SESSION_MANAGER.utmp_entries = Vec::new();
         SESSION_MANAGER.wtmp_entries = Vec::new();
@@ -153,8 +156,9 @@ pub fn allocate_session(
         // Find free slot
         for i in 0..MAX_SESSIONS {
             if SESSION_MANAGER.sessions[i].is_none() {
+                let session_id = SESSION_MANAGER.next_id;
                 let session = Session {
-                    id: SESSION_MANAGER.next_id,
+                    id: session_id,
                     session_type,
                     tty: tty.to_string(),
                     username: username.to_string(),
@@ -164,12 +168,17 @@ pub fn allocate_session(
                 };
                 SESSION_MANAGER.next_id += 1;
                 SESSION_MANAGER.sessions[i] = Some(session);
-                
+
                 // Add to utmp
                 let utmp = UtmpEntry::new_login(pid, tty, username);
                 SESSION_MANAGER.utmp_entries.push(utmp);
-                
-                crate::println!("[session] Allocated session {} on {} for {}", session.id, tty, username);
+
+                crate::println!(
+                    "[session] Allocated session {} on {} for {}",
+                    session_id,
+                    tty,
+                    username
+                );
                 return Ok(i);
             }
         }
@@ -187,7 +196,7 @@ pub fn deallocate_session(session_idx: usize) -> bool {
             // Add to utmp as dead process
             let utmp = UtmpEntry::new_dead_process(session.pid, &session.tty);
             SESSION_MANAGER.utmp_entries.push(utmp);
-            
+
             // Add to wtmp for history
             let wtmp = WtmpEntry {
                 ut_type: 8, // DEAD_PROCESS
@@ -200,7 +209,8 @@ pub fn deallocate_session(session_idx: usize) -> bool {
                 ut_id: [0; 4],
                 ut_user: {
                     let mut arr = [0u8; 32];
-                    arr[..session.username.len().min(32)].copy_from_slice(session.username.as_bytes());
+                    arr[..session.username.len().min(32)]
+                        .copy_from_slice(session.username.as_bytes());
                     arr
                 },
                 ut_host: [0; 256],
@@ -210,8 +220,13 @@ pub fn deallocate_session(session_idx: usize) -> bool {
                 ut_addr: [0; 4],
             };
             SESSION_MANAGER.wtmp_entries.push(wtmp);
-            
-            crate::println!("[session] Deallocated session {} ({} on {})", session.id, session.username, session.tty);
+
+            crate::println!(
+                "[session] Deallocated session {} ({} on {})",
+                session.id,
+                session.username,
+                session.tty
+            );
             true
         } else {
             false
@@ -221,15 +236,14 @@ pub fn deallocate_session(session_idx: usize) -> bool {
 
 /// Get session by index
 pub fn get_session(session_idx: usize) -> Option<Session> {
-    unsafe {
-        SESSION_MANAGER.sessions[session_idx].clone()
-    }
+    unsafe { SESSION_MANAGER.sessions[session_idx].clone() }
 }
 
 /// Get all active sessions
 pub fn get_active_sessions() -> Vec<Session> {
     unsafe {
-        SESSION_MANAGER.sessions
+        SESSION_MANAGER
+            .sessions
             .iter()
             .filter_map(|s| s.as_ref().filter(|s| s.active).cloned())
             .collect()
@@ -239,10 +253,13 @@ pub fn get_active_sessions() -> Vec<Session> {
 /// Get sessions for a user
 pub fn get_user_sessions(username: &str) -> Vec<Session> {
     unsafe {
-        SESSION_MANAGER.sessions
+        SESSION_MANAGER
+            .sessions
             .iter()
             .filter_map(|s| {
-                s.as_ref().filter(|s| s.active && s.username == username).cloned()
+                s.as_ref()
+                    .filter(|s| s.active && s.username == username)
+                    .cloned()
             })
             .collect()
     }
@@ -250,24 +267,18 @@ pub fn get_user_sessions(username: &str) -> Vec<Session> {
 
 /// Get utmp entries (current logins)
 pub fn get_utmp() -> Vec<UtmpEntry> {
-    unsafe {
-        SESSION_MANAGER.utmp_entries.clone()
-    }
+    unsafe { SESSION_MANAGER.utmp_entries.clone() }
 }
 
 /// Get wtmp entries (login history)
 pub fn get_wtmp() -> Vec<WtmpEntry> {
-    unsafe {
-        SESSION_MANAGER.wtmp_entries.clone()
-    }
+    unsafe { SESSION_MANAGER.wtmp_entries.clone() }
 }
 
 /// Clean up dead sessions
 pub fn cleanup_dead_sessions() {
-    unsafe {
-        // In a real implementation, check if processes are still alive
-        // For now, just a placeholder
-    }
+    // In a real implementation, check if processes are still alive
+    // For now, just a placeholder
 }
 
 /// Find session by TTY

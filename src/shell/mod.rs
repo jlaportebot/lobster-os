@@ -13,6 +13,7 @@
 
 use crate::drivers::serial_input;
 use crate::drivers::uart::Uart10;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 /// Shell prompt string
@@ -2503,25 +2504,85 @@ fn cmd_login(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         Uart10::puts("Usage: login <username>\r\n");
         return 1;
     }
-    let _username = args[1];
+    let username = args[1];
 
-    // Prompt for password
+    // Prompt for password with echo disabled
     Uart10::puts("Password: ");
-    // In a real implementation, this would read with echo disabled
-    // For now, just simulate
+    let old_echo = crate::drivers::serial_input::echo_enabled();
+    crate::drivers::serial_input::set_echo(false);
+    let mut passwd_buf = [0u8; 128];
+    let passwd_len = crate::drivers::serial_input::read_line(&mut passwd_buf);
+    crate::drivers::serial_input::set_echo(old_echo);
     Uart10::puts("\r\n");
 
-    crate::println!("[login] Not fully implemented - would prompt for password");
-    0
+    let password = core::str::from_utf8(&passwd_buf[..passwd_len]).unwrap_or("");
+    let password = password.trim();
+
+    // Verify credentials
+    match crate::users::auth::login_user(username, password) {
+        Ok(user) => {
+            crate::println!("[login] Welcome, {}!", user.username);
+
+            // Allocate session
+            let tty = "tty1"; // TODO: get actual TTY
+            match crate::users::session::allocate_session(
+                crate::users::session::SessionType::Login,
+                tty,
+                &user.username,
+                crate::arch::timer::Timer::uptime_ms(), // PID placeholder
+            ) {
+                Ok(_) => crate::println!("[login] Session started on {}", tty),
+                Err(e) => crate::println!("[login] Warning: failed to allocate session: {}", e),
+            }
+            0
+        }
+        Err(e) => {
+            crate::println!("[login] Login failed: {}", e);
+            1
+        }
+    }
 }
 
 /// Switch user command (su)
 fn cmd_su(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     let target_user = if argc >= 2 { args[1] } else { "root" };
 
+    // Prompt for target user's password with echo disabled
     crate::println!("[su] Switching to user: {}", target_user);
-    crate::println!("[su] Not fully implemented - would prompt for target user's password");
-    0
+    Uart10::puts("Password: ");
+    let old_echo = crate::drivers::serial_input::echo_enabled();
+    crate::drivers::serial_input::set_echo(false);
+    let mut passwd_buf = [0u8; 128];
+    let passwd_len = crate::drivers::serial_input::read_line(&mut passwd_buf);
+    crate::drivers::serial_input::set_echo(old_echo);
+    Uart10::puts("\r\n");
+
+    let password = core::str::from_utf8(&passwd_buf[..passwd_len]).unwrap_or("");
+    let password = password.trim();
+
+    // Verify credentials for target user
+    match crate::users::auth::login_user(target_user, password) {
+        Ok(user) => {
+            crate::println!("[su] Switched to user: {}", user.username);
+
+            // Allocate new session for target user
+            let tty = "tty1"; // TODO: get actual TTY
+            match crate::users::session::allocate_session(
+                crate::users::session::SessionType::Login,
+                tty,
+                &user.username,
+                crate::arch::timer::Timer::uptime_ms(),
+            ) {
+                Ok(_) => crate::println!("[su] Session started on {}", tty),
+                Err(e) => crate::println!("[su] Warning: failed to allocate session: {}", e),
+            }
+            0
+        }
+        Err(e) => {
+            crate::println!("[su] Authentication failed: {}", e);
+            1
+        }
+    }
 }
 
 /// Sudo command
@@ -2531,9 +2592,62 @@ fn cmd_sudo(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         return 1;
     }
 
+    // Get current user from session (simplified - would need actual session tracking)
+    let current_user = "root"; // TODO: get from session
+
+    // Check if current user can sudo
+    if !crate::users::auth::can_sudo(current_user) {
+        crate::println!(
+            "[sudo] User '{}' is not authorized to use sudo",
+            current_user
+        );
+        return 1;
+    }
+
     let cmd = args[1];
-    crate::println!("[sudo] Running as root: {}", cmd);
-    crate::println!("[sudo] Not fully implemented");
+    let target_user = if argc >= 3 && args[2] == "-u" {
+        if argc >= 4 {
+            args[3]
+        } else {
+            Uart10::puts("Usage: sudo [-u user] <command> [args...]\r\n");
+            return 1;
+        }
+    } else {
+        "root"
+    };
+
+    // Get target UID
+    let target_uid = match crate::users::auth::sudo_uid(current_user, Some(target_user)) {
+        Ok(uid) => uid,
+        Err(e) => {
+            crate::println!("[sudo] Failed to get target UID: {}", e);
+            return 1;
+        }
+    };
+
+    crate::println!(
+        "[sudo] Running as user '{}' (UID {}): {}",
+        target_user,
+        target_uid,
+        cmd
+    );
+
+    // Build command line from remaining args
+    let mut cmd_line = String::new();
+    let start_idx = if argc >= 3 && args[2] == "-u" { 4 } else { 2 };
+    for i in start_idx..argc {
+        if i > start_idx {
+            cmd_line.push(' ');
+        }
+        cmd_line.push_str(args[i]);
+    }
+
+    // Execute command (simplified - would need process spawning with UID)
+    crate::println!(
+        "[sudo] Command execution not fully implemented - would spawn process with UID {}",
+        target_uid
+    );
+    crate::println!("[sudo] Would execute: {}", cmd_line);
     0
 }
 
@@ -2547,8 +2661,65 @@ fn cmd_passwd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     };
 
     crate::println!("[passwd] Changing password for: {}", target_user);
-    crate::println!("[passwd] Not fully implemented");
-    0
+
+    // Prompt for old password
+    Uart10::puts("Old password: ");
+    let old_echo = crate::drivers::serial_input::echo_enabled();
+    crate::drivers::serial_input::set_echo(false);
+    let mut old_passwd_buf = [0u8; 128];
+    let old_passwd_len = crate::drivers::serial_input::read_line(&mut old_passwd_buf);
+    crate::drivers::serial_input::set_echo(old_echo);
+    Uart10::puts("\r\n");
+
+    let old_password = core::str::from_utf8(&old_passwd_buf[..old_passwd_len]).unwrap_or("");
+    let old_password = old_password.trim();
+
+    // Prompt for new password
+    Uart10::puts("New password: ");
+    let old_echo = crate::drivers::serial_input::echo_enabled();
+    crate::drivers::serial_input::set_echo(false);
+    let mut new_passwd_buf = [0u8; 128];
+    let new_passwd_len = crate::drivers::serial_input::read_line(&mut new_passwd_buf);
+    crate::drivers::serial_input::set_echo(old_echo);
+    Uart10::puts("\r\n");
+
+    let new_password = core::str::from_utf8(&new_passwd_buf[..new_passwd_len]).unwrap_or("");
+    let new_password = new_password.trim();
+
+    // Confirm new password
+    Uart10::puts("Retype new password: ");
+    let old_echo = crate::drivers::serial_input::echo_enabled();
+    crate::drivers::serial_input::set_echo(false);
+    let mut confirm_passwd_buf = [0u8; 128];
+    let confirm_passwd_len = crate::drivers::serial_input::read_line(&mut confirm_passwd_buf);
+    crate::drivers::serial_input::set_echo(old_echo);
+    Uart10::puts("\r\n");
+
+    let confirm_password =
+        core::str::from_utf8(&confirm_passwd_buf[..confirm_passwd_len]).unwrap_or("");
+    let confirm_password = confirm_password.trim();
+
+    if new_password != confirm_password {
+        crate::println!("[passwd] Passwords do not match");
+        return 1;
+    }
+
+    if new_password.is_empty() {
+        crate::println!("[passwd] Password cannot be empty");
+        return 1;
+    }
+
+    // Change password
+    match crate::users::auth::change_password(target_user, old_password, new_password) {
+        Ok(()) => {
+            crate::println!("[passwd] Password changed successfully");
+            0
+        }
+        Err(e) => {
+            crate::println!("[passwd] Failed to change password: {}", e);
+            1
+        }
+    }
 }
 
 /// Useradd command
@@ -2559,8 +2730,76 @@ fn cmd_useradd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
 
     let username = args[1];
-    crate::println!("[useradd] Adding user: {}", username);
-    crate::println!("[useradd] Not fully implemented");
+
+    // Check if user already exists
+    if crate::users::passwd::user_exists(username) {
+        crate::println!("[useradd] User '{}' already exists", username);
+        return 1;
+    }
+
+    // Find next available UID (start from 1000)
+    let mut next_uid = 1000;
+    let users = crate::users::passwd::get_all_users();
+    for user in &users {
+        if user.uid >= next_uid {
+            next_uid = user.uid + 1;
+        }
+    }
+
+    // Find next available GID (same as UID for user private group)
+    let mut next_gid = 1000;
+    let groups = crate::users::group::get_all_groups();
+    for group in &groups {
+        if group.gid >= next_gid {
+            next_gid = group.gid + 1;
+        }
+    }
+
+    // Create user entry
+    let home = alloc::format!("/home/{}", username);
+    let shell = "/bin/sh";
+    let user_entry =
+        crate::users::passwd::PasswdEntry::new(username, next_uid, next_gid, &home, shell);
+
+    // Create shadow entry (locked password initially)
+    let shadow_entry = crate::users::shadow::ShadowEntry::new(username, "!");
+
+    // Create user's primary group
+    let group_entry = crate::users::group::GroupEntry::new(username, next_gid);
+
+    // Add to passwd
+    let mut users = crate::users::passwd::read_passwd_file().unwrap_or_default();
+    users.push(user_entry);
+    if let Err(e) = crate::users::passwd::write_passwd_file(&users) {
+        crate::println!("[useradd] Failed to write /etc/passwd: {:?}", e);
+        return 1;
+    }
+
+    // Add to shadow
+    let mut shadows = crate::users::shadow::read_shadow_file().unwrap_or_default();
+    shadows.push(shadow_entry);
+    if let Err(e) = crate::users::shadow::write_shadow_file(&shadows) {
+        crate::println!("[useradd] Failed to write /etc/shadow: {:?}", e);
+        return 1;
+    }
+
+    // Add to group
+    let mut groups = crate::users::group::read_group_file().unwrap_or_default();
+    groups.push(group_entry);
+    if let Err(e) = crate::users::group::write_group_file(&groups) {
+        crate::println!("[useradd] Failed to write /etc/group: {:?}", e);
+        return 1;
+    }
+
+    // Create home directory
+    let _ = crate::fs::vfs::create_dir(&alloc::format!("/home/{}", username));
+
+    crate::println!(
+        "[useradd] User '{}' added (UID={}, GID={})",
+        username,
+        next_uid,
+        next_gid
+    );
     0
 }
 
@@ -2572,8 +2811,58 @@ fn cmd_userdel(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
 
     let username = args[1];
-    crate::println!("[userdel] Deleting user: {}", username);
-    crate::println!("[userdel] Not fully implemented");
+
+    // Check if user exists
+    if !crate::users::passwd::user_exists(username) {
+        crate::println!("[userdel] User '{}' does not exist", username);
+        return 1;
+    }
+
+    // Remove from passwd
+    let mut users = crate::users::passwd::read_passwd_file().unwrap_or_default();
+    let user_idx = users.iter().position(|u| u.username == username);
+    if let Some(idx) = user_idx {
+        users.remove(idx);
+        if let Err(e) = crate::users::passwd::write_passwd_file(&users) {
+            crate::println!("[userdel] Failed to write /etc/passwd: {:?}", e);
+            return 1;
+        }
+    }
+
+    // Remove from shadow
+    let mut shadows = crate::users::shadow::read_shadow_file().unwrap_or_default();
+    let shadow_idx = shadows.iter().position(|s| s.username == username);
+    if let Some(idx) = shadow_idx {
+        shadows.remove(idx);
+        if let Err(e) = crate::users::shadow::write_shadow_file(&shadows) {
+            crate::println!("[userdel] Failed to write /etc/shadow: {:?}", e);
+            return 1;
+        }
+    }
+
+    // Remove from group (user's primary group and memberships)
+    let mut groups = crate::users::group::read_group_file().unwrap_or_default();
+    // Remove user from group memberships
+    for group in &mut groups {
+        group.remove_member(username);
+    }
+    // Remove user's primary group if it exists and has no other members
+    let user_primary_group_idx = groups.iter().position(|g| g.name == username);
+    if let Some(idx) = user_primary_group_idx {
+        // Only remove if no other members
+        if groups[idx].members.is_empty() {
+            groups.remove(idx);
+        }
+    }
+    if let Err(e) = crate::users::group::write_group_file(&groups) {
+        crate::println!("[userdel] Failed to write /etc/group: {:?}", e);
+        return 1;
+    }
+
+    // Remove home directory (optional - would need recursive rm)
+    // let _ = crate::fs::vfs::remove(&alloc::format!("/home/{}", username));
+
+    crate::println!("[userdel] User '{}' deleted", username);
     0
 }
 
@@ -2585,8 +2874,34 @@ fn cmd_groupadd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
 
     let groupname = args[1];
-    crate::println!("[groupadd] Adding group: {}", groupname);
-    crate::println!("[groupadd] Not fully implemented");
+
+    // Check if group already exists
+    if crate::users::group::group_exists(groupname) {
+        crate::println!("[groupadd] Group '{}' already exists", groupname);
+        return 1;
+    }
+
+    // Find next available GID (start from 1000)
+    let mut next_gid = 1000;
+    let groups = crate::users::group::get_all_groups();
+    for group in &groups {
+        if group.gid >= next_gid {
+            next_gid = group.gid + 1;
+        }
+    }
+
+    // Create group entry
+    let group_entry = crate::users::group::GroupEntry::new(groupname, next_gid);
+
+    // Add to group
+    let mut groups = crate::users::group::read_group_file().unwrap_or_default();
+    groups.push(group_entry);
+    if let Err(e) = crate::users::group::write_group_file(&groups) {
+        crate::println!("[groupadd] Failed to write /etc/group: {:?}", e);
+        return 1;
+    }
+
+    crate::println!("[groupadd] Group '{}' added (GID={})", groupname, next_gid);
     0
 }
 
@@ -2598,8 +2913,42 @@ fn cmd_groupdel(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
 
     let groupname = args[1];
-    crate::println!("[groupdel] Deleting group: {}", groupname);
-    crate::println!("[groupdel] Not fully implemented");
+
+    // Check if group exists
+    if !crate::users::group::group_exists(groupname) {
+        crate::println!("[groupdel] Group '{}' does not exist", groupname);
+        return 1;
+    }
+
+    // Check if group is a user's primary group
+    let users = crate::users::passwd::get_all_users();
+    for user in &users {
+        if user.gid
+            == crate::users::group::find_group(groupname)
+                .map(|g| g.gid)
+                .unwrap_or(0)
+        {
+            crate::println!(
+                "[groupdel] Cannot delete group '{}': it is the primary group of user '{}'",
+                groupname,
+                user.username
+            );
+            return 1;
+        }
+    }
+
+    // Remove from group
+    let mut groups = crate::users::group::read_group_file().unwrap_or_default();
+    let group_idx = groups.iter().position(|g| g.name == groupname);
+    if let Some(idx) = group_idx {
+        groups.remove(idx);
+        if let Err(e) = crate::users::group::write_group_file(&groups) {
+            crate::println!("[groupdel] Failed to write /etc/group: {:?}", e);
+            return 1;
+        }
+    }
+
+    crate::println!("[groupdel] Group '{}' deleted", groupname);
     0
 }
 
