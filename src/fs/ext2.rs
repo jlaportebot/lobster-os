@@ -17,6 +17,7 @@
 //! - Journal is a simple circular redo log, not full ext3 journaling
 
 use super::vfs::*;
+use crate::arch::timer::Timer;
 #[allow(dead_code, unused_imports)]
 use crate::println;
 
@@ -1959,6 +1960,9 @@ pub fn mkfs(
     }
     free_blocks = free_blocks.saturating_sub(reserved_blocks);
 
+    // Get current timestamp for filesystem creation time
+    let now_secs = (Timer::uptime_ms() / 1000) as u32;
+
     // ── Write superblock ──────────────────────────────────────────
     let mut sb = Ext2Superblock {
         s_inodes_count: inodes_count.to_le(),
@@ -1972,15 +1976,15 @@ pub fn mkfs(
         s_blocks_per_group: blocks_per_group.to_le(),
         s_frags_per_group: blocks_per_group.to_le(),
         s_inodes_per_group: inodes_per_group.to_le(),
-        s_mtime: 0,
-        s_wtime: 0, // TODO: real timestamp
+        s_mtime: now_secs.to_le(),
+        s_wtime: now_secs.to_le(),
         s_mnt_count: 0,
         s_max_mnt_count: 0xFFFF,
         s_magic: EXT2_MAGIC.to_le(),
         s_state: 1u16.to_le(),  // EXT2_VALID_FS
         s_errors: 1u16.to_le(), // Continue on errors
         s_minor_rev_level: 0,
-        s_lastcheck: 0,
+        s_lastcheck: now_secs.to_le(),
         s_checkinterval: 0,
         s_creator_os: 0u32.to_le(), // Linux
         s_rev_level: 1u32.to_le(),  // Revision 1 (dynamic inode sizes)
@@ -1992,7 +1996,7 @@ pub fn mkfs(
         s_feature_compat: 0,
         s_feature_incompat: 1u32.to_le(), // EXT2_FEATURE_INCOMPAT_FILETYPE
         s_feature_ro_compat: 0,
-        s_uuid: [0; 16], // TODO: generate UUID
+        s_uuid: [0; 16], // Generated below
         s_volume_name: opts.volume_name,
         s_last_mounted: [0; 64],
         s_algo_bitmap: 0,
@@ -2009,7 +2013,7 @@ pub fn mkfs(
         s_desc_size: 0,
         s_default_mount_opts: 0,
         s_first_meta_bg: 0,
-        s_mkfs_time: 0,
+        s_mkfs_time: now_secs.to_le(),
         s_jnl_blocks: [0; 17],
     };
 
