@@ -46,7 +46,10 @@ const L3_SHIFT: u64 = 12;
 const VA_INDEX_MASK: u64 = 0x1FF;
 
 /// Number of page tables we pre-allocate (enough for early boot)
-const MAX_EARLY_PAGE_TABLES: usize = 4;
+/// Physical map uses 1 L2 table per 1GB. For 2GB QEMU = 2, for 8GB Pi 5 = 8.
+/// Kernel map: 1 L2. Identity map: 1 L1 + 1 L2. Device maps: 1 L1 + 1 L2.
+/// 2 roots + 2 L1 + ~12 L2 = ~16. Use 64 for headroom.
+const MAX_EARLY_PAGE_TABLES: usize = 64;
 
 /// Storage for page tables (must be page-aligned)
 static mut PAGE_TABLE_STORAGE: [[u64; PT_ENTRIES]; MAX_EARLY_PAGE_TABLES] =
@@ -56,7 +59,10 @@ static mut NEXT_PT_INDEX: usize = 0;
 /// Allocate a zeroed page table from our static storage
 unsafe fn alloc_page_table() -> *mut [u64; PT_ENTRIES] {
     if NEXT_PT_INDEX >= MAX_EARLY_PAGE_TABLES {
-        println!("[mmu] FATAL: out of early page tables!");
+        println!(
+            "[mmu] FATAL: out of early page tables! (allocated {})",
+            NEXT_PT_INDEX
+        );
         loop {
             crate::arch::cpu::wfe()
         }
@@ -118,7 +124,7 @@ unsafe fn map_page(root: *mut [u64; PT_ENTRIES], va: u64, pa: u64, flags: u64) {
     (*table)[idx] = pa | flags;
 }
 
-/// Map a range of pages
+/// Map a range of pages (4KB granularity) — for kernel/device mappings
 unsafe fn map_range(
     root: *mut [u64; PT_ENTRIES],
     va_start: u64,
@@ -137,13 +143,75 @@ unsafe fn map_range(
     }
 }
 
+/// Map a range using 2MB block entries at L2
+unsafe fn map_range_blocks(
+    root: *mut [u64; PT_ENTRIES],
+    va_start: u64,
+    pa_start: u64,
+    size: u64,
+    flags: u64,
+) {
+    // 2MB block size (L2 block)
+    const BLOCK_SIZE_2M: u64 = 2 * 1024 * 1024;
+    const BLOCK_ALIGN_2M: u64 = BLOCK_SIZE_2M - 1;
+
+    let mut va = va_start & !BLOCK_ALIGN_2M;
+    let mut pa = pa_start & !BLOCK_ALIGN_2M;
+    let end = ((va_start + size) + BLOCK_ALIGN_2M) & !BLOCK_ALIGN_2M;
+
+    while va < end {
+        let idx_l0 = pt_index(va, 0);
+        let idx_l1 = pt_index(va, 1);
+        let idx_l2 = pt_index(va, 2);
+
+        let table_l0 = root;
+        let entry_l0 = (*table_l0)[idx_l0];
+
+        // Allocate L1 table if needed
+        let table_l1: *mut [u64; PT_ENTRIES];
+        if entry_l0 & PTE_VALID == 0 {
+            let next = alloc_page_table();
+            let next_phys = pt_phys(next);
+            (*table_l0)[idx_l0] = next_phys | PTE_VALID | PTE_TABLE;
+            table_l1 = next;
+        } else if entry_l0 & PTE_TABLE != 0 {
+            let next_phys = entry_l0 & !(PAGE_SIZE - 1);
+            table_l1 = core::ptr::with_exposed_provenance_mut(next_phys as usize);
+        } else {
+            panic!("[mmu] Block entry at L0 not expected");
+        }
+
+        // Allocate L2 table if needed
+        let entry_l1 = (*table_l1)[idx_l1];
+        let table_l2: *mut [u64; PT_ENTRIES];
+        if entry_l1 & PTE_VALID == 0 {
+            let next = alloc_page_table();
+            let next_phys = pt_phys(next);
+            (*table_l1)[idx_l1] = next_phys | PTE_VALID | PTE_TABLE;
+            table_l2 = next;
+        } else if entry_l1 & PTE_TABLE != 0 {
+            let next_phys = entry_l1 & !(PAGE_SIZE - 1);
+            table_l2 = core::ptr::with_exposed_provenance_mut(next_phys as usize);
+        } else {
+            panic!("[mmu] Block entry at L1 not expected (should be table for 2MB blocks)");
+        }
+
+        // Use 2MB block at L2
+        let entry_l2 = pa | flags | PTE_VALID | PTE_ACCESS; // Block entry (no PTE_TABLE)
+        (*table_l2)[idx_l2] = entry_l2;
+
+        va += BLOCK_SIZE_2M;
+        pa += BLOCK_SIZE_2M;
+    }
+}
+
 /// Set up MAIR_EL1 (Memory Attribute Indirection Register)
 unsafe fn setup_mair() {
     // Attr0: Normal, Write-Back, Read/Write Allocate
     let mair = 0xFF    // Attr0: Normal WB RW-Alloc
              | (0x04 << 8)    // Attr1: Device-nGnRnE
              | (0x44 << 16); // Attr2: Normal Non-Cacheable
-    core::arch::asm!("msr MAIR_EL1, {mair:x}", mair = in(reg) mair);
+    core::arch::asm!("msr MAIR_EL1, {0:x}", in(reg) mair);
 }
 
 /// Set up TCR_EL1 (Translation Control Register)
@@ -162,14 +230,14 @@ unsafe fn setup_tcr() {
             | (1u64 << 7)       // EPD0 = Enable TTBR0 walks
             | (0u64 << 22)      // A1 = TTBR0 ASID
             | (0u64 << 6); // A1 = TTBR0 ASID
-    core::arch::asm!("msr TCR_EL1, {}", in(reg) tcr);
+    core::arch::asm!("msr TCR_EL1, {0}", in(reg) tcr);
 }
 
 /// Set up SCTLR_EL1 (System Control Register) — enable MMU + caches
 unsafe fn enable_mmu_and_caches(ttbr0: u64, ttbr1: u64) {
     // Set TTBRs
-    core::arch::asm!("msr TTBR0_EL1, {}", in(reg) ttbr0);
-    core::arch::asm!("msr TTBR1_EL1, {}", in(reg) ttbr1);
+    core::arch::asm!("msr TTBR0_EL1, {0}", in(reg) ttbr0);
+    core::arch::asm!("msr TTBR1_EL1, {0}", in(reg) ttbr1);
 
     // Ensure all table writes are visible
     crate::arch::cpu::dsb();
@@ -182,7 +250,7 @@ unsafe fn enable_mmu_and_caches(ttbr0: u64, ttbr1: u64) {
 
     // Read SCTLR, set M (MMU), C (D-cache), I (I-cache)
     let mut sctlr: u64;
-    core::arch::asm!("mrs {}, SCTLR_EL1", out(reg) sctlr);
+    core::arch::asm!("mrs {0}, SCTLR_EL1", out(reg) sctlr);
     sctlr |= (1 << 0)  // M: MMU enable
            | (1 << 2)  // C: Data cache enable
            | (1 << 12) // I: Instruction cache enable
@@ -195,7 +263,7 @@ unsafe fn enable_mmu_and_caches(ttbr0: u64, ttbr1: u64) {
     sctlr &= !((1 << 19)  // WXN
              | (1 << 28)); // NTI — no trap on cache ins
 
-    core::arch::asm!("msr SCTLR_EL1, {}", in(reg) sctlr);
+    core::arch::asm!("msr SCTLR_EL1, {0}", in(reg) sctlr);
     crate::arch::cpu::isb();
 }
 
@@ -211,36 +279,28 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
     let ttbr0_root = alloc_page_table(); // User space (initially empty)
     let ttbr1_root = alloc_page_table(); // Kernel space
 
-    // Identity map the first 1MB as device memory (for bootloader/DTB region)
-    map_range(ttbr1_root, 0x0, 0x0, 0x10_0000, PTE_DEVICE);
+    // Identity map the first 2MB as device memory (for bootloader/DTB region) - use 2MB block
+    map_range_blocks(ttbr1_root, 0x0, 0x0, 2 * 1024 * 1024, PTE_DEVICE);
 
-    // Map kernel image: identity + high VA (both needed during transition)
-    // Identity mapping (for boot transition)
-    map_range(
+    // Map kernel image at high VA (identity map only needed during boot transition, not in final page tables)
+    let kernel_map_size = ((kernel_size + 0x1FFFFF) & !0x1FFFFF).max(2 * 1024 * 1024);
+    map_range_blocks(
         ttbr1_root,
-        kernel_phys_start,
-        kernel_phys_start,
-        kernel_size,
-        PTE_KERNEL_CODE,
-    );
-    // High VA mapping
-    map_range(
-        ttbr1_root,
-        KERNEL_IMAGE_START,
-        kernel_phys_start,
-        kernel_size,
+        KERNEL_IMAGE_START & !0x1FFFFF,
+        kernel_phys_start & !0x1FFFFF,
+        kernel_map_size,
         PTE_KERNEL_CODE,
     );
 
-    // Direct physical memory map (all RAM)
+    // Direct physical memory map (all RAM) — use 2MB/1GB block mappings
     let _phys_map_end = PHYS_MAP_OFFSET + ram_size;
-    map_range(ttbr1_root, PHYS_MAP_OFFSET, 0x0, ram_size, PTE_KERNEL_DATA);
+    map_range_blocks(ttbr1_root, PHYS_MAP_OFFSET, 0x0, ram_size, PTE_KERNEL_DATA);
 
     // Map BCM2712 peripherals (SOC range: 0x10_0000_0000 .. 0x11_0000_0000)
     // UART10, GIC, System Timer, etc.
     const SOC_PERIPH_BASE: u64 = 0x10_0000_0000;
     const SOC_PERIPH_SIZE: u64 = 0x1_0000_0000; // 256MB
-    map_range(
+    map_range_blocks(
         ttbr1_root,
         DEVICE_MAP_START,
         SOC_PERIPH_BASE,
@@ -251,7 +311,7 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
     // Map BCM2835-style peripherals (0x7C00_0000 .. 0x7D00_0000) for system timer
     const BCM_PERIPH_BASE: u64 = 0x10_7C00_0000;
     const BCM_PERIPH_SIZE: u64 = 0x0100_0000; // 1MB
-    map_range(
+    map_range_blocks(
         ttbr1_root,
         DEVICE_MAP_START + 0x100_0000,
         BCM_PERIPH_BASE,
@@ -320,7 +380,7 @@ pub unsafe fn map_page_virt(va: u64, pa: u64, flags: u64) {
     let root = ttbr1_root_virt as *mut [u64; PT_ENTRIES];
     map_page_via_virt(root, va, pa, flags);
     // Flush TLB for this page
-    core::arch::asm!("tlbi vaae1is, {}", in(reg) va >> 12);
+    core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
 }
@@ -343,7 +403,7 @@ pub unsafe fn unmap_page_virt(va: u64) {
 
     let idx = pt_index(va, 3);
     (*table)[idx] = 0; // Invalidate
-    core::arch::asm!("tlbi vaae1is, {}", in(reg) va >> 12);
+    core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
 }
@@ -370,7 +430,7 @@ pub unsafe fn protect_page_virt(va: u64, flags: u64) {
         let pa = old & !(PAGE_SIZE - 1);
         (*table)[idx] = pa | flags;
     }
-    core::arch::asm!("tlbi vaae1is, {}", in(reg) va >> 12);
+    core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
 }
