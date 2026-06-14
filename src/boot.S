@@ -14,21 +14,129 @@
     .type _boot, function
 
 _boot:
+    b       .Lel3_entry
+
+.Lel3_entry:
     // -------------------------------------------------------
     // Step 1: Check which Exception Level we're at
     // -------------------------------------------------------
+    // Mask all interrupts immediately at EL3
+    msr     DAIFSet, #0xF         // Mask IRQ, FIQ, SError, Debug
+
     mrs     x8, CurrentEL
     lsr     x8, x8, #2          // CurrentEL[3:2] → x8
+    
+    // DEBUG: Store CurrentEL in a known location for inspection
+    ldr     x9, =0x80000
+    str     x8, [x9, #0x1000]
+    
+    cmp     x8, #3
+    b.eq    .Ldrop_to_el2       // At EL3 → drop to EL2 (QEMU without TF-A)
     cmp     x8, #2
     b.eq    .Ldrop_to_el1       // At EL2 → drop to EL1
     cmp     x8, #1
     b.eq    .Lel1_setup         // Already at EL1 → proceed
-    // If at EL3, drop to EL2 first then EL1 (shouldn't happen with TF-A)
+    // Unexpected EL (EL0 or invalid) → hang
     b       .Lhang
+
+.Ldrop_to_el2:
+    // -------------------------------------------------------
+    // Step 2a: EL3 → EL2 (when booted without TF-A, e.g., QEMU)
+    // -------------------------------------------------------
+
+    // Set up EL3 stack (use a small dedicated area)
+    ldr     x8, =__stack_start
+    add     x8, x8, #0x1000       // 4KB below main stack area
+    mov     sp, x8
+
+    // Set up EL3 exception vector table
+    ldr     x8, =exception_vector_table
+    msr     VBAR_EL3, x8
+    isb
+
+    // Set SCR_EL3: enable HCE (HVC), NS=1 (non-secure), RW=1 (AArch64 lower ELs)
+    mrs     x8, SCR_EL3
+    // SCR_EL3 bits: NS=1 (bit 0), RW=1 (bit 10), HCE=1 (bit 8), SMD=0 (bit 7)
+    orr     x8, x8, #(1 << 0)   // NS = 1 (non-secure)
+    orr     x8, x8, #(1 << 10)  // RW = 1 (lower ELs are AArch64)
+    orr     x8, x8, #(1 << 8)   // HCE = 1 (enable HVC)
+    msr     SCR_EL3, x8
+    
+    // DEBUG: Store SCR_EL3 after modification
+    mrs     x8, SCR_EL3
+    ldr     x9, =0x80000
+    str     x8, [x9, #0x1008]
+
+    // Set HCR_EL2 for EL1 AArch64
+    mrs     x8, HCR_EL2
+    ldr     x9, =0x80000000     // RW=1, VM=0
+    orr     x8, x8, x9
+    msr     HCR_EL2, x8
+
+    // Set SCTLR_EL1 to known state
+    msr     SCTLR_EL1, xzr
+
+    // Set up EL2→EL1 transition
+    ldr     x8, =.Lel1_setup
+    msr     ELR_EL2, x8
+
+    // SPSR_EL2: EL1h, IRQ/FIQ/SError masked, AArch64
+    //   M[3:0] = 0100 (EL1h), DAIF = 1111
+    mov     x8, #0x3C4           // DAIF=0xF, M=0x4 (EL1h)
+    msr     SPSR_EL2, x8
+
+    // SPSR_EL3 for EL3→EL2: EL2t, IRQ/FIQ/SError masked, AArch64
+    //   M[3:0] = 1000 (EL2t), DAIF = 1111
+    mov     x8, #0x3C8           // DAIF=0xF, M=0x8 (EL2t)
+    msr     SPSR_EL3, x8
+
+    // Set ELR_EL3 to EL2 entry point
+    ldr     x8, =.Lel2_entry
+    msr     ELR_EL3, x8
+
+    eret                        // Drop to EL2!
+
+.Lel2_entry:
+    // DEBUG: Mark that we reached EL2 entry
+    ldr     x8, =0x80000
+    mov     x9, #0xDEAD
+    str     x9, [x8, #0x1010]
+
+    // DEBUG: Check CurrentEL at EL2 entry
+    mrs     x9, CurrentEL
+    lsr     x9, x9, #2
+    ldr     x8, =0x80000
+    str     x9, [x8, #0x1040]
+
+    // Set HCR_EL2 for EL1 AArch64 using raw encoding
+    // HCR_EL2: Op0=3, Op1=4, CRn=1, CRm=1, Op2=0 -> S3_4_C1_C1_0
+    ldr     x8, =0x80000000     // RW=1, VM=0
+    msr     S3_4_C1_C1_0, x8
+
+    // DEBUG: Store a marker after HCR_EL2 write
+    mov     x9, #0xFEED
+    str     x9, [x8, #0x1030]
+
+    msr     SCTLR_EL1, xzr
+
+    ldr     x8, =.Lel1_setup
+    msr     ELR_EL2, x8
+
+    // SPSR_EL2: EL1t, IRQ/FIQ/SError masked, AArch64
+    //   M[3:0] = 0100 (EL1t), DAIF = 1111
+    mov     x8, #0x3C4           // DAIF=0xF, M=0x4 (EL1t)
+    msr     SPSR_EL2, x8
+
+    // DEBUG: Store a marker before eret
+    ldr     x8, =0x80000
+    mov     x9, #0xFACE
+    str     x9, [x8, #0x1038]
+
+    eret                        // Drop to EL1!
 
 .Ldrop_to_el1:
     // -------------------------------------------------------
-    // Step 2: Configure EL2 and drop to EL1
+    // Step 2b: Configure EL2 and drop to EL1 (original path for EL2 entry)
     // -------------------------------------------------------
 
     // Set HCR_EL2: disable stage-2 translation, EL1 is AArch64
@@ -55,6 +163,10 @@ _boot:
     eret                        // Drop to EL1!
 
 .Lel1_setup:
+    // DEBUG: Mark that we reached EL1 setup
+    ldr     x8, =0x80000
+    mov     x9, #0xBEEF
+    str     x9, [x8, #0x1018]
     // -------------------------------------------------------
     // Step 3: EL1 setup
     // -------------------------------------------------------
