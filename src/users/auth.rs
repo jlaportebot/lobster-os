@@ -110,11 +110,16 @@ pub fn change_password(username: &str, old_password: &str, new_password: &str) -
     let new_hash = hash_password(new_password);
 
     // Update /etc/shadow
-    // In a real implementation, this would rewrite the shadow file
-    // For now, we just print
-    crate::println!("[auth] Password changed for {}: {}", username, new_hash);
-
-    // TODO: Actually write to /etc/shadow
+    let mut entries = crate::users::shadow::read_shadow_file().unwrap_or_default();
+    for entry in &mut entries {
+        if entry.username == username {
+            entry.password_hash = new_hash;
+            entry.last_change = (crate::arch::timer::Timer::uptime_ms() / 86400000) as i64; // Approximate days since epoch
+            break;
+        }
+    }
+    crate::users::shadow::write_shadow_file(&entries)?;
+    crate::println!("[auth] Password changed for {} and written to /etc/shadow", username);
     Ok(())
 }
 

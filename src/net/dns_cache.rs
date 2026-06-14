@@ -139,6 +139,7 @@ pub fn cache_stats() -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
 
     #[test]
     fn test_cache_entry_matches() {

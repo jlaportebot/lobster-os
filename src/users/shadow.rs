@@ -108,3 +108,36 @@ pub fn find_shadow(username: &str) -> Option<ShadowEntry> {
 pub fn get_all_shadows() -> Vec<ShadowEntry> {
     read_shadow_file().unwrap_or_default()
 }
+
+/// Write /etc/shadow file from shadow entries
+pub fn write_shadow_file(entries: &[ShadowEntry]) -> Result<(), crate::fs::vfs::VfsError> {
+    let mut content = String::new();
+    for entry in entries {
+        content.push_str(&alloc::format!(
+            "{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
+            entry.username,
+            entry.password_hash,
+            entry.last_change,
+            entry.min_age,
+            entry.max_age,
+            entry.warning,
+            entry.inactive,
+            entry.expire,
+            entry.reserved
+        ));
+    }
+
+    // Ensure /etc directory exists
+    let _ = crate::fs::vfs::create_dir("/etc");
+
+    // Open or create the shadow file
+    let fd = crate::fs::vfs::open("/etc/shadow", 0x02 | 0x400)?; // O_WRONLY | O_CREAT
+
+    // Write content
+    crate::fs::vfs::write(fd, content.as_bytes())?;
+
+    // Close file
+    crate::fs::vfs::close(fd)?;
+
+    Ok(())
+}

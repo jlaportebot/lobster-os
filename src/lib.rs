@@ -89,6 +89,174 @@ pub mod usb;
 #[cfg(target_arch = "aarch64")]
 pub mod wm;
 
+// x86_64 stubs for host testing
+#[cfg(target_arch = "x86_64")]
+pub mod sched {
+    use crate::sync::Spinlock;
+
+    pub const MAX_TASKS: usize = 32;
+    pub const TICK_MS: u64 = 10;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum Priority {
+        Low = 0,
+        Normal = 1,
+        High = 2,
+    }
+
+    impl Default for Priority {
+        fn default() -> Self {
+            Priority::Normal
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum TaskState {
+        Created,
+        Ready,
+        Running,
+        Blocked,
+        Zombie,
+    }
+
+    pub type Pid = u32;
+
+    #[derive(Clone, Copy)]
+    pub struct Task {
+        pub pid: Pid,
+        pub state: TaskState,
+        pub priority: Priority,
+        pub is_user: bool,
+        pub ipc_ns: u32,
+    }
+
+    static TASK_TABLE: Spinlock<[Option<Task>; MAX_TASKS]> = Spinlock::new([None; MAX_TASKS]);
+
+    pub fn find_task_index(pid: Pid) -> Option<usize> {
+        let table = TASK_TABLE.lock();
+        table
+            .iter()
+            .position(|t| t.as_ref().map(|task| task.pid == pid).unwrap_or(false))
+    }
+
+    pub fn current_pid() -> Pid {
+        1
+    }
+
+    pub fn spawn_from_path(_path: &str, _priority: Priority) -> Result<Pid, &'static str> {
+        Err("not implemented on x86_64")
+    }
+
+    pub fn task_count() -> usize {
+        0
+    }
+
+    pub mod dlinker {}
+    pub mod elf {}
+    pub mod init {}
+    pub mod process {}
+    pub mod signal {}
+    pub mod syscall {}
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod display {
+    pub mod console {
+        pub const WHITE: u32 = 0xFFFFFFFF;
+        pub const BLACK: u32 = 0xFF000000;
+        pub const RED: u32 = 0xFFFF0000;
+        pub const GREEN: u32 = 0xFF00FF00;
+        pub const BLUE: u32 = 0xFF0000FF;
+        pub const CYAN: u32 = 0xFF00FFFF;
+        pub const YELLOW: u32 = 0xFFFFFF00;
+        pub const MAGENTA: u32 = 0xFFFF00FF;
+        pub const GRAY: u32 = 0xFF808080;
+        pub const LIGHT_GRAY: u32 = 0xFFC0C0C0;
+        pub const DARK_GRAY: u32 = 0xFF404040;
+        pub const CHAR_WIDTH: usize = 8;
+        pub const CHAR_HEIGHT: usize = 16;
+        pub static FONT: [[u8; 16]; 128] = [[0; 16]; 128];
+    }
+    pub mod fb {
+        pub struct FramebufferInfo {
+            pub width: usize,
+            pub height: usize,
+            pub pitch: usize,
+            pub bpp: usize,
+            pub fb_addr: u64,
+            pub fb_size: usize,
+        }
+        impl FramebufferInfo {
+            pub const fn new() -> Self {
+                Self {
+                    width: 0,
+                    height: 0,
+                    pitch: 0,
+                    bpp: 0,
+                    fb_addr: 0,
+                    fb_size: 0,
+                }
+            }
+        }
+        pub fn get_info() -> FramebufferInfo {
+            FramebufferInfo::new()
+        }
+        pub fn init(
+            _width: usize,
+            _height: usize,
+            _bpp: usize,
+        ) -> Result<FramebufferInfo, &'static str> {
+            Ok(FramebufferInfo::new())
+        }
+    }
+    pub mod graphics {
+        pub fn draw_rect(_x: usize, _y: usize, _w: usize, _h: usize, _color: u32) {}
+        pub fn draw_rect_outline(_x: usize, _y: usize, _w: usize, _h: usize, _color: u32) {}
+        pub fn draw_text(_x: usize, _y: usize, _text: &str, _fg: u32, _bg: u32) {}
+        pub fn draw_line(_x1: usize, _y1: usize, _x2: usize, _y2: usize, _color: u32) {}
+        pub fn draw_circle(_x: usize, _y: usize, _r: usize, _color: u32) {}
+        pub fn fill_region(_x: usize, _y: usize, _w: usize, _h: usize, _color: u32) {}
+        pub fn blit(
+            _src_x: usize,
+            _src_y: usize,
+            _dst_x: usize,
+            _dst_y: usize,
+            _w: usize,
+            _h: usize,
+        ) {
+        }
+    }
+    pub mod logo {
+        pub fn draw_splash(_info: crate::display::fb::FramebufferInfo) {}
+        pub fn draw_ascii_logo() {}
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod usb {
+    pub mod hid {
+        pub fn scancode_to_ascii(_scancode: u8, _shift: bool) -> Option<char> {
+            None
+        }
+    }
+    pub mod xhci {}
+    pub mod hub {}
+    pub mod mass {}
+}
+
+#[cfg(target_arch = "x86_64")]
+pub mod smp {
+    pub fn current_core_id() -> u32 {
+        0
+    }
+    pub mod runqueue {
+        pub fn on_core_timer_tick(_core_id: usize) {}
+    }
+    pub mod balance {
+        pub fn on_timer_tick() {}
+    }
+}
+
 // Re-export commonly used types for testing
 pub use crate::memory::{PhysAddr, VirtAddr, PAGE_SIZE};
 pub use crate::sync::Spinlock;

@@ -55,7 +55,7 @@ impl Timer {
                     "cpuid",
                     in("eax") 0x15u32,
                     out("eax") eax,
-                    out(reg) ebx,
+                    out("ebx") ebx,
                     out("ecx") ecx,
                     out("edx") edx,
                     options(nomem, nostack, preserves_flags)
@@ -79,7 +79,7 @@ impl Timer {
                     "cpuid",
                     in("eax") 0x16u32,
                     out("eax") eax,
-                    out(reg) ebx,
+                    out("ebx") ebx,
                     out("ecx") ecx,
                     out("edx") edx,
                     options(nomem, nostack, preserves_flags)
