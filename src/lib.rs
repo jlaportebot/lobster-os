@@ -463,6 +463,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::fs::vfs::init();
     crate::println!("[fs] VFS initialized");
 
+    // 8b. Initialize user database (create default users if missing)
+    crate::println!("[users] Initializing user database...");
+    crate::users::init();
+    crate::println!("[users] User database initialized");
+
     // 9. Parse the DTB
     crate::println!("[dtb] Parsing device tree...");
     crate::dtb::parse(dtb_ptr as u64);
