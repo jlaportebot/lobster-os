@@ -841,6 +841,15 @@ fn run_builtin(
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
+        "pkg" => {
+            cmd_pkg(args, argc)
+        }
+        #[cfg(target_arch = "x86_64")]
+        "pkg" => {
+            Uart10::puts("Package manager not available on x86_64.\r\n");
+            0
+        }
+        #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "panel" => {
             cmd_panel(args, argc);
             0

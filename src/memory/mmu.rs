@@ -308,16 +308,35 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
         PTE_DEVICE,
     );
 
-    // Map BCM2835-style peripherals (0x7C00_0000 .. 0x7D00_0000) for system timer
-    const BCM_PERIPH_BASE: u64 = 0x10_7C00_0000;
-    const BCM_PERIPH_SIZE: u64 = 0x0100_0000; // 1MB
-    map_range_blocks(
-        ttbr1_root,
-        DEVICE_MAP_START + 0x100_0000,
-        BCM_PERIPH_BASE,
-        BCM_PERIPH_SIZE,
-        PTE_DEVICE,
-    );
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        // Map BCM2711-style peripherals (0x7C00_0000 .. 0x7E00_0000) for QEMU raspi5b
+        // System timer, mailbox, UARTs, clocks, GPIOs, etc.
+        const BCM2711_PERIPH_BASE: u64 = 0x7C00_0000;
+        const BCM2711_PERIPH_SIZE: u64 = 0x2000_0000; // 512MB
+        map_range_blocks(
+            ttbr1_root,
+            DEVICE_MAP_START + 0x200_0000,
+            BCM2711_PERIPH_BASE,
+            BCM2711_PERIPH_SIZE,
+            PTE_DEVICE,
+        );
+    }
+
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        // Map BCM2835-style peripherals (0x7C00_0000 .. 0x7D00_0000) for system timer
+        // Only used on real Pi 5 and QEMU raspi4b
+        const BCM_PERIPH_BASE: u64 = 0x10_7C00_0000;
+        const BCM_PERIPH_SIZE: u64 = 0x0100_0000; // 1MB
+        map_range_blocks(
+            ttbr1_root,
+            DEVICE_MAP_START + 0x100_0000,
+            BCM_PERIPH_BASE,
+            BCM_PERIPH_SIZE,
+            PTE_DEVICE,
+        );
+    }
 
     let ttbr0_phys = pt_phys(ttbr0_root);
     let ttbr1_phys = pt_phys(ttbr1_root);

@@ -467,13 +467,9 @@ impl IoctlRequest {
 
 // ─── Firmware Embedding ────────────────────────────────────────────
 // The actual firmware blobs would normally be embedded here.
-// For now we use placeholder paths — the real firmware files
-// (brcmfmac43455-sdio.bin and brcmfmac43455-sdio.clm_blob)
-// must be placed at these paths before building.
-
-// Path constants (for future include_bytes!)
-const FIRMWARE_PATH: &str = "firmware/brcmfmac43455-sdio.bin";
-const CLM_BLOB_PATH: &str = "firmware/brcmfmac43455-sdio.clm_blob";
+// Embedded firmware and NVRAM config
+const FIRMWARE_BYTES: &[u8] = include_bytes!("../../firmware/brcmfmac43455-sdio.bin");
+const NVRAM_CONFIG_BYTES: &[u8] = include_bytes!("../../firmware/brcmfmac43455-sdio.txt");
 
 // Placeholder firmware sizes (actual CYW43455 firmware is ~280KB,
 // CLM blob is ~4KB)
@@ -1450,27 +1446,16 @@ unsafe fn firmware_download() -> Result<(), WifiError> {
         // It's downloaded to a specific region of SOCSRAM after firmware.
         // The firmware tells us the CLM address via a shared structure.
 
-        // For a minimal working driver, we skip actual firmware download
-        // and assume the firmware has been pre-loaded (e.g., by the
-        // VideoCore bootloader or a previous OS).
-        //
-        // In a production driver, this would:
-        // 1. Load firmware from embedded data or filesystem
-        // 2. Write it to SOCSRAM in 4KB blocks
-        // 3. Write CLM blob after firmware
-        // 4. Verify download CRC
-        // 5. Set firmware entry point
-        // 6. Start ARM core
+        // Download embedded firmware to chip's SOCSRAM
+        println!("[wifi] Downloading embedded firmware ({} bytes)...", FIRMWARE_BYTES.len());
+        unsafe {
+            download_firmware_to_chip(FIRMWARE_BYTES, NVRAM_CONFIG_BYTES)?;
+        }
+        println!("[wifi] Firmware download complete");
 
-        println!("[wifi] Firmware download path configured (firmware must be loaded externally)");
-        println!(
-            "[wifi] Place {} and {} on SD card at /firmware/",
-            FIRMWARE_PATH, CLM_BLOB_PATH
-        );
+        // Start ARM core
+        arm_cr4_start();
     }
-
-    // Start ARM core (even without firmware, to see if it responds)
-    arm_cr4_start();
 
     // Wait for firmware to signal ready
     let mut timeout = 500_000u64; // ~5 seconds

@@ -18,7 +18,13 @@
 use crate::println;
 
 // ─── Mailbox Interface ──────────────────────────────────────────
+#[cfg(all(not(feature = "qemu"), not(feature = "qemu_raspi5b")))]
 const MAILBOX_BASE: u64 = 0x10_7C00_B880;
+#[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
+const MAILBOX_BASE: u64 = 0xFE_00_B880; // BCM2711 (QEMU raspi4b)
+#[cfg(feature = "qemu_raspi5b")]
+const MAILBOX_BASE: u64 = 0x7C01_3880; // BCM2711-style (QEMU raspi5b)
+
 const MAILBOX_READ: u64 = MAILBOX_BASE + 0x00;
 const MAILBOX_STATUS: u64 = MAILBOX_BASE + 0x18;
 const MAILBOX_WRITE: u64 = MAILBOX_BASE + 0x20;

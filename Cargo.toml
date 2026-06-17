@@ -15,6 +15,7 @@ path = "src/main.rs"
 [features]
 std = []  # Enable std for host builds
 qemu = []  # Build for QEMU raspi4b emulation
+qemu_raspi5b = ["qemu"]  # Build for QEMU raspi5b emulation (implies qemu)
 
 [dependencies]
 tock-registers = "0.9"

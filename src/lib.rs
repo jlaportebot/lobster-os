@@ -332,7 +332,12 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     let kernel_phys_start = 0x80000u64; // kernel8.img load address
     let kernel_end = unsafe { &__kernel_end as *const u64 as u64 };
     let kernel_size = kernel_end - kernel_phys_start;
-    // Assume 8GB RAM for RPi 5 (will parse DTB later for actual size)
+    // RAM size: 8GB for Pi 5, 2GB for QEMU raspi4b, 4GB for QEMU raspi5b
+    #[cfg(feature = "qemu_raspi5b")]
+    let ram_size = 4 * 1024 * 1024 * 1024u64;
+    #[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
+    let ram_size = 2 * 1024 * 1024 * 1024u64;
+    #[cfg(not(feature = "qemu"))]
     let ram_size = 8 * 1024 * 1024 * 1024u64;
 
     crate::println!(
@@ -385,6 +390,15 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
             flags: crate::memory::vmem::PTE_DEVICE,
             name: "devices",
         });
+    }
+
+    // Initialize UART with virtual address (now that MMU is enabled)
+    // Physical UART10 at 0x7D00_1000 → Virtual at DEVICE_MAP_START + 0x300_1000
+    #[cfg(feature = "qemu_raspi5b")]
+    unsafe {
+        let uart_virt_base = crate::memory::DEVICE_MAP_START + 0x300_1000;
+        crate::drivers::uart::Uart10::init_virtual(uart_virt_base);
+        crate::println!("[uart] Virtual address initialized: {:#018x}", uart_virt_base);
     }
 
     // Print memory map
