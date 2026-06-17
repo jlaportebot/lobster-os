@@ -1447,7 +1447,10 @@ unsafe fn firmware_download() -> Result<(), WifiError> {
         // The firmware tells us the CLM address via a shared structure.
 
         // Download embedded firmware to chip's SOCSRAM
-        println!("[wifi] Downloading embedded firmware ({} bytes)...", FIRMWARE_BYTES.len());
+        println!(
+            "[wifi] Downloading embedded firmware ({} bytes)...",
+            FIRMWARE_BYTES.len()
+        );
         unsafe {
             download_firmware_to_chip(FIRMWARE_BYTES, NVRAM_CONFIG_BYTES)?;
         }

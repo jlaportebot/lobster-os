@@ -97,26 +97,31 @@ pub const SYS_IPC_UNSHARE: u64 = 44;
 pub const SYS_IPC_SETNS: u64 = 45;
 pub const SYS_IPC_SET_MODE: u64 = 46;
 
+// ── PTY syscalls ──
+pub const SYS_OPENPTY: u64 = 47;
+pub const SYS_FORKPTY: u64 = 48;
+pub const SYS_IOCTL: u64 = 49;
+
 // ── Security / credential syscalls ──
-pub const SYS_SETUID: u64 = 47;
-pub const SYS_SETGID: u64 = 48;
-pub const SYS_SETEUID: u64 = 49;
-pub const SYS_SETEGID: u64 = 50;
-pub const SYS_GETUID: u64 = 51;
-pub const SYS_GETGID: u64 = 52;
-pub const SYS_GETEUID: u64 = 53;
-pub const SYS_GETEGID: u64 = 54;
-pub const SYS_GETGROUPS: u64 = 55;
-pub const SYS_SETGROUPS: u64 = 56;
-pub const SYS_CAPGET: u64 = 57;
-pub const SYS_CAPSET: u64 = 58;
-pub const SYS_CHMOD: u64 = 59;
-pub const SYS_CHOWN: u64 = 60;
-pub const SYS_SET_NO_NEW_PRIVS: u64 = 61;
-pub const SYS_GET_NO_NEW_PRIVS: u64 = 62;
+pub const SYS_SETUID: u64 = 50;
+pub const SYS_SETGID: u64 = 51;
+pub const SYS_SETEUID: u64 = 52;
+pub const SYS_SETEGID: u64 = 53;
+pub const SYS_GETUID: u64 = 54;
+pub const SYS_GETGID: u64 = 55;
+pub const SYS_GETEUID: u64 = 56;
+pub const SYS_GETEGID: u64 = 57;
+pub const SYS_GETGROUPS: u64 = 58;
+pub const SYS_SETGROUPS: u64 = 59;
+pub const SYS_CAPGET: u64 = 60;
+pub const SYS_CAPSET: u64 = 61;
+pub const SYS_CHMOD: u64 = 62;
+pub const SYS_CHOWN: u64 = 63;
+pub const SYS_SET_NO_NEW_PRIVS: u64 = 64;
+pub const SYS_GET_NO_NEW_PRIVS: u64 = 65;
 
 /// Maximum syscall number
-const MAX_SYSCALL: u64 = 62;
+const MAX_SYSCALL: u64 = 65;
 
 // Global pointer to current trap frame during syscall handling (for sigreturn)
 static mut CURRENT_TRAP_FRAME: *mut TrapFrame = core::ptr::null_mut();
@@ -245,6 +250,10 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_IPC_UNSHARE => sys_ipc_unshare(),
         SYS_IPC_SETNS => sys_ipc_setns(args[0] as u32),
         SYS_IPC_SET_MODE => sys_ipc_set_mode(args[0] as u32, args[1] as u32),
+        // ── PTY syscalls ──
+        SYS_OPENPTY => sys_openpty(args[0], args[1]),
+        SYS_FORKPTY => sys_forkpty(args[0], args[1]),
+        SYS_IOCTL => sys_ioctl(args[0] as i32, args[1] as u64, args[2]),
         // ── Security / credential syscalls ──
         SYS_SETUID => crate::security::sys_setuid(args[0] as u32) as u64,
         SYS_SETGID => crate::security::sys_setgid(args[0] as u32) as u64,
@@ -874,6 +883,93 @@ fn sys_ipc_set_mode(ns_id: u32, mode: u32) -> u64 {
     } else {
         u64::MAX
     }
+}
+
+// ═══════════════════════════════════════════════
+// PTY syscalls
+// ═══════════════════════════════════════════════
+
+/// sys_openpty(amaster_ptr, aslave_ptr) — create a new PTY pair
+/// Writes master_fd to amaster_ptr and slave_fd to aslave_ptr
+fn sys_openpty(amaster_ptr: u64, aslave_ptr: u64) -> u64 {
+    let pid = sched::current_pid();
+    let _task_idx = match sched::find_task_index(pid) {
+        Some(i) => i,
+        None => return u64::MAX,
+    };
+
+    match crate::ipc::pty_open() {
+        Some((master_fd, slave_fd)) => {
+            unsafe {
+                core::ptr::write(amaster_ptr as *mut i32, master_fd as i32);
+                core::ptr::write(aslave_ptr as *mut i32, slave_fd as i32);
+            }
+            0
+        }
+        None => u64::MAX,
+    }
+}
+
+/// sys_forkpty(amaster_ptr, aslave_ptr) — create a new PTY pair and fork
+/// The child process will have the slave as its controlling terminal
+fn sys_forkpty(amaster_ptr: u64, aslave_ptr: u64) -> u64 {
+    // For now, just call openpty - forkpty requires process creation
+    // which is more complex. Userspace can implement forkpty using openpty + fork.
+    sys_openpty(amaster_ptr, aslave_ptr)
+}
+
+/// sys_ioctl(fd, cmd, arg) — I/O control for devices
+/// Handles PTY ioctls: TIOCSCTTY, TIOCGWINSZ, TIOCSWINSZ
+fn sys_ioctl(fd: i32, cmd: u64, arg: u64) -> u64 {
+    let pid = sched::current_pid();
+    let task_idx = match sched::find_task_index(pid) {
+        Some(i) => i,
+        None => return u64::MAX,
+    };
+
+    // First check if this is an IPC fd (PTY)
+    if let Some(fd_table) = crate::ipc::get_fd_table(task_idx) {
+        if let Some(entry) = fd_table.get(fd as usize) {
+            match entry.kind {
+                crate::ipc::FdKind::PtyMaster | crate::ipc::FdKind::PtySlave => {
+                    let result = crate::ipc::pty_ioctl(entry.index as usize, cmd, arg);
+                    return if result < 0 { u64::MAX } else { result as u64 };
+                }
+                crate::ipc::FdKind::VfsFile => {
+                    // TODO: VFS ioctl
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Fallback for special fds (stdin=0, stdout=1, stderr=2)
+    if fd == 0 || fd == 1 || fd == 2 {
+        // These are UART, handle basic ioctls
+        match cmd {
+            0x5413 => {
+                // TIOCGWINSZ
+                // Return window size: 24 rows, 80 cols
+                let winsize = [24u16, 80u16, 0u16, 0u16];
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        winsize.as_ptr() as *const u8,
+                        arg as *mut u8,
+                        8,
+                    );
+                }
+                return 0;
+            }
+            0x5414 => {
+                // TIOCSWINSZ
+                // Window size change - ignore for UART
+                return 0;
+            }
+            _ => {}
+        }
+    }
+
+    u64::MAX // -1 (ENOTTY / EBADF)
 }
 
 // ═══════════════════════════════════════════════

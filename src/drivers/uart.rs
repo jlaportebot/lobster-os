@@ -179,9 +179,8 @@ mod aarch64_uart {
 
         // Set baud rate
         let baud_divider = (UART_CLOCK / (16 * BAUD_RATE)) as u32;
-        let fractional = (((UART_CLOCK % (16 * BAUD_RATE)) * 64
-            + (8 * BAUD_RATE - 1))
-            / (8 * BAUD_RATE)) as u32;
+        let fractional =
+            (((UART_CLOCK % (16 * BAUD_RATE)) * 64 + (8 * BAUD_RATE - 1)) / (8 * BAUD_RATE)) as u32;
 
         mmio_write32(reg_addr(UART_IBRD_OFF), baud_divider);
         mmio_write32(reg_addr(UART_FBRD_OFF), fractional);

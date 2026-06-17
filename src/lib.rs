@@ -400,7 +400,10 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     unsafe {
         let uart_virt_base = crate::memory::DEVICE_MAP_START + 0x300_1000;
         crate::drivers::uart::Uart10::init_virtual(uart_virt_base);
-        crate::println!("[uart] Virtual address initialized: {:#018x}", uart_virt_base);
+        crate::println!(
+            "[uart] Virtual address initialized: {:#018x}",
+            uart_virt_base
+        );
     }
 
     // Print memory map

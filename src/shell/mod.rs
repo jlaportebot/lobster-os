@@ -841,9 +841,7 @@ fn run_builtin(
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
-        "pkg" => {
-            cmd_pkg(args, argc)
-        }
+        "pkg" => cmd_pkg(args, argc),
         #[cfg(target_arch = "x86_64")]
         "pkg" => {
             Uart10::puts("Package manager not available on x86_64.\r\n");
@@ -2035,6 +2033,10 @@ fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
                 Err(e) => {
                     crate::println!("Connection failed: {:?}", e);
                 }
+            }
+            // Save network for auto-connect on boot
+            if let Err(e) = crate::drivers::wifi::save_network(ssid, password) {
+                crate::println!("Warning: failed to save network: {:?}", e);
             }
         }
         "save" => {
