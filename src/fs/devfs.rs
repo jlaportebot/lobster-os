@@ -19,12 +19,12 @@ const MAX_DEVICES: usize = 16;
 /// Device operations trait (function pointer table for no_std)
 #[derive(Clone, Copy)]
 pub struct DeviceOps {
-    /// Read from device: returns bytes read
-    pub read: Option<fn(*mut u8, usize) -> usize>,
-    /// Write to device: returns bytes written
-    pub write: Option<fn(*const u8, usize) -> usize>,
-    /// IOCTL: returns 0 on success, negative on error
-    pub ioctl: Option<fn(u64, u64) -> i64>,
+    /// Read from device: returns bytes read. dev_idx is the device index.
+    pub read: Option<fn(usize, *mut u8, usize) -> usize>,
+    /// Write to device: returns bytes written. dev_idx is the device index.
+    pub write: Option<fn(usize, *const u8, usize) -> usize>,
+    /// IOCTL: returns 0 on success, negative on error. dev_idx is the device index.
+    pub ioctl: Option<fn(usize, u64, u64) -> i64>,
 }
 
 impl DeviceOps {
@@ -91,23 +91,23 @@ static mut DEVICE_COUNT: usize = 0;
 // ═══════════════════════════════════════════════════════════════
 
 /// /dev/null: read returns 0 bytes, write discards
-fn dev_null_read(_buf: *mut u8, _len: usize) -> usize {
+fn dev_null_read(_dev_idx: usize, _buf: *mut u8, _len: usize) -> usize {
     0 // EOF
 }
 
-fn dev_null_write(_buf: *const u8, len: usize) -> usize {
+fn dev_null_write(_dev_idx: usize, _buf: *const u8, len: usize) -> usize {
     len // Discard, pretend we wrote it all
 }
 
 /// /dev/zero: read returns zero-filled bytes
-fn dev_zero_read(buf: *mut u8, len: usize) -> usize {
+fn dev_zero_read(_dev_idx: usize, buf: *mut u8, len: usize) -> usize {
     unsafe {
         core::ptr::write_bytes(buf, 0, len);
     }
     len
 }
 
-fn dev_zero_write(_buf: *const u8, len: usize) -> usize {
+fn dev_zero_write(_dev_idx: usize, _buf: *const u8, len: usize) -> usize {
     len
 }
 
@@ -125,7 +125,7 @@ fn xorshift64() -> u64 {
     }
 }
 
-fn dev_urandom_read(buf: *mut u8, len: usize) -> usize {
+fn dev_urandom_read(_dev_idx: usize, buf: *mut u8, len: usize) -> usize {
     let mut off = 0usize;
     while off + 8 <= len {
         let val = xorshift64();
@@ -149,7 +149,7 @@ fn dev_urandom_read(buf: *mut u8, len: usize) -> usize {
     len
 }
 
-fn dev_urandom_write(buf: *const u8, len: usize) -> usize {
+fn dev_urandom_write(_dev_idx: usize, buf: *const u8, len: usize) -> usize {
     // Writing to urandom seeds the PRNG
     if len >= 8 {
         unsafe {
@@ -161,9 +161,42 @@ fn dev_urandom_write(buf: *const u8, len: usize) -> usize {
     len
 }
 
+/// PTY slave device read — reads from slave buffer (shell output)
+fn dev_pty_slave_read(dev_idx: usize, buf: *mut u8, len: usize) -> usize {
+    unsafe {
+        if let Some(device) = get_device(dev_idx) {
+            let pty_idx = device.minor as usize;
+            let slice = core::slice::from_raw_parts_mut(buf, len);
+            return crate::ipc::pty_slave_read(pty_idx, slice);
+        }
+        0
+    }
+}
+
+/// PTY slave device write — writes to slave buffer (shell input)
+fn dev_pty_slave_write(dev_idx: usize, buf: *const u8, len: usize) -> usize {
+    unsafe {
+        if let Some(device) = get_device(dev_idx) {
+            let pty_idx = device.minor as usize;
+            let slice = core::slice::from_raw_parts(buf, len);
+            return crate::ipc::pty_slave_write(pty_idx, slice);
+        }
+        0
+    }
+}
+
+/// PTY slave device ioctl — handles TIOCGWINSZ, TIOCSWINSZ, TIOCSCTTY
+fn dev_pty_slave_ioctl(dev_idx: usize, cmd: u64, arg: u64) -> i64 {
+    if let Some(device) = get_device(dev_idx) {
+        let pty_idx = device.minor as usize;
+        return crate::ipc::pty_ioctl(pty_idx, cmd, arg);
+    }
+    -25 // -ENOTTY
+}
+
 /// /dev/ptmx ioctl — handle TIOCSPTLCK (lock/unlock pt), TIOCGPTN (get PTY number)
 /// Returns 0 on success, negative errno on error
-fn dev_ptmx_ioctl(cmd: u64, arg: u64) -> i64 {
+fn dev_ptmx_ioctl(_dev_idx: usize, cmd: u64, arg: u64) -> i64 {
     // TIOCSPTLCK (0x40045431) - lock/unlock slave PTY
     // TIOCGPTN (0x80045430) - get PTY number
     // TIOCSPTLCK is used to unlock the slave PTY after opening ptmx
@@ -181,14 +214,29 @@ fn dev_ptmx_ioctl(cmd: u64, arg: u64) -> i64 {
             // arg is pointer to int to store PTY number
             // Allocate a new PTY pair via IPC
             if let Some((master_idx, slave_idx)) = crate::ipc::pty_open() {
+                // Register the slave device /dev/pts/N
+                let slave_name = alloc::format!("pts/{}", slave_idx);
+                let _ = register_device(
+                    &slave_name,
+                    136,              // devpts major number
+                    slave_idx as u32, // minor = PTY index
+                    false,
+                    DeviceOps {
+                        read: Some(dev_pty_slave_read),
+                        write: Some(dev_pty_slave_write),
+                        ioctl: Some(dev_pty_slave_ioctl),
+                    },
+                    0o666,
+                );
+
                 // Write the PTY number to the user-space pointer
                 let pty_num = master_idx as i32;
                 unsafe {
                     *(arg as *mut i32) = pty_num;
                 }
                 println!(
-                    "[devfs] PTY allocated: master={}, slave={}",
-                    master_idx, slave_idx
+                    "[devfs] PTY allocated: master={}, slave={} (/dev/pts/{})",
+                    master_idx, slave_idx, slave_idx
                 );
                 0
             } else {
@@ -271,7 +319,7 @@ pub fn device_read(dev_idx: usize, buf: &mut [u8]) -> usize {
         None => return 0,
     };
     match dev.ops.read {
-        Some(read_fn) => read_fn(buf.as_mut_ptr(), buf.len()),
+        Some(read_fn) => read_fn(dev_idx, buf.as_mut_ptr(), buf.len()),
         None => 0,
     }
 }
@@ -283,7 +331,7 @@ pub fn device_write(dev_idx: usize, buf: &[u8]) -> usize {
         None => return 0,
     };
     match dev.ops.write {
-        Some(write_fn) => write_fn(buf.as_ptr(), buf.len()),
+        Some(write_fn) => write_fn(dev_idx, buf.as_ptr(), buf.len()),
         None => 0,
     }
 }
@@ -295,7 +343,7 @@ pub fn device_ioctl(dev_idx: usize, cmd: u64, arg: u64) -> i64 {
         None => return -1,
     };
     match dev.ops.ioctl {
-        Some(ioctl_fn) => ioctl_fn(cmd, arg),
+        Some(ioctl_fn) => ioctl_fn(dev_idx, cmd, arg),
         None => -25, // -ENOTTY
     }
 }
