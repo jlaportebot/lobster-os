@@ -229,6 +229,125 @@ impl FileManager {
             Err("No entry selected")
         }
     }
+
+    /// Copy selected entry to destination
+    pub fn copy_selected(&mut self, dest_path: &str) -> Result<(), &'static str> {
+        use crate::fs::vfs::{create, open, read_file, write};
+        if let Some(entry) = self.get_selected() {
+            let entry_name = &entry.name; // Already a String
+            let src_path = if self.current_path == "/" {
+                alloc::format!("/{}", entry_name)
+            } else {
+                alloc::format!("{}/{}", self.current_path, entry_name)
+            };
+            let dest_path = if dest_path == "/" {
+                alloc::format!("/{}", entry_name)
+            } else {
+                alloc::format!("{}/{}", dest_path, entry_name)
+            };
+
+            if entry.is_dir {
+                // Create destination directory
+                use crate::fs::vfs::create_dir;
+                let _ = create_dir(&dest_path);
+                // Recursively copy directory contents
+                self.copy_dir_recursive(&src_path, &dest_path)?;
+            } else {
+                // Copy file
+                let content = read_file(&src_path).map_err(|_| "Failed to read source file")?;
+                let _ = create(&dest_path);
+                let fd = match open(&dest_path, 1) {
+                    Ok(fd) => fd,
+                    Err(_) => return Err("Failed to create destination file"),
+                };
+                let _ = write(fd, &content);
+            }
+            Ok(())
+        } else {
+            Err("No entry selected")
+        }
+    }
+
+    /// Recursively copy a directory
+    fn copy_dir_recursive(&self, src: &str, dest: &str) -> Result<(), &'static str> {
+        use crate::fs::vfs::{create, create_dir, list_dir, open, read_file, write};
+
+        let entries = list_dir(src).map_err(|_| "Failed to list source directory")?;
+        let _ = create_dir(dest);
+
+        for entry in entries {
+            let entry_name = core::str::from_utf8(&entry.name[..entry.name_len]).unwrap_or("");
+            let src_path = if src == "/" {
+                alloc::format!("/{}", entry_name)
+            } else {
+                alloc::format!("{}/{}", src, entry_name)
+            };
+            let dest_path = if dest == "/" {
+                alloc::format!("/{}", entry_name)
+            } else {
+                alloc::format!("{}/{}", dest, entry_name)
+            };
+
+            if entry.is_dir {
+                self.copy_dir_recursive(&src_path, &dest_path)?;
+            } else {
+                let content = read_file(&src_path).map_err(|_| "Failed to read source file")?;
+                let _ = create(&dest_path);
+                let fd = match open(&dest_path, 1) {
+                    Ok(fd) => fd,
+                    Err(_) => return Err("Failed to create destination file"),
+                };
+                let _ = write(fd, &content);
+            }
+        }
+        Ok(())
+    }
+
+    /// Move selected entry (copy + delete)
+    pub fn move_selected(&mut self, dest_path: &str) -> Result<(), &'static str> {
+        self.copy_selected(dest_path)?;
+        self.delete_selected()
+    }
+
+    /// Get MIME type for a file based on extension
+    pub fn get_mime_type(&self, filename: &str) -> &'static str {
+        let ext = filename
+            .rfind('.')
+            .map(|i| &filename[i + 1..])
+            .unwrap_or("")
+            .to_lowercase();
+
+        match ext.as_str() {
+            "txt" | "md" | "log" => "text/plain",
+            "rs" => "text/rust",
+            "c" | "h" => "text/x-c",
+            "cpp" | "cc" | "cxx" => "text/x-c++",
+            "py" => "text/x-python",
+            "js" => "text/javascript",
+            "html" | "htm" => "text/html",
+            "css" => "text/css",
+            "json" => "application/json",
+            "xml" => "application/xml",
+            "pdf" => "application/pdf",
+            "zip" => "application/zip",
+            "tar" => "application/x-tar",
+            "gz" => "application/gzip",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "bmp" => "image/bmp",
+            "ico" => "image/x-icon",
+            "svg" => "image/svg+xml",
+            "mp3" => "audio/mpeg",
+            "wav" => "audio/wav",
+            "ogg" => "audio/ogg",
+            "mp4" => "video/mp4",
+            "webm" => "video/webm",
+            "sh" => "application/x-shellscript",
+            "elf" | "bin" => "application/x-executable",
+            _ => "application/octet-stream",
+        }
+    }
 }
 
 impl Default for FileManager {

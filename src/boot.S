@@ -167,8 +167,17 @@ _boot:
     ldr     x8, =0x80000
     mov     x9, #0xBEEF
     str     x9, [x8, #0x1018]
+    
     // -------------------------------------------------------
-    // Step 3: EL1 setup
+    // Check core ID - only core 0 proceeds to kernel_init
+    // Other cores spin waiting for PSCI cpu_on
+    // -------------------------------------------------------
+    mrs     x8, MPIDR_EL1
+    and     x8, x8, #0xFF       // Get core ID (Aff0)
+    cbnz    x8, .Lsecondary_hold  // If not core 0, go to holding pattern
+    
+    // -------------------------------------------------------
+    // Step 3: EL1 setup (core 0 only)
     // -------------------------------------------------------
 
     // Disable MMU and caches (should be off already, but be sure)
@@ -408,6 +417,14 @@ exception_vector_table:
     wfe
     b       .Lexception_unexpected
 
+
+// ============================================================
+// Secondary core holding pattern
+// Non-core-0 cores spin here waiting for PSCI cpu_on
+// ============================================================
+.Lsecondary_hold:
+    wfe
+    b       .Lsecondary_hold
 
 // ============================================================
 // Secondary core entry point

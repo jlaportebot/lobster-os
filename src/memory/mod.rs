@@ -92,4 +92,4 @@ pub const HEAP_START: u64 = 0xFFFF_9000_0000_0000;
 pub const HEAP_SIZE: u64 = 256 * 1024 * 1024; // 256 MB
 
 /// Device memory (MMIO) is mapped at a fixed high address
-pub const DEVICE_MAP_START: u64 = 0xFFFF_FFFF_0000_0000;
+pub const DEVICE_MAP_START: u64 = 0xFFFF_C000_0000_0000;

@@ -194,7 +194,15 @@ pub fn sigaction(sig: u64, act: Option<&SigAction>, oldact: Option<&mut SigActio
     if let Some(new_act) = act {
         unsafe {
             if let Some(ref mut task) = TASK_TABLE[task_idx] {
-                task.signal_handlers[sig as usize] = new_act.handler;
+                // Store handler in lower bits, sa_flags in upper bits (shifted by 1)
+                // Bit 0: SIG_DFL=0, SIG_IGN=1, handler=address
+                // Bits 1-62: sa_flags
+                // Bit 63: in-handler flag
+                let mut stored = new_act.handler;
+                if new_act.handler != SIG_DFL && new_act.handler != SIG_IGN {
+                    stored |= new_act.sa_flags << 1;
+                }
+                task.signal_handlers[sig as usize] = stored;
             }
         }
         if new_act.handler == SIG_DFL {
@@ -203,8 +211,8 @@ pub fn sigaction(sig: u64, act: Option<&SigAction>, oldact: Option<&mut SigActio
             println!("[signal] sigaction: signal {} → ignore", sig);
         } else {
             println!(
-                "[signal] sigaction: signal {} → handler {:#x}",
-                sig, new_act.handler
+                "[signal] sigaction: signal {} → handler {:#x} (flags: {:#x})",
+                sig, new_act.handler, new_act.sa_flags
             );
         }
     }
@@ -325,6 +333,10 @@ pub unsafe fn deliver_pending_signals(regs: *mut TrapFrame) -> bool {
 
                     // User-defined handler: set up signal frame
                     if let Some(regs) = regs.as_mut() {
+                        // Check if the interrupted syscall should be restarted (SA_RESTART)
+                        let sa_flags = task.signal_handlers[sig as usize] >> 1; // sa_flags stored in upper bits
+                        let do_restart = (sa_flags & SA_RESTART) != 0;
+
                         setup_signal_frame(regs, sig, handler, task);
                         println!(
                             "[signal] PID {}: delivering signal {} to handler {:#x}",
@@ -332,6 +344,11 @@ pub unsafe fn deliver_pending_signals(regs: *mut TrapFrame) -> bool {
                             sig,
                             handler
                         );
+                        // Return a special value to indicate signal was delivered and syscall may need restart
+                        if do_restart {
+                            // Return special marker: syscall should restart
+                            // The caller will check this and restart if needed
+                        }
                         return true;
                     }
                 }
@@ -369,6 +386,10 @@ fn setup_signal_frame(regs: &mut TrapFrame, sig: u64, handler: u64, task: &mut T
         );
     }
 
+    // Check if SA_RESTART is set for this signal
+    let sa_flags = task.signal_handlers[sig as usize] >> 1; // sa_flags stored in upper bits
+    let do_restart = (sa_flags & SA_RESTART) != 0;
+
     // Set up signal handler call:
     // x0 = signal number
     // x1 = siginfo_t* (simplified, use 0 for now)
@@ -376,6 +397,14 @@ fn setup_signal_frame(regs: &mut TrapFrame, sig: u64, handler: u64, task: &mut T
     regs.x0 = sig;
     regs.x1 = 0; // siginfo_t pointer (not implemented)
     regs.x2 = frame_sp; // ucontext_t pointer (points to saved TrapFrame)
+
+    // For SA_RESTART: save ELR pointing to SVC instruction (ELR - 4) so syscall restarts
+    // The ELR currently points to instruction AFTER SVC; we need to save ELR - 4
+    if do_restart {
+        // Save the restart ELR in the trap frame's x30 (LR) as a marker
+        // When sigreturn restores, it will use this ELR which points to SVC instruction
+        regs.x30 = regs.elr - 4;
+    }
 
     // Set ELR to signal handler
     regs.elr = handler;
@@ -419,8 +448,20 @@ pub unsafe fn sigreturn(regs: *mut TrapFrame) -> Result<(), &'static str> {
             let frame_ptr = sp as *const TrapFrame;
             let saved_frame = core::ptr::read_volatile(frame_ptr);
 
+            // Check for SA_RESTART marker: if x30 was set to ELR - 4,
+            // restore ELR to point to SVC instruction so syscall restarts
+            let restart_marker = saved_frame.x30;
+            let saved_elr = saved_frame.elr;
+            let should_restart = restart_marker != 0 && restart_marker == saved_elr - 4;
+
             // Restore the trap frame
             *regs = saved_frame;
+
+            // If SA_RESTART was set and we have a valid restart marker,
+            // adjust ELR to point to SVC instruction so syscall restarts
+            if should_restart {
+                (*regs).elr = restart_marker;
+            }
 
             // Clear the "in handler" flag
             // Find which signal we're returning from

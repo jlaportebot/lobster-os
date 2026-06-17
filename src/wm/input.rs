@@ -10,6 +10,7 @@
 use crate::println;
 use crate::usb::hid::{self, HidEvent};
 use crate::wm::compositor;
+use crate::wm::panel;
 
 // ─── Cursor State ──────────────────────────────────────────────────
 
@@ -162,11 +163,17 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
         MOUSE_MIDDLE = middle;
     }
 
-    // On left press: find window under cursor and focus it
+    // On left press: check panel clicks first, then window focus
     if left && !prev_left {
-        let (_cx, _cy) = unsafe { (CURSOR_X, CURSOR_Y) };
-        // Check which window the cursor is over and focus it
-        // The window module's handle_event will handle drag logic
+        let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+
+        // Check if click is on panel (launcher, task buttons, tray)
+        if let Some(action) = panel::handle_click(cx, cy) {
+            handle_panel_action(action);
+            return;
+        }
+
+        // Not on panel - check which window the cursor is over and focus it
         crate::wm::window::handle_event(HidEvent::MouseButton {
             left,
             right,
@@ -181,5 +188,32 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
             right,
             middle,
         });
+    }
+}
+
+/// Handle panel click actions
+fn handle_panel_action(action: u32) {
+    match action {
+        0xFFFFFFFF => {
+            // Launcher button clicked - toggle app launcher
+            println!("[wm::input] Launcher button clicked");
+            // TODO: Open app launcher UI
+        }
+        0xFFFFFFFE => {
+            // Network tray clicked
+            println!("[wm::input] Network tray clicked");
+        }
+        0xFFFFFFFD => {
+            // Volume tray clicked
+            println!("[wm::input] Volume tray clicked");
+        }
+        0xFFFFFFFC => {
+            // Battery tray clicked
+            println!("[wm::input] Battery tray clicked");
+        }
+        window_id => {
+            // Task button clicked - focus that window
+            crate::wm::window::focus(window_id);
+        }
     }
 }

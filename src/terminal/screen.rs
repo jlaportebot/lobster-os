@@ -205,6 +205,16 @@ impl ScreenBuffer {
         self.dirty = true;
     }
 
+    pub fn scroll_down(&mut self) {
+        for r in (1..self.rows).rev() {
+            self.cells[r] = self.cells[r - 1];
+        }
+        for c in 0..self.cols {
+            self.cells[0][c] = Cell::new();
+        }
+        self.dirty = true;
+    }
+
     pub fn save_cursor(&mut self) {
         self.cursor_row_saved = self.cursor_row;
         self.cursor_col_saved = self.cursor_col;

@@ -68,6 +68,7 @@ pub unsafe fn register_region(region: MemoryRegion) {
 
 /// Print the kernel memory map
 pub fn print_memory_map() {
+    println!("[vmem] print_memory_map() called");
     println!("[vmem] Kernel memory map:");
     unsafe {
         for i in 0..NUM_REGIONS {

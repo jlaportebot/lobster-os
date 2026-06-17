@@ -57,6 +57,7 @@ extern crate alloc;
 pub mod arch;
 pub mod console;
 pub mod ipc;
+pub mod klog;
 pub mod memory;
 pub mod net;
 pub mod panic_handler;
@@ -279,6 +280,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::drivers::uart::Uart10::init();
     }
     crate::console::init();
+    crate::klog::init();
 
     crate::println!();
     crate::println!("╔══════════════════════════════════════╗");
@@ -403,6 +405,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
 
     // Print memory map
     crate::memory::vmem::print_memory_map();
+    crate::println!("[boot] Memory map printed, continuing...");
 
     // Test heap allocation
     crate::println!("[heap] Testing allocation...");
@@ -495,39 +498,49 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::smp::init_core0();
     crate::smp::boot_secondary_cores();
 
-    // 12. Initialize SDIO bus (for WiFi)
-    crate::println!("[sdio] Initializing SDIO2 controller...");
-    unsafe {
-        if let Err(e) = crate::drivers::sdio::init() {
-            crate::println!("[sdio] SDIO init failed: {:?}", e);
+    // 12. Initialize SDIO bus (for WiFi) - skip on QEMU
+    #[cfg(not(feature = "qemu"))]
+    {
+        crate::println!("[sdio] Initializing SDIO2 controller...");
+        unsafe {
+            if let Err(e) = crate::drivers::sdio::init() {
+                crate::println!("[sdio] SDIO init failed: {:?}", e);
+            } else {
+                crate::println!("[sdio] SDIO2 controller ready");
+            }
+        }
+
+        // 13. Initialize WiFi driver
+        crate::println!("[wifi] Initializing WiFi driver...");
+        unsafe {
+            if let Err(e) = crate::drivers::wifi::init() {
+                crate::println!("[wifi] WiFi init failed: {:?}", e);
+            } else {
+                crate::println!("[wifi] WiFi driver ready");
+            }
+        }
+
+        // 14. Initialize network interface table
+        crate::println!("[iface] Registering network interfaces...");
+        unsafe { crate::net::iface::init() };
+
+        // 15. Auto-connect to saved WiFi networks
+        crate::println!("[wifi] Attempting auto-connect to saved networks...");
+        if let Err(e) = crate::drivers::wifi::auto_connect() {
+            crate::println!("[wifi] Auto-connect failed: {:?}", e);
         } else {
-            crate::println!("[sdio] SDIO2 controller ready");
+            crate::println!("[wifi] Auto-connect successful!");
         }
     }
 
-    // 13. Initialize WiFi driver
-    crate::println!("[wifi] Initializing WiFi driver...");
-    unsafe {
-        if let Err(e) = crate::drivers::wifi::init() {
-            crate::println!("[wifi] WiFi init failed: {:?}", e);
-        } else {
-            crate::println!("[wifi] WiFi driver ready");
-        }
+    #[cfg(feature = "qemu")]
+    {
+        crate::println!("[net] QEMU mode: skipping WiFi/SDIO initialization");
     }
 
-    // 14. Initialize network interface table
+    // 16. Initialize network interface table (for QEMU) or continue
     crate::println!("[iface] Registering network interfaces...");
     unsafe { crate::net::iface::init() };
-
-    // 15. Auto-connect to saved WiFi networks
-    crate::println!("[wifi] Attempting auto-connect to saved networks...");
-    if let Err(e) = crate::drivers::wifi::auto_connect() {
-        crate::println!("[wifi] Auto-connect failed: {:?}", e);
-    } else {
-        crate::println!("[wifi] Auto-connect successful!");
-    }
-
-    // 16. Initialize network stack
     crate::println!("[net] Initializing network stack...");
     unsafe { crate::net::init() };
 
@@ -581,7 +594,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::println!("[apps] Initializing core applications...");
     crate::apps::init();
 
-    // 16. Run kernel main loop
+    // 16. Spawn shell on UART for serial console
+    crate::println!("[boot] Spawning shell on UART...");
+    crate::sched::create_kernel_task(|| crate::shell::run(), crate::sched::Priority::Normal);
+
+    // 17. Run kernel main loop
     crate::println!("[boot] LobsterOS initialization complete!");
     crate::println!("[boot] Entering main loop...");
     loop {

@@ -7,7 +7,7 @@ mod editor_impl {
     use alloc::string::{String, ToString};
     use alloc::vec::Vec;
 
-    /// Simple text editor
+    /// Simple text editor with gap buffer and undo/redo
     pub struct Editor {
         pub buffer: Vec<String>,
         pub cursor_x: usize,
@@ -15,6 +15,12 @@ mod editor_impl {
         pub filename: Option<String>,
         pub modified: bool,
         pub text_input: TextInput,
+        /// Undo stack: each entry is (buffer, cursor_x, cursor_y, modified)
+        undo_stack: Vec<(Vec<String>, usize, usize, bool)>,
+        /// Redo stack
+        redo_stack: Vec<(Vec<String>, usize, usize, bool)>,
+        /// Max undo history size
+        max_undo: usize,
     }
 
     impl Editor {
@@ -26,11 +32,30 @@ mod editor_impl {
                 filename: None,
                 modified: false,
                 text_input: TextInput::ZERO,
+                undo_stack: Vec::new(),
+                redo_stack: Vec::new(),
+                max_undo: 100,
             }
+        }
+
+        /// Save current state to undo stack
+        fn save_undo(&mut self) {
+            if self.undo_stack.len() >= self.max_undo {
+                self.undo_stack.remove(0);
+            }
+            self.undo_stack.push((
+                self.buffer.clone(),
+                self.cursor_x,
+                self.cursor_y,
+                self.modified,
+            ));
+            // Clear redo stack on new action
+            self.redo_stack.clear();
         }
 
         /// Create a new empty file
         pub fn new_file(&mut self) {
+            self.save_undo();
             self.buffer.clear();
             self.buffer.push(String::new());
             self.cursor_x = 0;
@@ -45,6 +70,7 @@ mod editor_impl {
             let content = read_file(path).map_err(|_| "Failed to read file")?;
             let content_str = core::str::from_utf8(&content).map_err(|_| "Invalid UTF-8")?;
 
+            self.save_undo();
             self.buffer.clear();
             for line in content_str.lines() {
                 self.buffer.push(line.to_string());
@@ -81,8 +107,47 @@ mod editor_impl {
             self.save()
         }
 
+        /// Undo last change
+        pub fn undo(&mut self) -> bool {
+            if let Some(state) = self.undo_stack.pop() {
+                self.redo_stack.push((
+                    self.buffer.clone(),
+                    self.cursor_x,
+                    self.cursor_y,
+                    self.modified,
+                ));
+                self.buffer = state.0;
+                self.cursor_x = state.1;
+                self.cursor_y = state.2;
+                self.modified = state.3;
+                true
+            } else {
+                false
+            }
+        }
+
+        /// Redo last undone change
+        pub fn redo(&mut self) -> bool {
+            if let Some(state) = self.redo_stack.pop() {
+                self.undo_stack.push((
+                    self.buffer.clone(),
+                    self.cursor_x,
+                    self.cursor_y,
+                    self.modified,
+                ));
+                self.buffer = state.0;
+                self.cursor_x = state.1;
+                self.cursor_y = state.2;
+                self.modified = state.3;
+                true
+            } else {
+                false
+            }
+        }
+
         /// Insert a character at cursor position
         pub fn insert_char(&mut self, c: char) {
+            self.save_undo();
             if self.cursor_y >= self.buffer.len() {
                 self.buffer.push(String::new());
             }
@@ -93,6 +158,7 @@ mod editor_impl {
 
         /// Delete character before cursor (backspace)
         pub fn backspace(&mut self) {
+            self.save_undo();
             if self.cursor_x > 0 {
                 self.buffer[self.cursor_y].remove(self.cursor_x - 1);
                 self.cursor_x -= 1;
@@ -110,6 +176,7 @@ mod editor_impl {
 
         /// Insert newline
         pub fn newline(&mut self) {
+            self.save_undo();
             if self.cursor_y >= self.buffer.len() {
                 self.buffer.push(String::new());
                 self.cursor_y += 1;
@@ -175,6 +242,94 @@ mod editor_impl {
         pub fn get_text(&self) -> String {
             self.buffer.join("\n")
         }
+
+        /// Simple syntax highlighting for Rust
+        pub fn highlight_line(&self, line: &str) -> Vec<(usize, usize, &'static str)> {
+            let mut spans = Vec::new();
+            let mut i = 0;
+            let chars: Vec<char> = line.chars().collect();
+
+            while i < chars.len() {
+                let ch = chars[i];
+
+                // Comments
+                if ch == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
+                    spans.push((i, line.len(), "comment"));
+                    break;
+                }
+
+                // Strings
+                if ch == '"' {
+                    let start = i;
+                    i += 1;
+                    while i < chars.len() {
+                        if chars[i] == '"' && (i == 0 || chars[i - 1] != '\\') {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    spans.push((start, i, "string"));
+                    continue;
+                }
+
+                // Characters
+                if ch == '\'' {
+                    let start = i;
+                    i += 1;
+                    while i < chars.len() {
+                        if chars[i] == '\'' && (i == 0 || chars[i - 1] != '\\') {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    spans.push((start, i, "char"));
+                    continue;
+                }
+
+                // Keywords
+                if ch.is_alphabetic() || ch == '_' {
+                    let start = i;
+                    while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                        i += 1;
+                    }
+                    let word = &line[start..i];
+                    let color = match word {
+                        "fn" | "let" | "mut" | "const" | "if" | "else" | "while" | "for"
+                        | "loop" | "match" | "return" | "break" | "continue" | "struct"
+                        | "enum" | "impl" | "trait" | "type" | "mod" | "use" | "pub" | "crate"
+                        | "super" | "self" | "async" | "await" | "unsafe" | "ref" | "move"
+                        | "box" | "dyn" => "keyword",
+                        "true" | "false" | "None" | "Some" | "Ok" | "Err" => "literal",
+                        _ => "identifier",
+                    };
+                    spans.push((start, i, color));
+                    continue;
+                }
+
+                // Numbers
+                if ch.is_ascii_digit() {
+                    let start = i;
+                    while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                        i += 1;
+                    }
+                    spans.push((start, i, "number"));
+                    continue;
+                }
+
+                // Operators and punctuation
+                if "+-*/%=<>!&|^~.,;:()[]{}".contains(ch) {
+                    spans.push((i, i + 1, "operator"));
+                    i += 1;
+                    continue;
+                }
+
+                i += 1;
+            }
+
+            spans
+        }
     }
 
     impl Default for Editor {
@@ -191,6 +346,9 @@ mod editor_impl {
         filename: None,
         modified: false,
         text_input: crate::wm::widget::TextInput::ZERO,
+        undo_stack: Vec::new(),
+        redo_stack: Vec::new(),
+        max_undo: 100,
     };
 
     /// Initialize the editor
