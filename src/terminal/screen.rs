@@ -34,6 +34,11 @@ impl Default for Cell {
 }
 
 /// SGR attributes from CSI params
+/// Supports:
+/// - Basic 16-color (30-37, 40-47, 90-97, 100-107)
+/// - 256-color palette (38:5:n, 48:5:n)
+/// - Truecolor RGB (38:2:r:g:b, 48:2:r:g:b)
+/// - Basic attributes: 0=reset, 1=bold, 4=underline, 5=blink, 7=reverse, 22=normal, 24=no underline, 25=no blink, 27=no reverse
 pub fn sgr_attr_from(params: &[u8]) -> (u32, u32, bool, bool, bool) {
     let mut fg = WHITE;
     let mut bg = BLACK;
@@ -54,6 +59,17 @@ pub fn sgr_attr_from(params: &[u8]) -> (u32, u32, bool, bool, bool) {
             1 => bold = true,
             4 => underline = true,
             5 => blink = true,
+            7 => { /* reverse - swap fg/bg */ }
+            22 => {
+                bold = false;
+            }
+            24 => {
+                underline = false;
+            }
+            25 => {
+                blink = false;
+            }
+            27 => { /* no reverse */ }
             30..=37 => {
                 fg = match params[i] {
                     30 => BLACK,
@@ -66,6 +82,36 @@ pub fn sgr_attr_from(params: &[u8]) -> (u32, u32, bool, bool, bool) {
                     37 => WHITE,
                     _ => WHITE,
                 }
+            }
+            38 => {
+                // Extended foreground color: 38:5:n (256-color) or 38:2:r:g:b (truecolor)
+                if i + 1 < params.len() {
+                    match params[i + 1] {
+                        5 => {
+                            // 256-color palette
+                            if i + 2 < params.len() {
+                                let idx = params[i + 2] as u8;
+                                fg = palette256_color(idx);
+                            }
+                            i += 2;
+                        }
+                        2 => {
+                            // Truecolor RGB
+                            if i + 4 < params.len() {
+                                let r = params[i + 2] as u32;
+                                let g = params[i + 3] as u32;
+                                let b = params[i + 4] as u32;
+                                fg = (r << 16) | (g << 8) | b;
+                            }
+                            i += 4;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            39 => {
+                // Default foreground
+                fg = WHITE;
             }
             40..=47 => {
                 bg = match params[i] {
@@ -80,12 +126,124 @@ pub fn sgr_attr_from(params: &[u8]) -> (u32, u32, bool, bool, bool) {
                     _ => BLACK,
                 }
             }
+            48 => {
+                // Extended background color: 48:5:n (256-color) or 48:2:r:g:b (truecolor)
+                if i + 1 < params.len() {
+                    match params[i + 1] {
+                        5 => {
+                            // 256-color palette
+                            if i + 2 < params.len() {
+                                let idx = params[i + 2] as u8;
+                                bg = palette256_color(idx);
+                            }
+                            i += 2;
+                        }
+                        2 => {
+                            // Truecolor RGB
+                            if i + 4 < params.len() {
+                                let r = params[i + 2] as u32;
+                                let g = params[i + 3] as u32;
+                                let b = params[i + 4] as u32;
+                                bg = (r << 16) | (g << 8) | b;
+                            }
+                            i += 4;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            49 => {
+                // Default background
+                bg = BLACK;
+            }
+            90..=97 => {
+                // Bright foreground colors
+                fg = match params[i] {
+                    90 => BRIGHT_BLACK,
+                    91 => BRIGHT_RED,
+                    92 => BRIGHT_GREEN,
+                    93 => BRIGHT_YELLOW,
+                    94 => BRIGHT_BLUE,
+                    95 => BRIGHT_MAGENTA,
+                    96 => BRIGHT_CYAN,
+                    97 => BRIGHT_WHITE,
+                    _ => WHITE,
+                }
+            }
+            100..=107 => {
+                // Bright background colors
+                bg = match params[i] {
+                    100 => BRIGHT_BLACK,
+                    101 => BRIGHT_RED,
+                    102 => BRIGHT_GREEN,
+                    103 => BRIGHT_YELLOW,
+                    104 => BRIGHT_BLUE,
+                    105 => BRIGHT_MAGENTA,
+                    106 => BRIGHT_CYAN,
+                    107 => BRIGHT_WHITE,
+                    _ => BLACK,
+                }
+            }
             _ => {}
         }
         i += 1;
     }
     (fg, bg, bold, underline, blink)
 }
+
+/// 256-color palette lookup
+/// Standard xterm 256-color palette:
+/// 0-15: standard 16 colors
+/// 16-231: 6x6x6 color cube (RGB)
+/// 232-255: grayscale ramp
+fn palette256_color(idx: u8) -> u32 {
+    if idx <= 15 {
+        // Standard 16 colors
+        match idx {
+            0 => BLACK,
+            1 => RED,
+            2 => GREEN,
+            3 => YELLOW,
+            4 => BLUE,
+            5 => MAGENTA,
+            6 => CYAN,
+            7 => WHITE,
+            8 => BRIGHT_BLACK,
+            9 => BRIGHT_RED,
+            10 => BRIGHT_GREEN,
+            11 => BRIGHT_YELLOW,
+            12 => BRIGHT_BLUE,
+            13 => BRIGHT_MAGENTA,
+            14 => BRIGHT_CYAN,
+            15 => BRIGHT_WHITE,
+            _ => WHITE,
+        }
+    } else if idx <= 231 {
+        // 6x6x6 color cube
+        let idx = idx - 16;
+        let r = (idx / 36) as u32;
+        let g = ((idx % 36) / 6) as u32;
+        let b = (idx % 6) as u32;
+        // Map 0-5 to 0x00, 0x5F, 0x87, 0xAF, 0xD7, 0xFF
+        let cube = [0x00, 0x5F, 0x87, 0xAF, 0xD7, 0xFF];
+        (cube[r as usize] << 16) | (cube[g as usize] << 8) | cube[b as usize]
+    } else {
+        // Grayscale ramp (232-255)
+        let idx = idx - 232;
+        let v = 0x08 + idx as u32 * 10;
+        (v << 16) | (v << 8) | v
+    }
+}
+
+/// Bright color constants for 90-97 / 100-107 SGR
+const BRIGHT_BLACK: u32 = 0x808080;
+const BRIGHT_RED: u32 = 0xFF5555;
+const BRIGHT_GREEN: u32 = 0x55FF55;
+const BRIGHT_YELLOW: u32 = 0xFFFF55;
+const BRIGHT_BLUE: u32 = 0x5555FF;
+const BRIGHT_MAGENTA: u32 = 0xFF55FF;
+const BRIGHT_CYAN: u32 = 0x55FFFF;
+const BRIGHT_WHITE: u32 = 0xFFFFFF;
 
 /// Screen buffer - 2D grid of cells
 pub struct ScreenBuffer {
