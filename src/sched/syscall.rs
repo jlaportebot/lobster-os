@@ -78,50 +78,51 @@ pub const SYS_SEMA_GETVALUE: u64 = 25;
 pub const SYS_SEMA_DESTROY: u64 = 26;
 pub const SYS_KILL: u64 = 27;
 pub const SYS_SIGACTION: u64 = 28;
-pub const SYS_MKFIFO: u64 = 29;
-pub const SYS_OPEN_FIFO: u64 = 30;
-pub const SYS_SHM_CTL: u64 = 31;
-pub const SYS_UNIX_SOCKET: u64 = 32;
-pub const SYS_UNIX_BIND: u64 = 33;
-pub const SYS_UNIX_LISTEN: u64 = 34;
-pub const SYS_UNIX_ACCEPT: u64 = 35;
-pub const SYS_UNIX_CONNECT: u64 = 36;
-pub const SYS_UNIX_SEND: u64 = 37;
-pub const SYS_UNIX_RECV: u64 = 38;
-pub const SYS_EVENTFD: u64 = 39;
-pub const SYS_EVENTFD_READ: u64 = 40;
-pub const SYS_EVENTFD_WRITE: u64 = 41;
-pub const SYS_FCNTL: u64 = 42;
-pub const SYS_RT_SIGRETURN: u64 = 43;
-pub const SYS_IPC_UNSHARE: u64 = 44;
-pub const SYS_IPC_SETNS: u64 = 45;
-pub const SYS_IPC_SET_MODE: u64 = 46;
+pub const SYS_SIGPROCMASK: u64 = 29;
+pub const SYS_MKFIFO: u64 = 30;
+pub const SYS_OPEN_FIFO: u64 = 31;
+pub const SYS_SHM_CTL: u64 = 32;
+pub const SYS_UNIX_SOCKET: u64 = 33;
+pub const SYS_UNIX_BIND: u64 = 34;
+pub const SYS_UNIX_LISTEN: u64 = 35;
+pub const SYS_UNIX_ACCEPT: u64 = 36;
+pub const SYS_UNIX_CONNECT: u64 = 37;
+pub const SYS_UNIX_SEND: u64 = 38;
+pub const SYS_UNIX_RECV: u64 = 39;
+pub const SYS_EVENTFD: u64 = 40;
+pub const SYS_EVENTFD_READ: u64 = 41;
+pub const SYS_EVENTFD_WRITE: u64 = 42;
+pub const SYS_FCNTL: u64 = 43;
+pub const SYS_RT_SIGRETURN: u64 = 44;
+pub const SYS_IPC_UNSHARE: u64 = 45;
+pub const SYS_IPC_SETNS: u64 = 46;
+pub const SYS_IPC_SET_MODE: u64 = 47;
 
 // ── PTY syscalls ──
-pub const SYS_OPENPTY: u64 = 47;
-pub const SYS_FORKPTY: u64 = 48;
-pub const SYS_IOCTL: u64 = 49;
+pub const SYS_OPENPTY: u64 = 48;
+pub const SYS_FORKPTY: u64 = 49;
+pub const SYS_IOCTL: u64 = 50;
 
 // ── Security / credential syscalls ──
-pub const SYS_SETUID: u64 = 50;
-pub const SYS_SETGID: u64 = 51;
-pub const SYS_SETEUID: u64 = 52;
-pub const SYS_SETEGID: u64 = 53;
-pub const SYS_GETUID: u64 = 54;
-pub const SYS_GETGID: u64 = 55;
-pub const SYS_GETEUID: u64 = 56;
-pub const SYS_GETEGID: u64 = 57;
-pub const SYS_GETGROUPS: u64 = 58;
-pub const SYS_SETGROUPS: u64 = 59;
-pub const SYS_CAPGET: u64 = 60;
-pub const SYS_CAPSET: u64 = 61;
-pub const SYS_CHMOD: u64 = 62;
-pub const SYS_CHOWN: u64 = 63;
-pub const SYS_SET_NO_NEW_PRIVS: u64 = 64;
-pub const SYS_GET_NO_NEW_PRIVS: u64 = 65;
+pub const SYS_SETUID: u64 = 51;
+pub const SYS_SETGID: u64 = 52;
+pub const SYS_SETEUID: u64 = 53;
+pub const SYS_SETEGID: u64 = 54;
+pub const SYS_GETUID: u64 = 55;
+pub const SYS_GETGID: u64 = 56;
+pub const SYS_GETEUID: u64 = 57;
+pub const SYS_GETEGID: u64 = 58;
+pub const SYS_GETGROUPS: u64 = 59;
+pub const SYS_SETGROUPS: u64 = 60;
+pub const SYS_CAPGET: u64 = 61;
+pub const SYS_CAPSET: u64 = 62;
+pub const SYS_CHMOD: u64 = 63;
+pub const SYS_CHOWN: u64 = 64;
+pub const SYS_SET_NO_NEW_PRIVS: u64 = 65;
+pub const SYS_GET_NO_NEW_PRIVS: u64 = 66;
 
 /// Maximum syscall number
-const MAX_SYSCALL: u64 = 65;
+const MAX_SYSCALL: u64 = 67;
 
 // Global pointer to current trap frame during syscall handling (for sigreturn)
 static mut CURRENT_TRAP_FRAME: *mut TrapFrame = core::ptr::null_mut();
@@ -217,6 +218,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         // ── Signal syscalls ──
         SYS_KILL => sys_kill(args[0] as u64, args[1] as u32),
         SYS_SIGACTION => sys_sigaction(args[0] as u32, args[1]),
+        SYS_SIGPROCMASK => sys_sigprocmask(args[0] as u32, args[1] as u64, args[2] as u64),
         // ── Named pipe (FIFO) syscalls ──
         SYS_MKFIFO => sys_mkfifo(args[0], args[1] as usize, args[2] as u32),
         SYS_OPEN_FIFO => sys_open_fifo(args[0], args[1] as usize, args[2] as u32),
@@ -635,6 +637,22 @@ fn sys_sigaction(sig: u32, handler: u64) -> u64 {
         sa_mask: 0,
     };
     crate::sched::signal::sigaction(sig as u64, Some(&act), None) as u64
+}
+
+/// sys_sigprocmask(how, set, oldset) — examine and change blocked signals
+fn sys_sigprocmask(how: u32, set: u64, oldset: u64) -> u64 {
+    let mut old_mask = 0u64;
+    let result = crate::sched::signal::sigprocmask(how as u64, Some(set), Some(&mut old_mask));
+    if result < 0 {
+        return u64::MAX;
+    }
+    // Write old mask to user-provided pointer if provided
+    if oldset != 0 {
+        unsafe {
+            *(oldset as *mut u64) = old_mask;
+        }
+    }
+    0
 }
 
 /// sys_rt_sigreturn() — return from signal handler
