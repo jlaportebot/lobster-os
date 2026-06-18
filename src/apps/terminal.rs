@@ -365,6 +365,38 @@ pub fn init() {
     println!("[terminal] Terminal application initialized");
 }
 
+/// Create a new terminal window with PTY and shell
+pub fn create_terminal_window(
+    registry: &mut crate::wm::widget::WidgetTable,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) -> Option<u32> {
+    let term = get_terminal();
+
+    // Initialize terminal PTY if not already done
+    if term.pty_master_fd.is_none() {
+        if term.init().is_err() {
+            println!("[terminal] Failed to initialize PTY");
+            return None;
+        }
+    }
+
+    // Create the window
+    let win_id = crate::wm::window::create(x, y, w, h, "Terminal")?;
+
+    // Initialize the terminal widget inside the window
+    term.init_widget(registry, x, y, w, h);
+
+    // Register the widget_id with the window for keyboard routing
+    if let Some(widget_id) = term.widget_id {
+        crate::wm::window::set_terminal_widget_id(win_id, widget_id);
+    }
+
+    Some(win_id)
+}
+
 /// Get the global terminal instance
 pub fn get_terminal() -> &'static mut Terminal {
     unsafe {

@@ -57,6 +57,8 @@ pub struct Window {
     /// Content buffer (pixel data for the client area)
     pub content: ContentPtr,
     pub content_size: usize,
+    /// Associated terminal widget ID (if this window hosts a terminal)
+    pub terminal_widget_id: Option<crate::wm::widget::WidgetId>,
 }
 
 impl Window {
@@ -77,6 +79,7 @@ impl Window {
         client_h: 0,
         content: ContentPtr(core::ptr::null_mut()),
         content_size: 0,
+        terminal_widget_id: None,
     };
 
     /// Get the content pointer as *mut u32
@@ -465,6 +468,26 @@ fn handle_keypress(scancode: u8) {
         return;
     }
 
+    // Check if focused window has a terminal widget
+    let focused_id = *FOCUSED_ID.lock();
+    if focused_id != 0 {
+        let windows = WINDOWS.lock();
+        for i in 0..MAX_WINDOWS {
+            if windows[i].active && windows[i].id == focused_id {
+                if windows[i].terminal_widget_id.is_some() {
+                    // Route to terminal app
+                    let shift = crate::usb::hid::shift_held();
+                    let ctrl = crate::usb::hid::ctrl_held();
+                    let alt = crate::usb::hid::alt_held();
+                    crate::apps::terminal::get_terminal()
+                        .handle_special_key(scancode, shift, ctrl, alt);
+                    return;
+                }
+                break;
+            }
+        }
+    }
+
     // Forward to focused window (future: keyboard input routing)
     let _ = scancode;
 }
@@ -573,4 +596,15 @@ pub fn get_info(id: u32) -> Option<(u32, u32, u32, u32)> {
         }
     }
     None
+}
+
+/// Set terminal widget ID on a window
+pub fn set_terminal_widget_id(id: u32, widget_id: crate::wm::widget::WidgetId) {
+    let mut windows = WINDOWS.lock();
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].id == id {
+            windows[i].terminal_widget_id = Some(widget_id);
+            return;
+        }
+    }
 }

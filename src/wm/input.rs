@@ -115,7 +115,6 @@ fn handle_key_press(scancode: u8, _extended: bool) {
         }
     }
 }
-
 /// Handle a key release event
 fn handle_key_release(_scancode: u8) {
     // Forward to window module for potential key-up tracking
