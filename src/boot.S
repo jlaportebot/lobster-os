@@ -67,10 +67,9 @@ _boot:
     ldr     x9, =0x80000
     str     x8, [x9, #0x1008]
 
-    // Set HCR_EL2 for EL1 AArch64
-    mrs     x8, HCR_EL2
-    ldr     x9, =0x80000000     // RW=1, VM=0
-    orr     x8, x8, x9
+    // Set HCR_EL2 for EL1 AArch64 — CLEAR ALL TRAP BITS
+    // HCR_EL2: RW=1 (bit 31), VM=0 (bit 0), all trap bits = 0
+    ldr     x8, =0x80000000     // RW=1, VM=0, no traps
     msr     HCR_EL2, x8
 
     // Set SCTLR_EL1 to known state
@@ -108,10 +107,10 @@ _boot:
     ldr     x8, =0x80000
     str     x9, [x8, #0x1040]
 
-    // Set HCR_EL2 for EL1 AArch64 using raw encoding
-    // HCR_EL2: Op0=3, Op1=4, CRn=1, CRm=1, Op2=0 -> S3_4_C1_C1_0
-    ldr     x8, =0x80000000     // RW=1, VM=0
-    msr     S3_4_C1_C1_0, x8
+    // Set HCR_EL2 for EL1 AArch64 — CLEAR ALL TRAP BITS
+    // HCR_EL2: RW=1 (bit 31), VM=0 (bit 0), all trap bits = 0
+    ldr     x8, =0x80000000     // RW=1, VM=0, no traps
+    msr     HCR_EL2, x8
 
     // DEBUG: Store a marker after HCR_EL2 write
     mov     x9, #0xFEED
@@ -122,9 +121,9 @@ _boot:
     ldr     x8, =.Lel1_setup
     msr     ELR_EL2, x8
 
-    // SPSR_EL2: EL1t, IRQ/FIQ/SError masked, AArch64
-    //   M[3:0] = 0100 (EL1t), DAIF = 1111
-    mov     x8, #0x3C4           // DAIF=0xF, M=0x4 (EL1t)
+    // SPSR_EL2: EL1h, IRQ/FIQ/SError masked, AArch64
+    //   M[3:0] = 0100 (EL1h), DAIF = 1111
+    mov     x8, #0x3C4           // DAIF=0xF, M=0x4 (EL1h)
     msr     SPSR_EL2, x8
 
     // DEBUG: Store a marker before eret
@@ -139,12 +138,9 @@ _boot:
     // Step 2b: Configure EL2 and drop to EL1 (original path for EL2 entry)
     // -------------------------------------------------------
 
-    // Set HCR_EL2: disable stage-2 translation, EL1 is AArch64
-    mrs     x8, HCR_EL2
-    // Clear VM bit (bit 0) to disable stage-2 MMU
-    // Set RW bit (bit 31) so EL1 is AArch64
-    ldr     x9, =0x80000000     // RW=1, VM=0, rest default
-    orr     x8, x8, x9
+    // Set HCR_EL2: disable stage-2 translation, EL1 is AArch64, CLEAR ALL TRAP BITS
+    // HCR_EL2: RW=1 (bit 31), VM=0 (bit 0), all trap bits = 0
+    ldr     x8, =0x80000000     // RW=1, VM=0, no traps
     msr     HCR_EL2, x8
 
     // Set SCTLR_EL1 to known state before dropping
@@ -163,11 +159,15 @@ _boot:
     eret                        // Drop to EL1!
 
 .Lel1_setup:
-    // DEBUG: Mark that we reached EL1 setup
+    // DEBUG: Mark that we reached EL1 setup - FIRST INSTRUCTION
     ldr     x8, =0x80000
     mov     x9, #0xBEEF
     str     x9, [x8, #0x1018]
     
+    // DEBUG: Second marker - after first store
+    mov     x9, #0xBEE1
+    str     x9, [x8, #0x1020]
+
     // -------------------------------------------------------
     // Check core ID - only core 0 proceeds to kernel_init
     // Other cores spin waiting for PSCI cpu_on
@@ -176,9 +176,19 @@ _boot:
     and     x8, x8, #0xFF       // Get core ID (Aff0)
     cbnz    x8, .Lsecondary_hold  // If not core 0, go to holding pattern
     
+    // DEBUG: Core ID check passed
+    ldr     x8, =0x80000
+    mov     x9, #0xBEE2
+    str     x9, [x8, #0x1028]
+
     // -------------------------------------------------------
     // Step 3: EL1 setup (core 0 only)
     // -------------------------------------------------------
+
+    // DEBUG: Mark entry to EL1 setup
+    ldr     x8, =0x80000
+    mov     x9, #0xCAFE
+    str     x9, [x8, #0x1030]
 
     // Disable MMU and caches (should be off already, but be sure)
     mrs     x8, SCTLR_EL1
@@ -188,15 +198,30 @@ _boot:
     bic     x8, x8, #(1 << 12)
     msr     SCTLR_EL1, x8
 
+    // DEBUG: After SCTLR clear
+    ldr     x8, =0x80000
+    mov     x9, #0xCAF0
+    str     x9, [x8, #0x1038]
+
     // Invalidate caches
     ic      IALLUIS
     dsb     sy
     isb
 
+    // DEBUG: After cache invalidation
+    ldr     x8, =0x80000
+    mov     x9, #0xCAF1
+    str     x9, [x8, #0x1040]
+
     // TLB invalidation
     tlbi    VMALLE1IS
     dsb     sy
     isb
+
+    // DEBUG: After TLB invalidation
+    ldr     x8, =0x80000
+    mov     x9, #0xCAF2
+    str     x9, [x8, #0x1048]
 
     // -------------------------------------------------------
     // Step 4: Zero BSS section

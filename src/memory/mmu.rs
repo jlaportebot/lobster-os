@@ -33,6 +33,8 @@ pub const PTE_KERNEL_DATA: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_ISH | M
 pub const PTE_KERNEL_CODE: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_ISH | MT_NORMAL;
 pub const PTE_DEVICE: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_OSH | MT_DEVICE;
 pub const PTE_DEVICE_NG: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_NG | PTE_OSH | MT_DEVICE;
+/// Block entry (2MB) for device memory — bit 1 (Table/Block) must be 0
+pub const PTE_DEVICE_BLOCK: u64 = PTE_VALID | PTE_ACCESS | PTE_OSH | MT_DEVICE;
 
 /// Number of entries per page table (4096 / 8 = 512)
 const PT_ENTRIES: usize = 512;
@@ -307,9 +309,10 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
         SOC_PERIPH_SIZE,
         PTE_DEVICE,
     );
-
     #[cfg(feature = "qemu_raspi5b")]
     {
+        // Force compile-time check
+        const _: () = assert!(cfg!(feature = "qemu_raspi5b"));
         // Map BCM2711-style peripherals (0x7C00_0000 .. 0x7E00_0000) for QEMU raspi5b
         // System timer, mailbox, UARTs, clocks, GPIOs, etc.
         const BCM2711_PERIPH_BASE: u64 = 0x7C00_0000;
@@ -320,6 +323,19 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
             BCM2711_PERIPH_BASE,
             BCM2711_PERIPH_SIZE,
             PTE_DEVICE,
+        );
+
+        // Identity-map UART region (0x7D00_0000 - 0x7D01_0000) so physical UART
+        // accesses work after MMU enable, before init_virtual() switches to virtual addresses.
+        // UART10 at 0x7D00_1000 is within this range.
+        const UART_PERIPH_BASE: u64 = 0x7D00_0000;
+        const UART_PERIPH_SIZE: u64 = 0x10000; // 64KB covers UART10
+        map_range_blocks(
+            ttbr1_root,
+            UART_PERIPH_BASE,
+            UART_PERIPH_BASE,
+            UART_PERIPH_SIZE,
+            PTE_DEVICE_BLOCK,
         );
     }
 
@@ -337,6 +353,8 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
             PTE_DEVICE,
         );
     }
+
+    println!("[mmu] After cfg blocks, before TTBR phys");
 
     let ttbr0_phys = pt_phys(ttbr0_root);
     let ttbr1_phys = pt_phys(ttbr1_root);
@@ -356,6 +374,7 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
     );
     println!("[mmu] Device map: {:#018x}", DEVICE_MAP_START);
 
+    println!("[mmu] About to enable MMU...");
     // Enable MMU + caches
     enable_mmu_and_caches(ttbr0_phys, ttbr1_phys);
 
