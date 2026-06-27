@@ -30,6 +30,12 @@ _boot:
     ldr     x9, =0x80000
     str     x8, [x9, #0x1000]
     
+    // Park secondary cores (non-core-0) at EL3 immediately
+    // They will wait for PSCI cpu_on from core 0
+    mrs     x10, MPIDR_EL1
+    and     x10, x10, #0xFF       // Get core ID (Aff0)
+    cbnz    x10, .Lsecondary_hold_el3  // If not core 0, park at EL3
+    
     cmp     x8, #3
     b.eq    .Ldrop_to_el2       // At EL3 → drop to EL2 (QEMU without TF-A)
     cmp     x8, #2
@@ -38,6 +44,11 @@ _boot:
     b.eq    .Lel1_setup         // Already at EL1 → proceed
     // Unexpected EL (EL0 or invalid) → hang
     b       .Lhang
+
+.Lsecondary_hold_el3:
+    // Secondary cores spin here at EL3 waiting for PSCI cpu_on
+    wfe
+    b       .Lsecondary_hold_el3
 
 .Ldrop_to_el2:
     // -------------------------------------------------------
@@ -131,6 +142,17 @@ _boot:
     mov     x9, #0xFACE
     str     x9, [x8, #0x1038]
 
+    // Set up SP_EL1 for core 0 before dropping to EL1
+    // Stack area: __stack_start + 0x800 (top of core 0's 8KB stack)
+    ldr     x8, =__stack_start
+    add     x8, x8, #0x800
+    msr     SP_EL1, x8
+
+    // Set VBAR_EL1 before dropping to EL1 so exceptions don't go to address 0x200
+    ldr     x8, =exception_vector_table
+    msr     VBAR_EL1, x8
+    isb
+
     eret                        // Drop to EL1!
 
 .Ldrop_to_el1:
@@ -155,6 +177,17 @@ _boot:
     //   DAIF = 1111 (all masked)
     mov     x8, #0x3C4           // DAIF=0xF, M=0x4 (EL1h)
     msr     SPSR_EL2, x8
+
+    // Set up SP_EL1 for core 0 before dropping to EL1
+    // Stack area: __stack_start + 0x800 (top of core 0's 8KB stack)
+    ldr     x8, =__stack_start
+    add     x8, x8, #0x800
+    msr     SP_EL1, x8
+
+    // Set VBAR_EL1 before dropping to EL1 so exceptions don't go to address 0x200
+    ldr     x8, =exception_vector_table
+    msr     VBAR_EL1, x8
+    isb
 
     eret                        // Drop to EL1!
 
