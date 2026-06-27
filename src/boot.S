@@ -192,6 +192,18 @@ _boot:
     eret                        // Drop to EL1!
 
 .Lel1_setup:
+    // Set VBAR_EL1 IMMEDIATELY - first instruction at EL1
+    // This ensures exceptions vector correctly even if we entered EL1 via unexpected path
+    ldr     x8, =exception_vector_table
+    msr     VBAR_EL1, x8
+    isb
+
+    // Set SP_EL1 before any memory access
+    ldr     x8, =__stack_start
+    add     x8, x8, #0x800
+    msr     SP_EL1, x8
+    isb
+
     // DEBUG: Mark that we reached EL1 setup - FIRST INSTRUCTION
     ldr     x8, =0x80000
     mov     x9, #0xBEEF
@@ -200,6 +212,10 @@ _boot:
     // DEBUG: Second marker - after first store
     mov     x9, #0xBEE1
     str     x9, [x8, #0x1020]
+    
+    // DEBUG: Third marker - before MPIDR read
+    mov     x9, #0xBEE2
+    str     x9, [x8, #0x1028]
 
     // -------------------------------------------------------
     // Check core ID - only core 0 proceeds to kernel_init
@@ -209,10 +225,10 @@ _boot:
     and     x8, x8, #0xFF       // Get core ID (Aff0)
     cbnz    x8, .Lsecondary_hold  // If not core 0, go to holding pattern
     
-    // DEBUG: Core ID check passed
+    // DEBUG: Core 0 check passed
     ldr     x8, =0x80000
-    mov     x9, #0xBEE2
-    str     x9, [x8, #0x1028]
+    mov     x9, #0xBEE3
+    str     x9, [x8, #0x1030]
 
     // -------------------------------------------------------
     // Step 3: EL1 setup (core 0 only)
