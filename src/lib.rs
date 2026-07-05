@@ -312,25 +312,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         bss_size
     );
 
-    // 3. GIC
-    crate::println!("[gic] Initializing GIC-400...");
-    unsafe {
-        crate::arch::gic::Gic::init();
-    }
-    crate::println!("[gic] GIC-400 distributor + CPU interface enabled");
-
-    // 4. Timer
-    crate::println!("[timer] Initializing system timer...");
-    unsafe {
-        crate::arch::timer::Timer::init();
-    }
-
-    // 5. Enable IRQs
-    crate::println!("[boot] Enabling IRQs...");
-    crate::arch::cpu::enable_irqs();
-    crate::println!("[boot] IRQs enabled");
-
-    // 6. Memory Management (Phase 2)
+    // 3. Memory Management (Phase 2) — enable MMU EARLY so we can access 40-bit physical addresses
     let kernel_phys_start = 0x80000u64; // kernel8.img load address
     let kernel_end = unsafe { &__kernel_end as *const u64 as u64 };
     let kernel_size = kernel_end - kernel_phys_start;
@@ -405,6 +387,24 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
             uart_virt_base
         );
     }
+
+    // 4. GIC - NOW uses virtual addresses (GIC at 0x10_7FFF_9000 is in DEVICE_MAP region)
+    crate::println!("[gic] Initializing GIC-400...");
+    unsafe {
+        crate::arch::gic::Gic::init();
+    }
+    crate::println!("[gic] GIC-400 distributor + CPU interface enabled");
+
+    // 5. Timer - NOW uses virtual addresses (System timer at 0x10_7C00_3000 in DEVICE_MAP)
+    crate::println!("[timer] Initializing system timer...");
+    unsafe {
+        crate::arch::timer::Timer::init();
+    }
+
+    // 6. Enable IRQs
+    crate::println!("[boot] Enabling IRQs...");
+    crate::arch::cpu::enable_irqs();
+    crate::println!("[boot] IRQs enabled");
 
     // Print memory map
     crate::memory::vmem::print_memory_map();

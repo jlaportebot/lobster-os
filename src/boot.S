@@ -107,6 +107,11 @@ _boot:
     eret                        // Drop to EL2!
 
 .Lel2_entry:
+    // Set VBAR_EL2 IMMEDIATELY at EL2 to prevent exceptions going to address 0x200
+    ldr     x8, =exception_vector_table
+    msr     VBAR_EL2, x8
+    isb
+
     // DEBUG: Mark that we reached EL2 entry
     ldr     x8, =0x80000
     mov     x9, #0xDEAD
@@ -119,8 +124,14 @@ _boot:
     str     x9, [x8, #0x1040]
 
     // Set HCR_EL2 for EL1 AArch64 — CLEAR ALL TRAP BITS
-    // HCR_EL2: RW=1 (bit 31), VM=0 (bit 0), all trap bits = 0
+    // HCR_EL2: RW=1 (bit 31), VM=0 (bit 0), ALL TRAP BITS = 0
     ldr     x8, =0x80000000     // RW=1, VM=0, no traps
+    msr     HCR_EL2, x8
+
+    // Also clear HCR_EL2 trap bits that might still be set from reset
+    // TPU, TTLB, TWI, TWE, TIDCP, TID3, TID2, TID1, TID0, TACR, TIDCP, TSC, TVM, TTLBIS, TOCU
+    mrs     x8, HCR_EL2
+    bic     x8, x8, #((1<<29)|(1<<28)|(1<<27)|(1<<26)|(1<<25)|(1<<24)|(1<<23)|(1<<22)|(1<<21)|(1<<20)|(1<<19)|(1<<18)|(1<<17)|(1<<16)|(1<<15)|(1<<14)|(1<<13)|(1<<12)|(1<<11)|(1<<10)|(1<<9)|(1<<8)|(1<<7)|(1<<6)|(1<<5)|(1<<4)|(1<<3)|(1<<2)|(1<<1))
     msr     HCR_EL2, x8
 
     // DEBUG: Store a marker after HCR_EL2 write
