@@ -9,7 +9,7 @@ use crate::pkg::package::{PackageArch, RepoPackage, RepositoryIndex};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use ed25519_dalek::{PublicKey, Signature, Verifier};
+use ed25519_dalek::{VerifyingKey, Signature, Verifier};
 
 /// Maximum public key size (Ed25519 = 32 bytes)
 const ED25519_PUBKEY_LEN: usize = 32;
@@ -357,9 +357,8 @@ fn verify_repository_signature(
     let signed_data = remove_signature_field(json).ok_or(RepoError::SignatureError)?;
 
     // Verify signature
-    let verifying_key = PublicKey::from_bytes(pubkey).map_err(|_| RepoError::SignatureError)?;
-    let signature = Signature::from_bytes(&sig_bytes).map_err(|_| RepoError::SignatureError)?;
-
+    let verifying_key = VerifyingKey::from_bytes(pubkey).map_err(|_| RepoError::SignatureError)?;
+    let signature = Signature::from_bytes(&sig_bytes);
     verifying_key
         .verify(signed_data.as_bytes(), &signature)
         .map_err(|_| RepoError::SignatureError)?;
