@@ -18,8 +18,8 @@ use crate::println;
 /// CCMP (Counter Mode CBC-MAC Protocol) decryption for WPA2/WPA3
 /// IEEE 802.11i - uses AES-CCM with 128-bit key
 pub mod ccmp {
-    use aes_gcm::{Aes128Gcm, Key, Nonce};
     use aes_gcm::aead::{Aead, KeyInit};
+    use aes_gcm::{Aes128Gcm, Key, Nonce};
 
     /// CCMP header size (8 bytes: PN + KeyID + Reserved)
     pub const CCMP_HEADER_SIZE: usize = 8;
@@ -34,7 +34,7 @@ pub mod ccmp {
         pub pn0: u8,
         pub pn1: u8,
         pub reserved1: u8,
-        pub key_id: u8,  // bits 7:6 = Key ID, bits 5:0 = Reserved
+        pub key_id: u8, // bits 7:6 = Key ID, bits 5:0 = Reserved
         pub pn2: u8,
         pub pn3: u8,
         pub pn4: u8,
@@ -75,13 +75,13 @@ pub mod ccmp {
     }
 
     /// Decrypt a CCMP frame using AES-CCM
-    /// 
+    ///
     /// # Arguments
     /// * `tk` - Temporal Key (16 bytes)
     /// * `ccmp_header` - CCMP header (8 bytes)
     /// * `src_mac` - Source MAC address (6 bytes)
     /// * `data` - Encrypted payload (includes MIC at end)
-    /// 
+    ///
     /// # Returns
     /// Decrypted plaintext (without MIC) or None if decryption fails
     pub fn decrypt(
@@ -157,7 +157,8 @@ pub mod ccmp {
 
         match cipher.encrypt(nonce_obj, plaintext) {
             Ok(ciphertext) => {
-                let mut result = alloc::vec::Vec::with_capacity(CCMP_HEADER_SIZE + ciphertext.len());
+                let mut result =
+                    alloc::vec::Vec::with_capacity(CCMP_HEADER_SIZE + ciphertext.len());
                 // Add CCMP header
                 result.extend_from_slice(&[
                     ccmp_header.pn0,
@@ -2606,26 +2607,35 @@ unsafe fn wifi_receive(buf: &mut [u8]) -> usize {
                     return 0;
                 }
                 let rx_data = &rx_tmp[SDPCM_HEADER_LEN..frame_len];
-                
-                // Check if frame is encrypted (CCMP) - look for EtherType 0x888E (EAPOL) 
+
+                // Check if frame is encrypted (CCMP) - look for EtherType 0x888E (EAPOL)
                 // or check if we have a PTK for decryption
-                if WIFI.link_up && !WIFI.ptk.iter().all(|&b| b == 0) && data_len >= ccmp::CCMP_HEADER_SIZE + ccmp::CCMP_MIC_SIZE {
+                if WIFI.link_up
+                    && !WIFI.ptk.iter().all(|&b| b == 0)
+                    && data_len >= ccmp::CCMP_HEADER_SIZE + ccmp::CCMP_MIC_SIZE
+                {
                     // Try to decrypt CCMP frame
                     if let Some(ccmp_header) = ccmp::CcmpHeader::from_bytes(rx_data) {
                         // Extract source MAC from Ethernet header (bytes 6-11)
                         if rx_data.len() >= ccmp::CCMP_HEADER_SIZE + 14 {
-                            let eth_src = &rx_data[ccmp::CCMP_HEADER_SIZE + 6..ccmp::CCMP_HEADER_SIZE + 12];
+                            let eth_src =
+                                &rx_data[ccmp::CCMP_HEADER_SIZE + 6..ccmp::CCMP_HEADER_SIZE + 12];
                             let mut src_mac = [0u8; 6];
                             src_mac.copy_from_slice(eth_src);
-                            
+
                             // Extract TK (16 bytes at offset 32: KCK=16, KEK=16, TK=16, MIC=16)
                             let mut tk = [0u8; 16];
                             tk.copy_from_slice(&WIFI.ptk[32..48]); // TK is at offset 32
-                            
+
                             // Decrypt the payload (after CCMP header)
                             let encrypted_payload = &rx_data[ccmp::CCMP_HEADER_SIZE..];
-                            if let Some(decrypted) = ccmp::decrypt(&tk, &ccmp_header, &src_mac, encrypted_payload) {
-                                println!("[wifi] CCMP decryption successful, {} bytes", decrypted.len());
+                            if let Some(decrypted) =
+                                ccmp::decrypt(&tk, &ccmp_header, &src_mac, encrypted_payload)
+                            {
+                                println!(
+                                    "[wifi] CCMP decryption successful, {} bytes",
+                                    decrypted.len()
+                                );
                                 // Copy decrypted data to output buffer (Ethernet header + decrypted payload)
                                 if decrypted.len() >= 14 && decrypted.len() <= buf.len() {
                                     buf[..decrypted.len()].copy_from_slice(&decrypted);
@@ -2635,7 +2645,7 @@ unsafe fn wifi_receive(buf: &mut [u8]) -> usize {
                         }
                     }
                 }
-                
+
                 // Fallback: copy raw data (unencrypted or decryption failed)
                 buf[..data_len].copy_from_slice(rx_data);
                 return data_len;
