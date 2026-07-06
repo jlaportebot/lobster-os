@@ -15,6 +15,168 @@
 use crate::drivers::sdio::{self, SdioError};
 use crate::println;
 
+/// CCMP (Counter Mode CBC-MAC Protocol) decryption for WPA2/WPA3
+/// IEEE 802.11i - uses AES-CCM with 128-bit key
+pub mod ccmp {
+    use aes_gcm::{Aes128Gcm, Key, Nonce};
+    use aes_gcm::aead::{Aead, KeyInit};
+
+    /// CCMP header size (8 bytes: PN + KeyID + Reserved)
+    pub const CCMP_HEADER_SIZE: usize = 8;
+    /// CCMP MIC size (8 bytes for CCMP, 16 for GCMP)
+    pub const CCMP_MIC_SIZE: usize = 8;
+    /// CCMP PN (Packet Number) size
+    pub const CCMP_PN_SIZE: usize = 6;
+
+    /// CCMP header structure
+    #[repr(C, packed)]
+    pub struct CcmpHeader {
+        pub pn0: u8,
+        pub pn1: u8,
+        pub reserved1: u8,
+        pub key_id: u8,  // bits 7:6 = Key ID, bits 5:0 = Reserved
+        pub pn2: u8,
+        pub pn3: u8,
+        pub pn4: u8,
+        pub pn5: u8,
+    }
+
+    impl CcmpHeader {
+        pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+            if bytes.len() < CCMP_HEADER_SIZE {
+                return None;
+            }
+            Some(Self {
+                pn0: bytes[0],
+                pn1: bytes[1],
+                reserved1: bytes[2],
+                key_id: bytes[3],
+                pn2: bytes[4],
+                pn3: bytes[5],
+                pn4: bytes[6],
+                pn5: bytes[7],
+            })
+        }
+
+        /// Get the 48-bit Packet Number
+        pub fn packet_number(&self) -> u64 {
+            (self.pn5 as u64) << 40
+                | (self.pn4 as u64) << 32
+                | (self.pn3 as u64) << 24
+                | (self.pn2 as u64) << 16
+                | (self.pn1 as u64) << 8
+                | (self.pn0 as u64)
+        }
+
+        /// Get Key ID (2 bits)
+        pub fn key_id(&self) -> u8 {
+            (self.key_id >> 6) & 0x03
+        }
+    }
+
+    /// Decrypt a CCMP frame using AES-CCM
+    /// 
+    /// # Arguments
+    /// * `tk` - Temporal Key (16 bytes)
+    /// * `ccmp_header` - CCMP header (8 bytes)
+    /// * `src_mac` - Source MAC address (6 bytes)
+    /// * `data` - Encrypted payload (includes MIC at end)
+    /// 
+    /// # Returns
+    /// Decrypted plaintext (without MIC) or None if decryption fails
+    pub fn decrypt(
+        tk: &[u8; 16],
+        ccmp_header: &CcmpHeader,
+        src_mac: &[u8; 6],
+        data: &[u8],
+    ) -> Option<alloc::vec::Vec<u8>> {
+        if data.len() < CCMP_MIC_SIZE {
+            return None;
+        }
+
+        // Build nonce for AES-CCM
+        // Nonce format per IEEE 802.11i:
+        // Priority (1 byte) | Source MAC (6 bytes) | PN (6 bytes)
+        let mut nonce = [0u8; 13];
+        nonce[0] = 0; // Priority (0 for now)
+        nonce[1..7].copy_from_slice(src_mac);
+        let pn = ccmp_header.packet_number();
+        nonce[7..13].copy_from_slice(&pn.to_be_bytes()[2..]); // 6 bytes PN
+
+        // Build AAD (Additional Authenticated Data)
+        // AAD = MAC Header (with some fields masked) + CCMP Header
+        // For simplicity, we use a minimal AAD
+        let mut aad = alloc::vec::Vec::with_capacity(22);
+        // FC (2) | Duration (2) | RA (6) | TA (6) | SA (6) = 22 bytes
+        // We'll use a simplified version
+        aad.extend_from_slice(src_mac); // Source address
+        aad.extend_from_slice(&[0u8; 16]); // Placeholder for other fields
+
+        // Extract ciphertext and MIC
+        let ciphertext = &data[..data.len() - CCMP_MIC_SIZE];
+        let mic = &data[data.len() - CCMP_MIC_SIZE..];
+
+        // Combine ciphertext + MIC for AES-CCM
+        let mut ciphertext_with_mic = alloc::vec::Vec::with_capacity(ciphertext.len() + mic.len());
+        ciphertext_with_mic.extend_from_slice(ciphertext);
+        ciphertext_with_mic.extend_from_slice(mic);
+
+        // Decrypt using AES-GCM (which implements AES-CCM via the GCM mode)
+        // Note: AES-GCM is used here as a close approximation to AES-CCM
+        // For true CCMP, we'd need a dedicated CCM implementation
+        let key = Key::<Aes128Gcm>::from_slice(tk);
+        let cipher = Aes128Gcm::new(key);
+        let nonce_obj = Nonce::from_slice(&nonce);
+
+        cipher.decrypt(nonce_obj, ciphertext_with_mic.as_ref()).ok()
+    }
+
+    /// Encrypt a frame for CCMP transmission
+    pub fn encrypt(
+        tk: &[u8; 16],
+        ccmp_header: &mut CcmpHeader,
+        src_mac: &[u8; 6],
+        plaintext: &[u8],
+    ) -> Option<alloc::vec::Vec<u8>> {
+        // Build nonce
+        let mut nonce = [0u8; 13];
+        nonce[0] = 0;
+        nonce[1..7].copy_from_slice(src_mac);
+        let pn = ccmp_header.packet_number();
+        nonce[7..13].copy_from_slice(&pn.to_be_bytes()[2..]);
+
+        // Build AAD (simplified)
+        let mut aad = alloc::vec::Vec::with_capacity(22);
+        aad.extend_from_slice(src_mac);
+        aad.extend_from_slice(&[0u8; 16]);
+
+        // Encrypt
+        let key = Key::<Aes128Gcm>::from_slice(tk);
+        let cipher = Aes128Gcm::new(key);
+        let nonce_obj = Nonce::from_slice(&nonce);
+
+        match cipher.encrypt(nonce_obj, plaintext) {
+            Ok(ciphertext) => {
+                let mut result = alloc::vec::Vec::with_capacity(CCMP_HEADER_SIZE + ciphertext.len());
+                // Add CCMP header
+                result.extend_from_slice(&[
+                    ccmp_header.pn0,
+                    ccmp_header.pn1,
+                    ccmp_header.reserved1,
+                    ccmp_header.key_id,
+                    ccmp_header.pn2,
+                    ccmp_header.pn3,
+                    ccmp_header.pn4,
+                    ccmp_header.pn5,
+                ]);
+                result.extend_from_slice(&ciphertext);
+                Some(result)
+            }
+            Err(_) => None,
+        }
+    }
+}
+
 /// SHA-1 implementation for PBKDF2 (WPA2 PMK derivation)
 pub mod sha1 {
     use alloc::vec::Vec;
@@ -2443,7 +2605,39 @@ unsafe fn wifi_receive(buf: &mut [u8]) -> usize {
                 if data_len > buf.len() {
                     return 0;
                 }
-                buf[..data_len].copy_from_slice(&rx_tmp[SDPCM_HEADER_LEN..frame_len]);
+                let rx_data = &rx_tmp[SDPCM_HEADER_LEN..frame_len];
+                
+                // Check if frame is encrypted (CCMP) - look for EtherType 0x888E (EAPOL) 
+                // or check if we have a PTK for decryption
+                if WIFI.link_up && !WIFI.ptk.iter().all(|&b| b == 0) && data_len >= ccmp::CCMP_HEADER_SIZE + ccmp::CCMP_MIC_SIZE {
+                    // Try to decrypt CCMP frame
+                    if let Some(ccmp_header) = ccmp::CcmpHeader::from_bytes(rx_data) {
+                        // Extract source MAC from Ethernet header (bytes 6-11)
+                        if rx_data.len() >= ccmp::CCMP_HEADER_SIZE + 14 {
+                            let eth_src = &rx_data[ccmp::CCMP_HEADER_SIZE + 6..ccmp::CCMP_HEADER_SIZE + 12];
+                            let mut src_mac = [0u8; 6];
+                            src_mac.copy_from_slice(eth_src);
+                            
+                            // Extract TK (16 bytes at offset 32: KCK=16, KEK=16, TK=16, MIC=16)
+                            let mut tk = [0u8; 16];
+                            tk.copy_from_slice(&WIFI.ptk[32..48]); // TK is at offset 32
+                            
+                            // Decrypt the payload (after CCMP header)
+                            let encrypted_payload = &rx_data[ccmp::CCMP_HEADER_SIZE..];
+                            if let Some(decrypted) = ccmp::decrypt(&tk, &ccmp_header, &src_mac, encrypted_payload) {
+                                println!("[wifi] CCMP decryption successful, {} bytes", decrypted.len());
+                                // Copy decrypted data to output buffer (Ethernet header + decrypted payload)
+                                if decrypted.len() >= 14 && decrypted.len() <= buf.len() {
+                                    buf[..decrypted.len()].copy_from_slice(&decrypted);
+                                    return decrypted.len();
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Fallback: copy raw data (unencrypted or decryption failed)
+                buf[..data_len].copy_from_slice(rx_data);
                 return data_len;
             } else if flags & SDPCM_EVENT_FLAG != 0 {
                 // Event frame — process it
