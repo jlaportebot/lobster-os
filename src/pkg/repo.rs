@@ -9,7 +9,7 @@ use crate::pkg::package::{PackageArch, RepoPackage, RepositoryIndex};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use ed25519_dalek::{VerifyingKey, Signature, Verifier};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 /// Maximum public key size (Ed25519 = 32 bytes)
 const ED25519_PUBKEY_LEN: usize = 32;
