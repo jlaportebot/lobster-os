@@ -7,32 +7,43 @@ on:
     branches: [master]
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        target: aarch64-unknown-none
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          target: aarch64-unknown-none
 
-    - name: Cache cargo
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
-    - name: Check formatting
-      run: cargo fmt --all -- --check
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
-    - name: Run clippy (with qemu feature for CI compatibility)
-      run: cargo clippy --features qemu -- -D warnings
+      - name: Run clippy
+        run: cargo clippy --target aarch64-unknown-none --release -- -D warnings
 
-    - name: Build kernel (qemu feature)
-      run: cargo build --features qemu --target aarch64-unknown-none
+      - name: Build kernel
+        run: cargo build --target aarch64-unknown-none --release
+
+      - name: Run unit tests
+        run: cargo test
+
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel8.img
+          path: target/aarch64-unknown-none/release/kernel8.img
