@@ -1066,3 +1066,29 @@ pub fn print_status() {
 pub fn task_count() -> usize {
     unsafe { TASK_TABLE.iter().filter(|t| t.is_some()).count() }
 }
+
+/// Find OOM victim — task with the most runtime ticks (excluding idle/init)
+pub fn get_oom_victim() -> Option<Pid> {
+    unsafe {
+        let mut victim_pid: Option<Pid> = None;
+        let mut max_ticks: u64 = 0;
+
+        for i in 0..MAX_TASKS {
+            if let Some(ref task) = TASK_TABLE[i] {
+                // Skip PID 0 (idle) and PID 1 (init)
+                if task.pid <= 1 {
+                    continue;
+                }
+                // Only consider Running or Ready tasks
+                if task.state != TaskState::Running && task.state != TaskState::Ready {
+                    continue;
+                }
+                if task.runtime_ticks > max_ticks {
+                    max_ticks = task.runtime_ticks;
+                    victim_pid = Some(task.pid);
+                }
+            }
+        }
+        victim_pid
+    }
+}

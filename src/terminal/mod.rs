@@ -18,6 +18,7 @@ pub const ROWS: usize = 25;
 pub struct Terminal {
     pub parser: parser::Parser,
     pub screen: screen::ScreenBuffer,
+    pub scrollback: screen::Scrollback,
     input_buf: [u8; 1024], // Raw input buffer
     input_len: usize,
 }
@@ -27,6 +28,7 @@ impl Terminal {
         Self {
             parser: parser::Parser::new(),
             screen: screen::ScreenBuffer::new(),
+            scrollback: screen::Scrollback::new(),
             input_buf: [0u8; 1024],
             input_len: 0,
         }
@@ -39,10 +41,50 @@ impl Terminal {
 
     /// Handle a keyboard key press
     pub fn on_keypress(&mut self, scancode: u8, shift: bool, ctrl: bool, alt: bool) {
-        // Convert scancode to ASCII or control sequence
+        // Handle special keys
+        if ctrl && shift {
+            // Ctrl+Shift+C = Copy, Ctrl+Shift+V = Paste
+            match hid::scancode_to_ascii(scancode, false) {
+                Some('c') => {
+                    // Copy current screen to clipboard
+                    let row = self.screen.get_row_string(self.screen.cursor_row);
+                    screen::copy_to_clipboard(row.as_bytes());
+                    return;
+                }
+                Some('v') => {
+                    // Paste from clipboard
+                    let paste_data = screen::paste_from_clipboard();
+                    for &b in paste_data {
+                        self.send_byte(b);
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Shift+PageUp/PageDown = scrollback navigation
+        if shift {
+            match scancode {
+                0x49 => {
+                    // PageUp scancode
+                    self.scrollback.scroll_up(10);
+                    self.mark_dirty();
+                    return;
+                }
+                0x51 => {
+                    // PageDown scancode
+                    self.scrollback.scroll_down(10);
+                    self.mark_dirty();
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Convert scancode to ASCII
         let ch = hid::scancode_to_ascii(scancode, shift);
 
-        // Handle special keys
         if ctrl {
             match ch {
                 Some('a') => self.send_key(0x01), // Ctrl+A
@@ -60,18 +102,18 @@ impl Terminal {
                 0x2B => self.cycle_focus(), // Alt+Tab
                 _ => {}
             }
-        } else {
-            // Regular character input
-            if let Some(c) = ch {
-                match c {
-                    '\n' | '\r' => self.send_key(0x0A),     // Enter (LF)
-                    '\x7F' | '\x08' => self.send_key(0x7F), // Backspace (DEL)
-                    '\t' => self.send_key(0x09),            // Tab
-                    c if c >= ' ' && c <= '~' => {
-                        self.send_byte(c as u8);
-                    }
-                    _ => {}
+        }
+
+        // Regular character input
+        if let Some(c) = ch {
+            match c {
+                '\n' | '\r' => self.send_key(0x0A),     // Enter (LF)
+                '\x7F' | '\x08' => self.send_key(0x7F), // Backspace (DEL)
+                '\t' => self.send_key(0x09),            // Tab
+                c if c >= ' ' && c <= '~' => {
+                    self.send_byte(c as u8);
                 }
+                _ => {}
             }
         }
     }

@@ -371,3 +371,132 @@ pub fn lighten(color: u32, factor: u32) -> u32 {
     let b = b + (255 - b) * f / 255;
     0xFF000000 | (r << 16) | (g << 8) | b
 }
+
+// ─── Accent Colors ────────────────────────────────────────────────────
+
+/// Available system accent colors
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AccentColor {
+    Blue,   // default #4A9EFF
+    Green,  // #00C853
+    Orange, // #FF6D00
+    Purple, // #AA00FF
+    Red,    // #D50000
+    Teal,   // #00BFA5
+}
+
+impl AccentColor {
+    /// Get the primary accent ARGB value
+    pub fn primary(self) -> u32 {
+        match self {
+            Self::Blue => 0xFF4A9EFF,
+            Self::Green => 0xFF00C853,
+            Self::Orange => 0xFFFF6D00,
+            Self::Purple => 0xFFAA00FF,
+            Self::Red => 0xFFD50000,
+            Self::Teal => 0xFF00BFA5,
+        }
+    }
+
+    /// Get a hover variant (slightly lighter)
+    pub fn hover(self) -> u32 {
+        lighten(self.primary(), 40)
+    }
+
+    /// Get a pressed variant (slightly darker)
+    pub fn pressed(self) -> u32 {
+        darken(self.primary(), 180)
+    }
+
+    /// Get the accent name
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Blue => "Blue",
+            Self::Green => "Green",
+            Self::Orange => "Orange",
+            Self::Purple => "Purple",
+            Self::Red => "Red",
+            Self::Teal => "Teal",
+        }
+    }
+}
+
+// ─── Font Size Adjustment ─────────────────────────────────────────────
+
+/// Available font sizes
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FontSize {
+    Small = 12,
+    Medium = 16,
+    Large = 20,
+    ExtraLarge = 24,
+}
+
+impl FontSize {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Small => Self::Medium,
+            Self::Medium => Self::Large,
+            Self::Large => Self::ExtraLarge,
+            Self::ExtraLarge => Self::Medium,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Small => Self::ExtraLarge,
+            Self::Medium => Self::Small,
+            Self::Large => Self::Medium,
+            Self::ExtraLarge => Self::Large,
+        }
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self as u32
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Small => "Small",
+            Self::Medium => "Medium",
+            Self::Large => "Large",
+            Self::ExtraLarge => "Extra Large",
+        }
+    }
+}
+
+static mut ACTIVE_ACCENT: AccentColor = AccentColor::Blue;
+static mut ACTIVE_FONT_SIZE: FontSize = FontSize::Medium;
+
+/// Get the current accent color
+pub fn accent() -> AccentColor {
+    unsafe { ACTIVE_ACCENT }
+}
+
+/// Set the accent color
+pub fn set_accent(c: AccentColor) {
+    unsafe {
+        ACTIVE_ACCENT = c;
+    }
+    crate::wm::compositor::mark_full_redraw();
+    println!("[theme] Accent color: {}", c.name());
+}
+
+/// Get the current font size
+pub fn font_size() -> FontSize {
+    unsafe { ACTIVE_FONT_SIZE }
+}
+
+/// Set the font size
+pub fn set_font_size(s: FontSize) {
+    unsafe {
+        ACTIVE_FONT_SIZE = s;
+    }
+    crate::wm::compositor::mark_full_redraw();
+    println!("[theme] Font size: {}", s.name());
+}
+
+/// Get the effective font size in pixels
+pub fn effective_font_size() -> u32 {
+    font_size().as_u32()
+}

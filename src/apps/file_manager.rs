@@ -380,6 +380,156 @@ fn normalize_path(path: &str) -> String {
     result
 }
 
+// ─── Bookmarks ─────────────────────────────────────────────────────────
+//
+// Quick-access bookmarks for frequently used directories. Stored as a
+// static array of (label, path) pairs. Users cycle through them with
+// Ctrl+1..9 in the WM input handler.
+
+/// A bookmark entry
+#[derive(Clone, Copy)]
+pub struct Bookmark {
+    pub label: &'static str,
+    pub path: &'static str,
+}
+
+/// Default bookmarks
+pub static DEFAULT_BOOKMARKS: [Bookmark; 6] = [
+    Bookmark {
+        label: "Home",
+        path: "/home",
+    },
+    Bookmark {
+        label: "Root",
+        path: "/",
+    },
+    Bookmark {
+        label: "Etc",
+        path: "/etc",
+    },
+    Bookmark {
+        label: "Var",
+        path: "/var",
+    },
+    Bookmark {
+        label: "Tmp",
+        path: "/tmp",
+    },
+    Bookmark {
+        label: "Usr",
+        path: "/usr",
+    },
+];
+
+/// Get the list of bookmarks
+pub fn bookmarks() -> &'static [Bookmark] {
+    &DEFAULT_BOOKMARKS
+}
+
+/// Navigate to a bookmark by index
+pub fn goto_bookmark(idx: usize) -> bool {
+    if let Some(bm) = DEFAULT_BOOKMARKS.get(idx) {
+        get_file_manager().cd(bm.path);
+        true
+    } else {
+        false
+    }
+}
+
+// ─── File Preview ──────────────────────────────────────────────────────
+//
+// Generate a text preview of the selected file. For text files, show
+// the first 512 bytes. For directories, show entry count. For binaries,
+// show file size and type.
+
+/// Preview result
+pub struct FilePreview {
+    pub lines: Vec<String>,
+    pub is_text: bool,
+    pub file_size: u64,
+    pub mime_type: &'static str,
+}
+
+impl FilePreview {
+    /// Generate a preview for a file at the given path
+    pub fn generate(_path: &str, fm: &FileManager) -> Option<Self> {
+        use crate::fs::vfs;
+
+        let entry = fm.get_selected()?;
+        let full_path = if fm.current_path == "/" {
+            alloc::format!("/{}", entry.name)
+        } else {
+            alloc::format!("{}/{}", fm.current_path, entry.name)
+        };
+
+        if entry.is_dir {
+            let count = vfs::list_dir(&full_path).map(|e| e.len()).unwrap_or(0);
+            return Some(Self {
+                lines: alloc::vec![
+                    alloc::format!("Directory: {}", entry.name),
+                    alloc::format!("Entries: {}", count),
+                    String::from("(press Enter to open)"),
+                ],
+                is_text: true,
+                file_size: 0,
+                mime_type: "inode/directory",
+            });
+        }
+
+        let mime = fm.get_mime_type(&entry.name);
+        let is_text = mime.starts_with("text/") || mime == "application/json";
+
+        if is_text {
+            match vfs::read_file(&full_path) {
+                Ok(data) => {
+                    let mut lines = Vec::new();
+                    let mut current = String::new();
+                    for (idx, &b) in data.iter().enumerate() {
+                        if idx >= 512 {
+                            lines.push(current);
+                            current = String::from("(... truncated)");
+                            break;
+                        }
+                        if b == b'\n' {
+                            lines.push(current.clone());
+                            current.clear();
+                        } else if b >= 0x20 && b <= 0x7E || b == b'\t' {
+                            current.push(b as char);
+                        }
+                    }
+                    if !current.is_empty() {
+                        lines.push(current);
+                    }
+                    Some(Self {
+                        lines,
+                        is_text: true,
+                        file_size: entry.size,
+                        mime_type: mime,
+                    })
+                }
+                Err(_) => Some(Self {
+                    lines: alloc::vec![alloc::format!("Error reading {}", entry.name)],
+                    is_text: false,
+                    file_size: entry.size,
+                    mime_type: mime,
+                }),
+            }
+        } else {
+            Some(Self {
+                lines: alloc::vec![
+                    alloc::format!("File: {}", entry.name),
+                    alloc::format!("Size: {} bytes", entry.size),
+                    alloc::format!("Type: {}", mime),
+                    String::from("(binary file — no preview)"),
+                ],
+                is_text: false,
+                file_size: entry.size,
+                mime_type: mime,
+            })
+        }
+    }
+}
+
 /// Global file manager instance
 static mut FILE_MANAGER: FileManager = FileManager {
     current_path: String::new(),

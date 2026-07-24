@@ -3,6 +3,7 @@
 pub mod frame_alloc;
 pub mod heap;
 pub mod mmu;
+pub mod oom;
 pub mod process_vmem;
 pub mod vmem;
 

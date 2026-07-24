@@ -8,6 +8,7 @@ pub mod image_viewer;
 pub mod network_manager;
 pub mod process_manager;
 pub mod settings;
+pub mod setup_wizard;
 pub mod sysmon;
 pub mod terminal;
 

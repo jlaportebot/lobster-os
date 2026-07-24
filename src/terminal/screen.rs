@@ -411,3 +411,139 @@ impl Default for ScreenBuffer {
         Self::new()
     }
 }
+
+// ─── Scrollback Ring Buffer ────────────────────────────────────────────
+//
+// When lines scroll off the top of the visible screen, they're stored in
+// a ring buffer. Users scroll back with Shift+PageUp/PageDown. The
+// buffer holds up to SCROLLBACK_MAX_LINES lines of text.
+
+/// Maximum scrollback lines (10k lines × 80 chars ≈ 800KB)
+pub const SCROLLBACK_MAX_LINES: usize = 10_000;
+
+/// Scrollback ring buffer entry
+#[derive(Clone, Copy)]
+pub struct ScrollbackLine {
+    pub cells: [Cell; 80],
+    pub len: usize,
+}
+
+/// Scrollback ring buffer
+pub struct Scrollback {
+    lines: [ScrollbackLine; SCROLLBACK_MAX_LINES],
+    head: usize,          // next write position
+    count: usize,         // total lines stored
+    scroll_offset: usize, // how many lines back from bottom (0 = live)
+}
+
+impl Scrollback {
+    pub const fn new() -> Self {
+        Self {
+            lines: [ScrollbackLine {
+                cells: [Cell::new(); 80],
+                len: 0,
+            }; SCROLLBACK_MAX_LINES],
+            head: 0,
+            count: 0,
+            scroll_offset: 0,
+        }
+    }
+
+    /// Push a line into scrollback
+    pub fn push_line(&mut self, row: &[Cell; 80]) {
+        let mut line = ScrollbackLine {
+            cells: [Cell::new(); 80],
+            len: 80,
+        };
+        line.cells.copy_from_slice(row);
+        self.lines[self.head] = line;
+        self.head = (self.head + 1) % SCROLLBACK_MAX_LINES;
+        if self.count < SCROLLBACK_MAX_LINES {
+            self.count += 1;
+        }
+    }
+
+    /// Get a scrollback line relative to the oldest (0 = oldest)
+    pub fn get_line(&self, index: usize) -> Option<&ScrollbackLine> {
+        if index >= self.count {
+            return None;
+        }
+        let start = if self.count < SCROLLBACK_MAX_LINES {
+            0
+        } else {
+            self.head
+        };
+        let actual = (start + index) % SCROLLBACK_MAX_LINES;
+        Some(&self.lines[actual])
+    }
+
+    /// Scroll up (increase offset)
+    pub fn scroll_up(&mut self, lines: usize) {
+        self.scroll_offset = (self.scroll_offset + lines).min(self.count);
+    }
+
+    /// Scroll down (decrease offset)
+    pub fn scroll_down(&mut self, lines: usize) {
+        if self.scroll_offset > lines {
+            self.scroll_offset -= lines;
+        } else {
+            self.scroll_offset = 0;
+        }
+    }
+
+    /// Reset scroll to live mode
+    pub fn reset_scroll(&mut self) {
+        self.scroll_offset = 0;
+    }
+
+    /// Get current scroll offset
+    pub fn offset(&self) -> usize {
+        self.scroll_offset
+    }
+
+    /// Get total lines in buffer
+    pub fn line_count(&self) -> usize {
+        self.count
+    }
+
+    /// Check if we're in scrollback mode (not live)
+    pub fn is_scrolling(&self) -> bool {
+        self.scroll_offset > 0
+    }
+}
+
+impl Default for Scrollback {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ─── Copy/Paste Buffer ─────────────────────────────────────────────────
+
+/// Global clipboard for terminal copy/paste
+static mut CLIPBOARD: [u8; 4096] = [0; 4096];
+static mut CLIPBOARD_LEN: usize = 0;
+
+/// Copy text to clipboard
+pub fn copy_to_clipboard(text: &[u8]) {
+    unsafe {
+        let len = text.len().min(CLIPBOARD.len());
+        CLIPBOARD[..len].copy_from_slice(&text[..len]);
+        CLIPBOARD_LEN = len;
+    }
+}
+
+/// Paste from clipboard
+pub fn paste_from_clipboard() -> &'static [u8] {
+    unsafe { &CLIPBOARD[..CLIPBOARD_LEN] }
+}
+
+/// Check if clipboard has content
+pub fn clipboard_has_content() -> bool {
+    unsafe { CLIPBOARD_LEN > 0 }
+}
+
+/// Get clipboard content as a string slice
+pub fn clipboard_str() -> &'static str {
+    unsafe { core::str::from_utf8_unchecked(&CLIPBOARD[..CLIPBOARD_LEN]) }
+}
