@@ -199,3 +199,22 @@ pub fn draw_text(fb: &FramebufferInfo, x: u32, y: u32, text: &str, fg: u32, bg: 
         cx += CHAR_WIDTH;
     }
 }
+
+/// Draw text centered at a given x position
+pub fn draw_text_centered(
+    fb: &FramebufferInfo,
+    center_x: u32,
+    y: u32,
+    text: &str,
+    fg: u32,
+    bg: u32,
+) {
+    let text_width = (text.len() as u32) * CHAR_WIDTH;
+    let x = center_x.saturating_sub(text_width / 2);
+    draw_text(fb, x, y, text, fg, bg);
+}
+
+/// Fill a rectangular region with a solid color
+pub fn fill_rect(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
+    fill_region(fb, x, y, w, h, color);
+}

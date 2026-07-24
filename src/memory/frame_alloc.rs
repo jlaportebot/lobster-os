@@ -125,6 +125,29 @@ pub fn allocate_frame() -> Option<PhysAddr> {
     lock();
     let result = unsafe { allocate_frame_inner() };
     unlock();
+
+    // If allocation failed, try OOM handler
+    if result.is_none() {
+        // Try soft OOM first (free caches)
+        if crate::memory::oom::handle(crate::memory::oom::OomSeverity::Soft, 1) {
+            // Retry allocation after cache cleanup
+            lock();
+            let retry = unsafe { allocate_frame_inner() };
+            unlock();
+            if retry.is_some() {
+                return retry;
+            }
+        }
+
+        // Hard OOM — kill a process and retry
+        if crate::memory::oom::handle(crate::memory::oom::OomSeverity::Hard, 1) {
+            lock();
+            let retry = unsafe { allocate_frame_inner() };
+            unlock();
+            return retry;
+        }
+    }
+
     result
 }
 

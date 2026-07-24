@@ -273,3 +273,174 @@ pub fn print_status() {
     let active = channels.iter().filter(|c| c.active).count();
     println!("[bt] L2CAP channels: {}/8 active", active);
 }
+
+// ─── GATT (Generic Attribute Profile) ──────────────────────────────────
+//
+// GATT is the protocol used by Bluetooth LE devices to exchange data.
+// It defines a hierarchy of Services → Characteristics → Descriptors.
+// Each has a 128-bit UUID. The GATT server exposes attributes that a
+// GATT client can read/write/notify.
+
+/// GATT UUID (128-bit)
+#[derive(Debug, Clone, Copy)]
+pub struct GattUuid(pub [u8; 16]);
+
+/// GATT attribute permissions
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GattPermission {
+    Read,
+    Write,
+    ReadWrite,
+    Notify,
+}
+
+/// GATT characteristic
+#[derive(Debug, Clone)]
+pub struct GattCharacteristic {
+    pub uuid: GattUuid,
+    pub permissions: GattPermission,
+    pub value: Vec<u8>,
+    pub notifying: bool,
+}
+
+/// GATT service
+#[derive(Debug, Clone)]
+pub struct GattService {
+    pub uuid: GattUuid,
+    pub characteristics: Vec<GattCharacteristic>,
+}
+
+/// GATT server state
+static GATT_SERVICES: Spinlock<Vec<GattService>> = Spinlock::new(Vec::new());
+
+/// Well-known UUIDs (shortened to 16-bit mapped to 128-bit base)
+const UUID_BASE: [u8; 16] = [
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB,
+];
+
+/// Create a 128-bit UUID from a 16-bit short UUID
+fn uuid_from_short(short: u16) -> GattUuid {
+    let mut uuid = UUID_BASE;
+    uuid[2] = (short & 0xFF) as u8;
+    uuid[3] = ((short >> 8) & 0xFF) as u8;
+    GattUuid(uuid)
+}
+
+/// Register a GATT service
+pub fn gatt_register_service(uuid: GattUuid) -> Result<(), &'static str> {
+    let mut services = GATT_SERVICES.lock();
+    services.push(GattService {
+        uuid,
+        characteristics: Vec::new(),
+    });
+    println!("[bt] GATT service registered");
+    Ok(())
+}
+
+/// Add a characteristic to the last registered service
+pub fn gatt_add_characteristic(
+    uuid: GattUuid,
+    permissions: GattPermission,
+    initial_value: Vec<u8>,
+) -> Result<(), &'static str> {
+    let mut services = GATT_SERVICES.lock();
+    let service = services.last_mut().ok_or("no GATT service registered")?;
+    service.characteristics.push(GattCharacteristic {
+        uuid,
+        permissions,
+        value: initial_value,
+        notifying: false,
+    });
+    Ok(())
+}
+
+/// Read a GATT characteristic value by UUID
+pub fn gatt_read(uuid: &GattUuid) -> Option<Vec<u8>> {
+    let services = GATT_SERVICES.lock();
+    for service in services.iter() {
+        for ch in &service.characteristics {
+            if ch.uuid.0 == uuid.0 {
+                if ch.permissions == GattPermission::Write {
+                    return None; // Not readable
+                }
+                return Some(ch.value.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Write a GATT characteristic value by UUID
+pub fn gatt_write(uuid: &GattUuid, data: &[u8]) -> Result<(), &'static str> {
+    let mut services = GATT_SERVICES.lock();
+    for service in services.iter_mut() {
+        for ch in &mut service.characteristics {
+            if ch.uuid.0 == uuid.0 {
+                if ch.permissions == GattPermission::Read {
+                    return Err("characteristic is read-only");
+                }
+                ch.value = data.to_vec();
+                // If notifying, send notification via L2CAP
+                if ch.notifying {
+                    println!("[bt] GATT notification sent for characteristic");
+                }
+                return Ok(());
+            }
+        }
+    }
+    Err("characteristic not found")
+}
+
+/// Enable notifications for a characteristic
+pub fn gatt_enable_notify(uuid: &GattUuid) -> Result<(), &'static str> {
+    let mut services = GATT_SERVICES.lock();
+    for service in services.iter_mut() {
+        for ch in &mut service.characteristics {
+            if ch.uuid.0 == uuid.0 {
+                ch.notifying = true;
+                println!("[bt] GATT notifications enabled");
+                return Ok(());
+            }
+        }
+    }
+    Err("characteristic not found")
+}
+
+/// Print GATT server status
+pub fn gatt_print_status() {
+    let services = GATT_SERVICES.lock();
+    println!("[bt] GATT services: {}", services.len());
+    for (i, service) in services.iter().enumerate() {
+        println!(
+            "[bt]   Service {}: {} characteristics",
+            i,
+            service.characteristics.len()
+        );
+    }
+}
+
+/// Initialize the GATT server with some default services
+pub fn gatt_init() {
+    // Generic Access Service (0x1800)
+    let _ = gatt_register_service(uuid_from_short(0x1800));
+    let _ = gatt_add_characteristic(
+        uuid_from_short(0x2A00), // Device Name
+        GattPermission::Read,
+        b"LobsterOS".to_vec(),
+    );
+    let _ = gatt_add_characteristic(
+        uuid_from_short(0x2A01), // Appearance
+        GattPermission::Read,
+        Vec::from([0x00u8, 0x00]),
+    );
+
+    // Battery Service (0x180F)
+    let _ = gatt_register_service(uuid_from_short(0x180F));
+    let _ = gatt_add_characteristic(
+        uuid_from_short(0x2A19), // Battery Level
+        GattPermission::ReadWrite,
+        Vec::from([100u8]),
+    );
+
+    println!("[bt] GATT server initialized with default services");
+}

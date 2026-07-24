@@ -1870,3 +1870,181 @@ mod tests {
         assert!(edid_preferred_resolution().is_some() || info.standard_timings[0].0 != 0);
     }
 }
+
+// ─── Dual Display Support ──────────────────────────────────────────────
+//
+// The Pi 5 supports dual HDMI output (HDMI0 + HDMI1).
+// We track display count and provide per-display framebuffer info.
+// The compositor can use this to extend or mirror the desktop.
+
+/// Maximum displays supported
+pub const MAX_DISPLAYS: usize = 2;
+
+/// Display entry for multi-monitor support
+#[derive(Clone, Copy)]
+pub struct DisplayEntry {
+    pub id: u32,
+    pub width: u32,
+    pub height: u32,
+    pub pitch: u32,
+    pub fb_addr: u64,
+    pub is_primary: bool,
+    pub enabled: bool,
+}
+
+/// Multi-display manager state
+static mut DISPLAYS: [DisplayEntry; MAX_DISPLAYS] = [
+    DisplayEntry {
+        id: 0,
+        width: 0,
+        height: 0,
+        pitch: 0,
+        fb_addr: 0,
+        is_primary: true,
+        enabled: false,
+    },
+    DisplayEntry {
+        id: 1,
+        width: 0,
+        height: 0,
+        pitch: 0,
+        fb_addr: 0,
+        is_primary: false,
+        enabled: false,
+    },
+];
+
+/// Display arrangement mode
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DisplayMode {
+    /// Single display (primary only)
+    Single,
+    /// Extended desktop (displays side by side)
+    Extended,
+    /// Mirror same content on both displays
+    Mirror,
+}
+
+static mut DISPLAY_MODE: DisplayMode = DisplayMode::Single;
+
+/// Initialize multi-display support
+pub fn init_multi_display() {
+    // Display 0 is the primary display (already initialized by mailbox)
+    unsafe {
+        let info = &DISPLAY_INFO;
+        DISPLAYS[0].width = info.width;
+        DISPLAYS[0].height = info.height;
+        DISPLAYS[0].pitch = info.pitch;
+        DISPLAYS[0].fb_addr = info.fb_addr;
+        DISPLAYS[0].enabled = true;
+
+        // Try to initialize display 1 (HDMI1) via mailbox
+        // On Pi 5, the second HDMI requires a separate framebuffer allocation
+        // For now, mark as disabled until hardware detection runs
+        DISPLAYS[1].enabled = false;
+    }
+
+    let count = enabled_display_count();
+    crate::println!("[gpu] Multi-display init: {} display(s) active", count);
+}
+
+/// Get number of enabled displays
+pub fn enabled_display_count() -> usize {
+    unsafe { DISPLAYS.iter().filter(|d| d.enabled).count() }
+}
+
+/// Get display info by index
+pub fn get_display(idx: usize) -> Option<&'static DisplayEntry> {
+    if idx < MAX_DISPLAYS {
+        unsafe { Some(&DISPLAYS[idx]) }
+    } else {
+        None
+    }
+}
+
+/// Get the current display mode
+pub fn display_mode() -> DisplayMode {
+    unsafe { DISPLAY_MODE }
+}
+
+/// Set the display mode
+pub fn set_display_mode(mode: DisplayMode) {
+    unsafe {
+        DISPLAY_MODE = mode;
+    }
+    crate::wm::compositor::mark_full_redraw();
+    let name = match mode {
+        DisplayMode::Single => "Single",
+        DisplayMode::Extended => "Extended",
+        DisplayMode::Mirror => "Mirror",
+    };
+    crate::println!("[gpu] Display mode: {}", name);
+}
+
+/// Get total desktop dimensions (accounts for multi-display)
+pub fn desktop_dimensions() -> (u32, u32) {
+    match display_mode() {
+        DisplayMode::Single => dimensions(),
+        DisplayMode::Extended => {
+            // Extended: width = sum of all display widths, height = max
+            let mut total_w = 0u32;
+            let mut max_h = 0u32;
+            for i in 0..MAX_DISPLAYS {
+                if let Some(d) = get_display(i) {
+                    if d.enabled {
+                        total_w += d.width;
+                        max_h = max_h.max(d.height);
+                    }
+                }
+            }
+            if total_w == 0 {
+                dimensions()
+            } else {
+                (total_w, max_h)
+            }
+        }
+        DisplayMode::Mirror => {
+            // Mirror: just primary display
+            dimensions()
+        }
+    }
+}
+
+/// Enable a secondary display
+pub fn enable_display(idx: usize, width: u32, height: u32) -> bool {
+    if idx >= MAX_DISPLAYS || idx == 0 {
+        return false;
+    }
+
+    unsafe {
+        DISPLAYS[idx].width = width;
+        DISPLAYS[idx].height = height;
+        DISPLAYS[idx].enabled = true;
+        DISPLAYS[idx].is_primary = false;
+    }
+
+    // Auto-switch to extended mode if second display is enabled
+    if enabled_display_count() > 1 {
+        set_display_mode(DisplayMode::Extended);
+    }
+
+    crate::println!("[gpu] Display {} enabled: {}x{}", idx, width, height);
+    true
+}
+
+/// Disable a display
+pub fn disable_display(idx: usize) {
+    if idx >= MAX_DISPLAYS || idx == 0 {
+        return;
+    }
+
+    unsafe {
+        DISPLAYS[idx].enabled = false;
+    }
+
+    if enabled_display_count() <= 1 {
+        set_display_mode(DisplayMode::Single);
+    }
+
+    crate::println!("[gpu] Display {} disabled", idx);
+}

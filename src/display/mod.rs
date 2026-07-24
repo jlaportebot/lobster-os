@@ -4,3 +4,4 @@ pub mod console;
 pub mod fb;
 pub mod graphics;
 pub mod logo;
+pub mod splash;
