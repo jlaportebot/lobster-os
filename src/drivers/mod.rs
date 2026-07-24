@@ -4,9 +4,13 @@ pub mod audio;
 #[cfg(target_arch = "aarch64")]
 pub mod audio_mixer;
 #[cfg(target_arch = "aarch64")]
+pub mod bluetooth;
+#[cfg(target_arch = "aarch64")]
 pub mod emmc;
 #[cfg(target_arch = "aarch64")]
 pub mod gpio;
+#[cfg(target_arch = "aarch64")]
+pub mod gpio_user;
 #[cfg(target_arch = "aarch64")]
 pub mod gpu;
 #[cfg(target_arch = "aarch64")]
