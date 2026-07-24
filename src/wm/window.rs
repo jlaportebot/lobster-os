@@ -608,3 +608,80 @@ pub fn set_terminal_widget_id(id: u32, widget_id: crate::wm::widget::WidgetId) {
         }
     }
 }
+
+// ─── Window Snapping ────────────────────────────────────────────────────
+
+/// Snap position for window snapping
+#[derive(Clone, Copy, Debug)]
+pub enum SnapPosition {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    Full,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Center,
+}
+
+/// Get the panel height to avoid covering windows under the panel
+fn panel_height() -> u32 {
+    36
+}
+
+/// Snap a window to a position on screen
+pub fn snap(id: u32, position: SnapPosition) {
+    let fb = match compositor::fb_info() {
+        Some(fb) => fb,
+        None => return,
+    };
+
+    let screen_w = fb.width;
+    let screen_h = fb.height.saturating_sub(panel_height());
+
+    let (x, y, w, h) = match position {
+        SnapPosition::Left => (0, 0, screen_w / 2, screen_h),
+        SnapPosition::Right => (screen_w / 2, 0, screen_w / 2, screen_h),
+        SnapPosition::Top => (0, 0, screen_w, screen_h / 2),
+        SnapPosition::Bottom => (0, screen_h / 2, screen_w, screen_h / 2),
+        SnapPosition::Full => (0, 0, screen_w, screen_h),
+        SnapPosition::TopLeft => (0, 0, screen_w / 2, screen_h / 2),
+        SnapPosition::TopRight => (screen_w / 2, 0, screen_w / 2, screen_h / 2),
+        SnapPosition::BottomLeft => (0, screen_h / 2, screen_w / 2, screen_h / 2),
+        SnapPosition::BottomRight => (screen_w / 2, screen_h / 2, screen_w / 2, screen_h / 2),
+        SnapPosition::Center => {
+            let win_w = 640u32.min(screen_w.saturating_sub(20));
+            let win_h = 480u32.min(screen_h.saturating_sub(20));
+            (
+                (screen_w.saturating_sub(win_w)) / 2,
+                (screen_h.saturating_sub(win_h)) / 2,
+                win_w,
+                win_h,
+            )
+        }
+    };
+
+    move_window(id, x, y);
+    resize(id, w, h);
+    println!("[wm] Snapped window {} to {:?}", id, position);
+}
+
+/// Restore a window from snapped/maximized state to a default size
+pub fn restore(id: u32) {
+    let win_w = 640u32;
+    let win_h = 480u32;
+    let fb = match compositor::fb_info() {
+        Some(fb) => fb,
+        None => return,
+    };
+    let x = (fb.width.saturating_sub(win_w)) / 2;
+    let y = (fb
+        .height
+        .saturating_sub(panel_height())
+        .saturating_sub(win_h))
+        / 2;
+    move_window(id, x, y);
+    resize(id, win_w, win_h);
+}

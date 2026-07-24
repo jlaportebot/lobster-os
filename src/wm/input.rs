@@ -94,13 +94,12 @@ fn handle_key_press(scancode: u8, _extended: bool) {
     // Alt+Tab: cycle window focus
     if hid::alt_held() && scancode == 0x2B {
         // Tab scancode in USB HID = 0x2B
-        // Reuse the existing cycle_focus from window module
-        crate::wm::window::handle_event(HidEvent::KeyPress {
-            scancode,
-            extended: false,
-        });
+        crate::wm::window::cycle_focus();
         return;
     }
+
+    // WM keyboard shortcuts (Super+arrow, Super+D, Alt+F4, Alt+1-4)
+    crate::wm::handle_shortcut(scancode);
 
     // Route to focused window via existing handle_event
     crate::wm::window::handle_event(HidEvent::KeyPress {
@@ -155,11 +154,47 @@ fn handle_mouse_move(dx: i16, dy: i16) {
 /// Handle mouse button changes
 fn handle_mouse_button(left: bool, right: bool, middle: bool) {
     let prev_left = unsafe { MOUSE_LEFT };
+    let prev_right = unsafe { MOUSE_RIGHT };
 
     unsafe {
         MOUSE_LEFT = left;
         MOUSE_RIGHT = right;
         MOUSE_MIDDLE = middle;
+    }
+
+    // Right-click: show context menu
+    if right && !prev_right {
+        let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+
+        // If context menu is already visible, hide it
+        if crate::wm::context_menu::is_visible() {
+            crate::wm::context_menu::hide();
+            return;
+        }
+
+        // Check if click is on desktop (not on any window or panel)
+        let focused = crate::wm::window::focused_id();
+        let on_window = crate::wm::window::get_info(focused).is_some();
+
+        if !on_window {
+            crate::wm::context_menu::show_desktop_menu(cx, cy);
+        }
+        return;
+    }
+
+    // If context menu is visible, route clicks to it
+    if crate::wm::context_menu::is_visible() {
+        let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+        // Update hover state
+        crate::wm::context_menu::handle_hover(cx, cy);
+
+        if left && !prev_left {
+            if let Some(action) = crate::wm::context_menu::handle_click(cx, cy) {
+                handle_context_action(action);
+                return;
+            }
+        }
+        return;
     }
 
     // On left press: check panel clicks first, then window focus
@@ -214,5 +249,40 @@ fn handle_panel_action(action: u32) {
             // Task button clicked - focus that window
             crate::wm::window::focus(window_id);
         }
+    }
+}
+
+/// Handle context menu actions (IDs from context_menu::show_desktop_menu)
+fn handle_context_action(action: u32) {
+    match action {
+        1 => {
+            // Terminal
+            crate::apps::terminal::init();
+        }
+        2 => {
+            // File Manager
+            crate::apps::file_manager::init();
+        }
+        3 => {
+            // Settings
+            crate::apps::settings::init();
+        }
+        4 => {
+            // Calculator
+            crate::apps::calculator::init();
+        }
+        5 => {
+            // System Monitor
+            crate::apps::sysmon::init();
+        }
+        10 => {
+            // Change wallpaper (placeholder)
+            println!("[wm] Change wallpaper (not implemented yet)");
+        }
+        20 => {
+            // About LobsterOS
+            println!("[wm] LobsterOS v0.2 — Bare-metal Rust OS for Pi 5");
+        }
+        _ => {}
     }
 }

@@ -12,12 +12,14 @@
 //! All rendering goes through `display::graphics` primitives.
 
 pub mod compositor;
+pub mod context_menu;
 pub mod input;
 pub mod launcher;
 pub mod panel;
 pub mod theme;
 pub mod widget;
 pub mod window;
+pub mod workspace;
 
 use crate::display::fb::get_info;
 use crate::println;
@@ -32,6 +34,7 @@ pub fn init() {
     compositor::init(fb);
     window::init();
     theme::init();
+    workspace::init();
     input::init();
     panel::init(&fb);
     println!(
@@ -50,5 +53,75 @@ pub fn tick() {
     let fb = get_info();
     if fb.width > 0 {
         panel::draw(&fb);
+    }
+    // Draw context menu on top of everything (if visible)
+    context_menu::draw();
+}
+
+/// Handle keyboard shortcuts (called from input module)
+pub fn handle_shortcut(scancode: u8) {
+    use crate::usb::hid;
+    use crate::wm::window::SnapPosition;
+
+    // Mod + key shortcuts
+    let mod_key = hid::gui_held();
+
+    if mod_key {
+        match scancode {
+            // Super+D: minimize all / show desktop
+            0x07 => {
+                let count = window::count();
+                for id in 1..=count as u32 {
+                    if window::exists(id) {
+                        window::minimize(id);
+                    }
+                }
+            }
+            // Super+Left: snap focused window left
+            0x50 => {
+                let fid = window::focused_id();
+                if fid != 0 {
+                    window::snap(fid, SnapPosition::Left);
+                }
+            }
+            // Super+Right: snap focused window right
+            0x4F => {
+                let fid = window::focused_id();
+                if fid != 0 {
+                    window::snap(fid, SnapPosition::Right);
+                }
+            }
+            // Super+Up: snap focused window top half
+            0x52 => {
+                let fid = window::focused_id();
+                if fid != 0 {
+                    window::snap(fid, SnapPosition::Full);
+                }
+            }
+            // Super+Down: minimize focused window or restore from snapped
+            0x51 => {
+                let fid = window::focused_id();
+                if fid != 0 {
+                    window::minimize(fid);
+                }
+            }
+            // Ctrl+Alt+1..4: switch workspace
+            _ if hid::alt_held() => match scancode {
+                0x1E => workspace::switch_to(0), // 1
+                0x1F => workspace::switch_to(1), // 2
+                0x20 => workspace::switch_to(2), // 3
+                0x21 => workspace::switch_to(3), // 4
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    // Alt+F4: close focused window
+    if hid::alt_held() && scancode == 0x29 {
+        let fid = window::focused_id();
+        if fid != 0 {
+            window::destroy(fid);
+        }
     }
 }

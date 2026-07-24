@@ -368,3 +368,9 @@ pub fn alt_held() -> bool {
     let mods = get_modifiers();
     (mods & (MOD_LALT | MOD_RALT)) != 0
 }
+
+/// Check if GUI (Super/Windows) key is held
+pub fn gui_held() -> bool {
+    let mods = get_modifiers();
+    (mods & (MOD_LGUI | MOD_RGUI)) != 0
+}
