@@ -292,9 +292,10 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
 
     crate::println!();
     crate::println!("╔══════════════════════════════════════╗");
-    crate::println!("║  LobsterOS v0.1.0                   ║");
+    crate::println!("║  LobsterOS v0.2.0                   ║");
     crate::println!("║  Bare-metal Rust on BCM2712         ║");
     crate::println!("║  Quad-core Cortex-A76 @ 2.4 GHz    ║");
+    crate::println!("║  For Raspberry Pi 5 (1-16GB)        ║");
     crate::println!("╚══════════════════════════════════════╝");
     crate::println!();
 
@@ -640,6 +641,14 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::drivers::power_mgmt::PowerManager::init();
     crate::drivers::power_mgmt::PowerManager::init_watchdog(30); // 30s watchdog
 
+    // 15a2. Initialize audio mixer
+    crate::println!("[audio] Initializing audio mixer...");
+    crate::drivers::audio_mixer::init();
+
+    // 15a3. Initialize GPIO userspace API
+    crate::println!("[gpio] Initializing userspace GPIO...");
+    crate::drivers::gpio_user::init();
+
     // 15b. Initialize system config and OS release
     crate::println!("[config] Loading system configuration...");
     let _sys_config = crate::config::SystemConfig::load_from_file();
@@ -650,14 +659,25 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::println!("[syslog] Starting syslog daemon...");
     crate::sched::create_kernel_task(crate::syslog::start, crate::sched::Priority::Low);
 
+    // 15d. Initialize panic recovery (auto-reboot on crash)
+    crate::println!("[panic] Enabling panic recovery...");
+    crate::panic_recovery::init(true);
+
+    // 15e. Initialize Bluetooth
+    crate::println!("[bt] Initializing Bluetooth...");
+    crate::drivers::bluetooth::init();
+
     // 16. Spawn shell on UART for serial console
     crate::println!("[boot] Spawning shell on UART...");
     crate::sched::create_kernel_task(crate::shell::run, crate::sched::Priority::Normal);
 
-    // 17. Run kernel main loop
-    crate::println!("[boot] LobsterOS initialization complete!");
-    crate::println!("[boot] Entering main loop...");
+    // 17. Run kernel main loop — drive WM and scheduler
+    crate::println!("[boot] LobsterOS v0.2.0 initialization complete!");
+    crate::println!("[boot] Entering main loop (WM tick + WFE)...");
     loop {
+        // Drive window manager
+        crate::wm::tick();
+        // Wait for interrupt
         crate::arch::cpu::wfe();
     }
 }
