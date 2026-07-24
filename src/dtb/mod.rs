@@ -18,23 +18,28 @@ pub static mut BOARD_REVISION: u32 = 0;
 pub fn parse(dtb_ptr: u64) {
     let header = unsafe { &*(dtb_ptr as *const FdtHeader) };
 
-    if header.magic != 0xD00DFEED {
-        panic!("Invalid DTB magic number: {:#010x}", header.magic);
+    let magic = u32::from_be(header.magic);
+    if magic != 0xD00DFEED {
+        panic!("Invalid DTB magic number: {:#010x}", magic);
     }
 
     println!("[dtb] DTB header:");
-    println!("  Magic: {:#010x}", header.magic);
-    println!("  Total size: {} bytes", header.totalsize);
-    println!("  Structure offset: {:#010x}", header.off_dt_struct);
-    println!("  Strings offset: {:#010x}", header.off_dt_strings);
+    println!("  Magic: {:#010x}", magic);
+    let totalsize = u32::from_be(header.totalsize) as u64;
+    let off_dt_struct = u32::from_be(header.off_dt_struct) as u64;
+    let off_dt_strings = u32::from_be(header.off_dt_strings) as u64;
+    let off_mem_rsvmap = u32::from_be(header.off_mem_rsvmap) as u64;
+    println!("  Total size: {} bytes", totalsize);
+    println!("  Structure offset: {:#010x}", off_dt_struct);
+    println!("  Strings offset: {:#010x}", off_dt_strings);
     println!(
         "  Memory reservation block offset: {:#010x}",
-        header.off_mem_rsvmap
+        off_mem_rsvmap
     );
 
-    let struct_start = dtb_ptr + header.off_dt_struct as u64;
-    let strings_start = dtb_ptr + header.off_dt_strings as u64;
-    let struct_end_offset = header.totalsize as u64;
+    let struct_start = dtb_ptr + off_dt_struct;
+    let strings_start = dtb_ptr + off_dt_strings;
+    let struct_end_offset = totalsize;
 
     parse_structure_block(struct_start, strings_start, struct_end_offset);
 
@@ -44,8 +49,8 @@ pub fn parse(dtb_ptr: u64) {
             let rsvmap = dtb_ptr + header.off_mem_rsvmap as u64;
             let mut off = 0u64;
             loop {
-                let addr = core::ptr::read_volatile((rsvmap + off) as *const u64);
-                let size = core::ptr::read_volatile((rsvmap + off + 8) as *const u64);
+                let addr = u64::from_be(core::ptr::read_volatile((rsvmap + off) as *const u64));
+                let size = u64::from_be(core::ptr::read_volatile((rsvmap + off + 8) as *const u64));
                 if addr == 0 && size == 0 {
                     break;
                 }
@@ -78,7 +83,7 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
 
     while offset < struct_end {
         let token_ptr = struct_start + offset;
-        let token = unsafe { core::ptr::read_volatile(token_ptr as *const u32) };
+        let token = u32::from_be(unsafe { core::ptr::read_volatile(token_ptr as *const u32) });
 
         match token {
             FDT_BEGIN_NODE => {
@@ -101,17 +106,19 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
             FDT_PROP => {
                 offset += 4;
 
-                let prop_len =
-                    unsafe { core::ptr::read_volatile((struct_start + offset) as *const u32) };
+                let prop_len = u32::from_be(
+                    unsafe { core::ptr::read_volatile((struct_start + offset) as *const u32) }
+                ) as u64;
                 offset += 4;
 
-                let name_off =
-                    unsafe { core::ptr::read_volatile((struct_start + offset) as *const u32) };
+                let name_off = u32::from_be(
+                    unsafe { core::ptr::read_volatile((struct_start + offset) as *const u32) }
+                ) as u64;
                 offset += 4;
 
-                let prop_name = read_string_at(strings_start + name_off as u64);
+                let prop_name = read_string_at(strings_start + name_off);
                 let prop_data_ptr = struct_start + offset;
-                let prop_data_end = prop_data_ptr + prop_len as u64;
+                let prop_data_end = prop_data_ptr + prop_len;
 
                 if depth > 0 {
                     let parent = current_node_name[(depth - 1) as usize];
@@ -141,8 +148,9 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
                     }
 
                     if prop_name == "serial-number" && prop_len == 8 {
-                        let serial =
-                            unsafe { core::ptr::read_volatile(prop_data_ptr as *const u64) };
+                        let serial = u64::from_be(
+                            unsafe { core::ptr::read_volatile(prop_data_ptr as *const u64) }
+                        );
                         unsafe {
                             SYSTEM_SERIAL = serial;
                         }
@@ -150,7 +158,9 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
                     }
 
                     if prop_name == "revision" && prop_len == 4 {
-                        let rev = unsafe { core::ptr::read_volatile(prop_data_ptr as *const u32) };
+                        let rev = u32::from_be(
+                            unsafe { core::ptr::read_volatile(prop_data_ptr as *const u32) }
+                        );
                         unsafe {
                             BOARD_REVISION = rev;
                         }
@@ -191,7 +201,7 @@ fn parse_mem_property(ptr: u64, len: u32) -> u64 {
     }
 }
 
-fn parse_reg_property(ptr: u64, _len: u32) -> (u64, u64) {
+fn parse_reg_property(ptr: u64, _len: u64) -> (u64, u64) {
     let addr = unsafe { core::ptr::read_volatile(ptr as *const u64) };
     let size = unsafe { core::ptr::read_volatile((ptr + 8) as *const u64) };
     (u64::from_be(addr), u64::from_be(size))
@@ -241,7 +251,8 @@ pub fn get_board_revision() -> u32 {
     unsafe { BOARD_REVISION }
 }
 
-/// FDT header structure
+/// FDT header — all fields are big-endian per the FDT spec.
+/// Use u32::from_be() when reading values.
 #[repr(C)]
 struct FdtHeader {
     magic: u32,
