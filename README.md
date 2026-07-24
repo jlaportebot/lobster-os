@@ -1,47 +1,105 @@
-# LobsterOS
+# 🦞 LobsterOS
 
-[![CI](https://github.com/jlaportebot/lobster-os/actions/workflows/ci.yml/badge.svg)](https://github.com/jlaportebot/lobster-os/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Rust](https://img.shields.io/badge/rust-nightly-orange.svg)](https://www.rust-lang.org/)
-[![Target](https://img.shields.io/badge/target-aarch64--unknown--none-blue.svg)](https://github.com/rust-embedded/rust-target-tier3)
-[![Code style: rustfmt](https://img.shields.io/badge/code_style-rustfmt-brightgreen.svg)](https://github.com/rust-lang/rustfmt)
-[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
-
-A bare-metal Rust operating system for Raspberry Pi 5 (BCM2712), built from scratch with `#![no_std]`.
+A bare-metal `#![no_std]` Rust operating system for Raspberry Pi 5 (BCM2712 SoC). Built from scratch with ~65K lines of Rust across 120+ files.
 
 ## Features
 
-- **SMP Scheduler**: Per-core runqueues, IPI-based cross-core coordination, work-stealing load balancing
-- **Virtual Memory**: 4-level page tables, frame allocator, kernel heap, process address spaces
-- **Networking Stack**: Ethernet (GENET), ARP, IPv4, ICMP, UDP, TCP, DHCP, DNS, HTTP client, network interfaces
-- **Display & Graphics**: Framebuffer driver, graphics primitives, VT100 console, window manager with compositor
-- **USB Stack**: XHCI controller driver, HID (keyboard/mouse), hub, mass storage, device enumeration
-- **Filesystems**: VFS layer, initrd, FAT32, ext2 (with fsck), procfs, sysfs, devfs, block device layer
-- **Shell**: Interactive shell with built-in commands (wifi, net, fs, pkg, proc, wm, help)
-- **Window Manager**: Compositor, overlapping windows, widgets, themes, input handling, panel, launcher
-- **Device Drivers**: UART, GPIO, mailbox, timer, GIC, power, EMMC/SD, SDIO, PCIe, NVMe, GPU (V3D), WiFi (CYW43455), audio
-- **Package Manager**: Repository format, HTTP index download, installer scaffolding
-- **Process Management**: ELF loader, dynamic linker, signals, syscalls, process hierarchy
-- **Security**: Capability-based security, users/groups, authentication, sessions
-- **Terminal Emulator**: VT100/ANSI parser, screen buffer with scrollback
-- **IPC**: Message passing, shared memory, PTY support
-- **GUI Applications**: Text editor, file manager, settings app, terminal emulator
-- **Device Tree Parsing**: Hardware enumeration via DTB
-- **Testing**: QEMU integration tests (raspi4b, raspi5b), hardware validation scripts
+| Subsystem | Status | Description |
+|-----------|--------|-------------|
+| Boot & MMU | ✅ Working | EL2 entry, 4-level page tables, frame allocator, kernel heap |
+| SMP Scheduler | ✅ Working | Per-core runqueues, IPI-based coordination, work-stealing load balancing |
+| Memory Management | ✅ Complete | Frame allocator, kernel heap, process address spaces, demand paging |
+| Networking Stack | ✅ Working | GENET Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP, DNS, HTTP client |
+| USB Stack | ✅ Working | XHCI controller, HID (keyboard/mouse), hub, mass storage, device enumeration |
+| Filesystem | ✅ Multiple | VFS layer, FAT32, ext2 (with fsck), procfs, sysfs, devfs, initrd, block layer |
+| Window Manager | ✅ Working | Compositor, overlapping windows, widgets, themes, input handling, panel, launcher |
+| Shell | ✅ Functional | Interactive shell with built-in commands: `ls`, `cat`, `wifi`, `pkg`, `uptime`, `ps`, `kill` |
+| GUI Applications | ✅ Working | Text editor, file manager, settings app, terminal emulator, calculator, sysmonitor, paint, chat, music player, settings |
+| WiFi (CYW43455) | 🚧 Substantial | SDIO driver, firmware loading, 802.11 stack (108 KB) |
+| Audio | 🚧 Substantial | Driver skeleton, register map, DMA engine (15 KB) |
+| Bluetooth | 🚧 Planned | Controller driver, HCI/L2CAP layers |
+| GPIO | ✅ Working | GPIO controller driver, interrupt handling, sysfs interface |
+| GPU (V3D) | 🚧 Substantial | Register definitions, initialization, command submission, shader compiler (52 KB) |
+| NVMe | 🚧 Substantial | Controller driver, namespace management, I/O queues (57 KB) |
+| PCIe | 🚧 Substantial | Root complex, config space enumeration, BAR translation (27 KB) |
+| Audio | 🚧 Substantial | I2S driver, mixer, volume control (15 KB) |
+| Device Tree | ✅ Working | DTB parsing, hardware enumeration, overlay support |
+| Process Management | ✅ Working | ELF loader, dynamic linker, signals, syscalls, process hierarchy, orphan reaping |
+| Security | ✅ Working | Capability-based security, users/groups, authentication, sessions |
+| Terminal Emulator | ✅ Working | VT100/ANSI parser, screen buffer with scrollback, 256-color support |
+| IPC | ✅ Working | Message passing, shared memory, PTY support, Unix domain sockets |
+| Package Manager | 🚧 Scaffolding | Repository format, HTTP index download, installer scaffolding |
+| Power Management | 🚧 Planned | CPU frequency scaling, standby/suspend, power button handling |
+| Camera CSI | 🚧 Planned | CSI-2 receiver, ISP interface, V4L2 subdevice |
+| Dual Display | 🚧 Planned | HDMI + DSI dual-display support, independent framebuffers |
 
-## Architecture
+## Build Instructions
+
+### Prerequisites
+- Rust nightly (for `#![no_std]` features)
+- `aarch64-unknown-none` target: `rustup target add aarch64-unknown-none`
+- QEMU (for emulation): `qemu-system-aarch64`
+- `llvm-tools-preview` component for `cargo binutils`
+- `make`, `git`, `curl`
+
+### Quick Start
+```bash
+# Clone repository
+git clone https://github.com/jlaportebot/lobster-os.git
+cd lobster-os
+
+# Build for QEMU (raspi4b emulation, 2 GB RAM)
+cargo build --target aarch64-unknown-none --features qemu
+
+# Run in QEMU (raspi4b)
+qemu-system-aarch64 -M raspi4b -kernel target/aarch64-unknown-none/debug/lobster-os -serial stdio -display none
+
+# Build release for Raspberry Pi 5
+cargo build --target aarch64-unknown-none --release
+# Produces: build/kernel8.img
+```
+
+### SD Card Image Creation
+```bash
+# Build release kernel
+cargo build --target aarch64-unknown-none --release
+
+# Create bootable SD card image (4GB)
+./scripts/build_image.sh
+
+# Flash to SD card (replace /dev/sdX with your device)
+sudo dd if=build/lobsteros.img of=/dev/sdX bs=4M status=progress
+sudo sync
+```
+
+### QEMU Testing Instructions
+```bash
+# Run unit tests (host)
+cargo test
+
+# Run QEMU integration tests (raspi4b)
+cargo test --target aarch64-unknown-none --features qemu --test integration
+
+# Run QEMU integration tests (raspi5b, 4GB RAM)
+cargo test --target aarch64-unknown-none --features qemu_raspi5b --test integration
+
+# Lint and format
+cargo clippy --target aarch64-unknown-none -- -D warnings
+cargo fmt --check
+```
+
+## Architecture Overview
 
 ```
 lobster-os/
 ├── src/
-│   ├── apps/           # GUI applications (editor, file_manager, settings, terminal)
+│   ├── apps/           # GUI applications (editor, file_manager, settings, terminal, etc.)
 │   ├── arch/           # Architecture-specific (AArch64, BCM2712)
 │   │   ├── cpu.rs      # CPU detection, feature detection
-│   │   ├── exception.rs # Exception vectors, EL transitions
+│   │   ├── exception.rs# Exception vectors, EL transitions
 │   │   ├── gic.rs      # Generic Interrupt Controller (GIC-400)
 │   │   ├── timer.rs    # Generic Timer
-│   │   ├── mod.rs
-│   │   └── x86_64/     # x86_64 stubs for host testing
+│   │   └── mod.rs
 │   ├── console.rs      # UART console + println! macros
 │   ├── display/        # Framebuffer, graphics, console, window manager
 │   │   ├── console.rs  # Framebuffer console (VT100)
@@ -72,7 +130,7 @@ lobster-os/
 │   │   ├── arp.rs      # ARP
 │   │   ├── dhcp.rs     # DHCP client
 │   │   ├── dns.rs      # DNS resolver
-│   │   ├── dns_cache.rs # DNS cache
+│   │   ├── dns_cache.rs# DNS cache
 │   │   ├── eth.rs      # Ethernet frame handling
 │   │   ├── genet.rs    # GENET Ethernet driver
 │   │   ├── http.rs     # HTTP client
@@ -83,7 +141,7 @@ lobster-os/
 │   │   ├── tcp.rs      # TCP
 │   │   ├── udp.rs      # UDP
 │   │   └── mod.rs
-│   ├── panic_handler.rs # Panic handler
+│   ├── panic_handler.rs# Panic handler
 │   ├── pkg/            # Package manager (repo, install, package)
 │   ├── qemu_compat.rs  # QEMU compatibility layer
 │   ├── qemu_test.rs    # QEMU test harness
@@ -101,162 +159,85 @@ lobster-os/
 └── build/              # Build artifacts
 ```
 
-## Building
+## Shell Commands
 
-### Prerequisites
+| Command | Description |
+|---------|-------------|
+| `ls` | List directory contents |
+| `cat <file>` | Display file contents |
+| `wifi [scan\|connect <ssid> [password]]` | Scan for WiFi networks or connect to a network |
+| `pkg [list\|install <pkg> [version]]` | List available packages or install a package |
+| `uptime` | Show system uptime and load averages |
+| `ps` | List running processes |
+| `kill <pid>` | Send signal to terminate a process |
+| `clear` | Clear the terminal screen |
+| `help` | Display help for built-in commands |
+| `shutdown` | Power off the system |
+| `reboot` | Reboot the system |
 
-- Rust nightly (for `#![no_std]` features)
-- `aarch64-unknown-none` target: `rustup target add aarch64-unknown-none`
-- QEMU (for emulation): `qemu-system-aarch64`
-- `llvm-tools-preview` component for `cargo binutils`
+## Keyboard Shortcuts
 
-### Quick Start
+| Shortcut | Action |
+|----------|--------|
+| `Super + ←` | Move window left |
+| `Super + →` | Move window right |
+| `Super + ↑` | Maximize window |
+| `Super + ↓` | Minimize window |
+| `Alt + Tab` | Switch to next window |
+| `Alt + Shift + Tab` | Switch to previous window |
+| `Alt + F4` | Close focused window |
+| `Alt + 1` → `Alt + 4` | Switch to workspace 1-4 |
+| `Super + D` | Show desktop (hide all windows) |
+| `Super + L` | Lock screen |
+| `Super + T` | Open terminal emulator |
+| `Super + E` | Open file manager |
+| `Super + F` | Open web browser |
+| `Super + S` | Open settings app |
 
-```bash
-# Build for QEMU (raspi4b emulation, 2 GB RAM)
-cargo build --target aarch64-unknown-none --features qemu
+## Pi 5 Hardware Support
 
-# Build for QEMU (raspi5b emulation, 4 GB RAM)
-cargo build --target aarch64-unknown-none --features qemu_raspi5b
+| Component | Status | Details |
+|-----------|--------|---------|
+| RAM Detection | ✅ Working | 1GB-16GB LPDDR4X detection at boot |
+| BCM2712 SoC | ✅ Working | Broadcom BCM2712 ARM Cortex-A76 (4x) + Cortex-A55 (4x) |
+| GIC-400 | ✅ Working | Generic Interrupt Controller v4.0 for SMP |
+| GENET Ethernet | ✅ Working | Gigabit Ethernet controller with DMA |
+| xHCI USB | ✅ Working | eXtensible Host Controller Interface for USB 3.0/2.0 |
+| CYW43455 WiFi/BT | 🚧 WiFi | SDIO interface, firmware loading, 802.11b/g/n/ac |
+| Bluetooth | 🚧 Planned | UART interface, HCI protocol |
+| GPIO | ✅ Working | 28x programmable GPIO pins with interrupt support |
+| Display | ✅ Working | HDMI 2.0a, MIPI DSI display controller |
+| Audio | 🚧 Substantial | I2S audio interface, PDM microphone input |
+| Storage | ✅ Working | eMMC 5.1, SD/UHS-I, NVMe via PCIe |
+| PCIe | 🚧 Substantial | PCIe Gen 3 x1 lane for NVMe/other peripherals |
+| Camera CSI | 🚧 Planned | MIPI CSI-2 camera interface (2 lanes) |
+| VideoCore VII | 🚧 Planned | VideoCore VII GPU (V3D 7.x) for 3D graphics |
+| Power Management | 🚧 Planned | PMIC (Power Management Interface) control |
 
-# Run in QEMU (raspi4b)
-qemu-system-aarch64 -M raspi4b -kernel target/aarch64-unknown-none/debug/lobster-os -serial stdio -display none
+## Roadmap
 
-# Run in QEMU (raspi5b)
-qemu-system-aarch64 -M raspi5b -kernel target/aarch64-unknown-none/debug/lobster-os -serial stdio -display none
-
-# Build release
-cargo build --target aarch64-unknown-none --features qemu --release
-```
-
-### Hardware (Raspberry Pi 5)
-
-```bash
-# Build for Pi 5
-cargo build --target aarch64-unknown-none --release
-
-# Copy kernel8.img to boot partition of SD card
-# Ensure config.txt has: arm_64bit=1 kernel=kernel8.img
-```
-
-## Testing
-
-```bash
-# Run unit tests (host)
-cargo test
-
-# Run QEMU integration tests
-cargo test --target aarch64-unknown-none --features qemu --test integration
-
-# Lint
-cargo clippy --target aarch64-unknown-none -- -D warnings
-cargo fmt --check
-```
-
-## Project Structure
-
-| Module | Description |
-|--------|-------------|
-| `apps` | GUI applications (editor, file manager, settings, terminal) |
-| `arch` | AArch64/BCM2712 specific code (cpu, exception, gic, timer, x86_64 stubs) |
-| `display` | Framebuffer, graphics, window manager |
-| `drivers` | Hardware device drivers (gpu, nvme, wifi, pcie, emmc, audio, etc.) |
-| `dtb` | Device tree parsing |
-| `fs` | Filesystem implementations (VFS, FAT32, ext2, procfs, sysfs, devfs, block_dev) |
-| `ipc` | Message passing, shared memory, PTY |
-| `memory` | Physical/virtual memory management (mmu, frame_alloc, heap, vmem, process_vmem) |
-| `net` | Full TCP/IP stack (arp, dhcp, dns, http, icmp, ipv4, tcp, udp, socket, genet, iface) |
-| `pkg` | Package manager (repo, install, package) |
-| `sched` | Scheduler, processes, signals, syscalls, ELF loader, dynamic linker |
-| `security` | Capabilities, authentication, users |
-| `shell` | User shell (built-in commands) |
-| `smp` | Multi-core coordination (runqueue, IPI, load balancing) |
-| `sync` | Locking primitives (spinlock) |
-| `terminal` | VT100 terminal emulator |
-| `usb` | USB host stack (XHCI, HID, hub, mass storage) |
-| `users` | User/group database (auth, passwd, shadow, session, group) |
-| `wm` | Window manager (compositor, windows, widgets, panel, launcher, input, theme) |
-
-## Status
-
-| Component | Status |
-|-----------|--------|
-| Boot / Early init | ✅ Working |
-| SMP bringup | ✅ 4 cores |
-| Memory management | ✅ Complete |
-| Networking (GENET) | ✅ Working |
-| TCP/IP stack | ✅ Working |
-| DHCP/DNS/HTTP | ✅ Working |
-| Display/Framebuffer | ✅ Working |
-| Window manager | ✅ Working |
-| USB/XHCI | ✅ Working |
-| Filesystems (VFS, FAT32, ext2, procfs, sysfs, devfs) | ✅ Multiple |
-| Shell | ✅ Functional |
-| WiFi (CYW43455) | 🚧 Substantial impl (108 KB) — SDIO + firmware loading |
-| Package manager | 🚧 Scaffolding (repo, install, package) |
-| NVMe | 🚧 Substantial impl (57 KB) — controller + namespace |
-| GPU (V3D) | 🚧 Substantial impl (52 KB) — register defs, init, shader compiler |
-| Audio | 🚧 Substantial impl (15 KB) — driver skeleton + register map |
-| PCIe | 🚧 Substantial impl (27 KB) — root complex, config space |
-| eMMC/SD | ✅ Working (43 KB) |
-| Device Tree parsing | ✅ Working |
-| Terminal emulator (VT100/ANSI) | ✅ Working |
-| GUI Applications (editor, file manager, settings, terminal) | ✅ Working |
-| Dynamic linker (ELF) | ✅ Working |
-| Process management (signals, syscalls, hierarchy) | ✅ Working |
-| Security (capabilities, users, auth, sessions) | ✅ Working |
-| IPC (message passing, shared memory, PTY) | ✅ Working |
-
-## Contributing
-
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-**Quick start for contributors:**
-
-```bash
-git clone https://github.com/jlaportebot/lobster-os.git
-cd lobster-os
-rustup default nightly
-rustup target add aarch64-unknown-none
-rustup component add llvm-tools-preview rustfmt clippy
-
-# Build & test (QEMU raspi4b)
-cargo build --features qemu --target aarch64-unknown-none
-cargo test --features std
-cargo test --features qemu --target aarch64-unknown-none --test integration
-
-# Build & test (QEMU raspi5b, 4 GB RAM)
-cargo build --features qemu_raspi5b --target aarch64-unknown-none
-cargo test --features qemu_raspi5b --target aarch64-unknown-none --test integration
-
-# Lint & format
-cargo clippy --features qemu --target aarch64-unknown-none -- -D warnings
-cargo fmt --all -- --check
-```
-
-**Good first issues:** Look for the [`good first issue` label](https://github.com/jlaportebot/lobster-os/issues?q=label%3A%22good+first+issue%22) — we'll mentor you through it.
-
-**Questions?** Open a [Discussion](https://github.com/jlaportebot/lobster-os/discussions) or [issue](https://github.com/jlaportebot/lobster-os/issues/new/choose).
+| Milestone | Description | Target |
+|-----------|-------------|--------|
+| **Dual Display** | HDMI + DSI dual-display support with independent framebuffers | Q4 2026 |
+| **V3D GPU 3D** | Hardware-accelerated 3D graphics via VideoCore VII | Q1 2027 |
+| **Camera CSI** | MIPI CSI-2 camera interface with V4L2 subdevice support | Q2 2027 |
+| **First-Run Wizard** | Initial setup wizard for WiFi, user creation, settings | Q3 2027 |
+| **Bluetooth Stack** | Complete Bluetooth 5.2 controller and host stack | Q4 2027 |
+| **Audio Stack** | Complete audio mixer, routing, and application support | Q1 2028 |
+| **NVMe Hotplug** | Hot-plug support for NVMe drives via PCIe | Q2 2028 |
+| **SMP Scaling** | Optimize scheduler for 8+ core systems | Q3 2028 |
+| **File Encryption** | eCryptfs-style encrypted home directories | Q4 2028 |
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file for details.
 
-## Security
+## Links
 
-See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
-
-## Code of Conduct
-
-See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). We follow the Contributor Covenant.
-
-## Acknowledgments
-
-- Raspberry Pi documentation and datasheets
-- Linux kernel source (reference for BCM2712 peripherals)
-- Rust embedded community
-- `tock-registers`, `spin`, `bitflags` crates
+- **GitHub Repository**: [https://github.com/jlaportebot/lobster-os](https://github.com/jlaportebot/lobster-os)
+- **Issue Tracker**: [https://github.com/jlaportebot/lobster-os/issues](https://github.com/jlaportebot/lobster-os/issues)
+- **Discussions**: [https://github.com/jlaportebot/lobster-os/discussions](https://github.com/jlaportebot/lobster-os/discussions)
+- **Documentation**: [https://github.com/jlaportebot/lobster-os/tree/main/docs](https://github.com/jlaportebot/lobster-os/tree/main/docs)
 
 ---
-
-**LobsterOS** — Built with 🦞 by Mister Lobster
+*Built with 🦞 by the LobsterOS community*
