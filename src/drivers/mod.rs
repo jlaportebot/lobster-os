@@ -17,6 +17,8 @@ pub mod pcie;
 #[cfg(target_arch = "aarch64")]
 pub mod power;
 #[cfg(target_arch = "aarch64")]
+pub mod power_mgmt;
+#[cfg(target_arch = "aarch64")]
 pub mod sdio;
 pub mod serial_input;
 pub mod uart;

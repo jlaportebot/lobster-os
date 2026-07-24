@@ -629,6 +629,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::println!("[apps] Initializing core applications...");
     crate::apps::init();
 
+    // 15a. Initialize power management
+    crate::println!("[power] Initializing power management...");
+    crate::drivers::power_mgmt::PowerManager::init();
+    crate::drivers::power_mgmt::PowerManager::init_watchdog(30); // 30s watchdog
+
     // 15b. Initialize system config and OS release
     crate::println!("[config] Loading system configuration...");
     let _sys_config = crate::config::SystemConfig::load_from_file();
