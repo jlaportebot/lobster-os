@@ -154,7 +154,14 @@ impl Calculator {
             &self.display[..]
         };
         let text_x = x + width - (display_text.len() as u32) * 10 - 12;
-        graphics::draw_text(&info, text_x, display_y + 20, display_text, 0x4EC9B0, 0x1E1E1E);
+        graphics::draw_text(
+            &info,
+            text_x,
+            display_y + 20,
+            display_text,
+            0x4EC9B0,
+            0x1E1E1E,
+        );
 
         // Buttons
         let btn_area_y = display_y + display_height;
@@ -180,7 +187,14 @@ impl Calculator {
                 };
 
                 graphics::draw_rect(&info, bx + 2, by + 2, btn_w - 4, btn_h - 4, color);
-                graphics::draw_text(&info, bx + btn_w / 2 - 5, by + btn_h / 2 - 8, label, 0xFFFFFF, color);
+                graphics::draw_text(
+                    &info,
+                    bx + btn_w / 2 - 5,
+                    by + btn_h / 2 - 8,
+                    label,
+                    0xFFFFFF,
+                    color,
+                );
 
                 idx += 1;
             }

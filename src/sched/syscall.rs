@@ -683,7 +683,7 @@ fn sys_rt_sigreturn() -> u64 {
 /// type 8: wait for new message (blocking)
 /// type 9: read next message (non-blocking)
 fn sys_klogctl(tp: i32, buf: u64, len: usize) -> u64 {
-    use crate::klog::{klog_read, klog_clear};
+    use crate::klog::{klog_clear, klog_read};
 
     match tp {
         2 | 3 => {

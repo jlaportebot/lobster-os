@@ -48,7 +48,8 @@ impl SystemConfig {
             keys: BTreeMap::new(),
         };
         boot.keys.insert("splash".into(), ConfigValue::Bool(true));
-        boot.keys.insert("autologin".into(), ConfigValue::Bool(false));
+        boot.keys
+            .insert("autologin".into(), ConfigValue::Bool(false));
         boot.keys.insert("timeout".into(), ConfigValue::Int(3));
         config.entries.insert("boot".into(), boot);
 
@@ -70,8 +71,12 @@ impl SystemConfig {
             keys: BTreeMap::new(),
         };
         audio.keys.insert("volume".into(), ConfigValue::Int(75));
-        audio.keys.insert("device".into(), ConfigValue::String("auto".into()));
-        audio.keys.insert("sample_rate".into(), ConfigValue::Int(48000));
+        audio
+            .keys
+            .insert("device".into(), ConfigValue::String("auto".into()));
+        audio
+            .keys
+            .insert("sample_rate".into(), ConfigValue::Int(48000));
         config.entries.insert("audio".into(), audio);
 
         // [network]
@@ -79,9 +84,13 @@ impl SystemConfig {
             name: "network".into(),
             keys: BTreeMap::new(),
         };
-        network.keys.insert("hostname".into(), ConfigValue::String("lobsteros".into()));
+        network
+            .keys
+            .insert("hostname".into(), ConfigValue::String("lobsteros".into()));
         network.keys.insert("dhcp".into(), ConfigValue::Bool(true));
-        network.keys.insert("wifi_auto".into(), ConfigValue::Bool(true));
+        network
+            .keys
+            .insert("wifi_auto".into(), ConfigValue::Bool(true));
         config.entries.insert("network".into(), network);
 
         // [power]
@@ -89,9 +98,15 @@ impl SystemConfig {
             name: "power".into(),
             keys: BTreeMap::new(),
         };
-        power.keys.insert("governor".into(), ConfigValue::String("ondemand".into()));
-        power.keys.insert("suspend_timeout".into(), ConfigValue::Int(0));
-        power.keys.insert("watchdog".into(), ConfigValue::Bool(true));
+        power
+            .keys
+            .insert("governor".into(), ConfigValue::String("ondemand".into()));
+        power
+            .keys
+            .insert("suspend_timeout".into(), ConfigValue::Int(0));
+        power
+            .keys
+            .insert("watchdog".into(), ConfigValue::Bool(true));
         config.entries.insert("power".into(), power);
 
         // [security]
@@ -99,8 +114,12 @@ impl SystemConfig {
             name: "security".into(),
             keys: BTreeMap::new(),
         };
-        security.keys.insert("firewall".into(), ConfigValue::Bool(false));
-        security.keys.insert("selinux".into(), ConfigValue::Bool(false));
+        security
+            .keys
+            .insert("firewall".into(), ConfigValue::Bool(false));
+        security
+            .keys
+            .insert("selinux".into(), ConfigValue::Bool(false));
         config.entries.insert("security".into(), security);
 
         // [desktop]
@@ -108,11 +127,21 @@ impl SystemConfig {
             name: "desktop".into(),
             keys: BTreeMap::new(),
         };
-        desktop.keys.insert("theme".into(), ConfigValue::String("dark".into()));
-        desktop.keys.insert("accent".into(), ConfigValue::String("#FF6B35".into()));
-        desktop.keys.insert("font_size".into(), ConfigValue::Int(14));
-        desktop.keys.insert("workspaces".into(), ConfigValue::Int(4));
-        desktop.keys.insert("snapping".into(), ConfigValue::Bool(true));
+        desktop
+            .keys
+            .insert("theme".into(), ConfigValue::String("dark".into()));
+        desktop
+            .keys
+            .insert("accent".into(), ConfigValue::String("#FF6B35".into()));
+        desktop
+            .keys
+            .insert("font_size".into(), ConfigValue::Int(14));
+        desktop
+            .keys
+            .insert("workspaces".into(), ConfigValue::Int(4));
+        desktop
+            .keys
+            .insert("snapping".into(), ConfigValue::Bool(true));
         config.entries.insert("desktop".into(), desktop);
 
         // [locale]
@@ -120,9 +149,15 @@ impl SystemConfig {
             name: "locale".into(),
             keys: BTreeMap::new(),
         };
-        locale.keys.insert("lang".into(), ConfigValue::String("en_US".into()));
-        locale.keys.insert("timezone".into(), ConfigValue::String("UTC".into()));
-        locale.keys.insert("keyboard".into(), ConfigValue::String("us".into()));
+        locale
+            .keys
+            .insert("lang".into(), ConfigValue::String("en_US".into()));
+        locale
+            .keys
+            .insert("timezone".into(), ConfigValue::String("UTC".into()));
+        locale
+            .keys
+            .insert("keyboard".into(), ConfigValue::String("us".into()));
         config.entries.insert("locale".into(), locale);
 
         config
@@ -181,9 +216,7 @@ impl SystemConfig {
                 match value {
                     ConfigValue::Bool(b) => out.push_str(&format!("{} = {}\n", key, b)),
                     ConfigValue::Int(i) => out.push_str(&format!("{} = {}\n", key, i)),
-                    ConfigValue::String(s) => {
-                        out.push_str(&format!("{} = \"{}\"\n", key, s))
-                    }
+                    ConfigValue::String(s) => out.push_str(&format!("{} = \"{}\"\n", key, s)),
                 }
             }
             out.push('\n');

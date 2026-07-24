@@ -90,10 +90,7 @@ impl PowerManager {
     pub fn set_frequency(idx: usize) {
         let idx = idx.min(FREQ_STEPS_MHZ.len() - 1);
         CURRENT_FREQ_IDX.store(idx as u32, Ordering::Relaxed);
-        println!(
-            "[power] CPU frequency set to: {}MHz",
-            FREQ_STEPS_MHZ[idx]
-        );
+        println!("[power] CPU frequency set to: {}MHz", FREQ_STEPS_MHZ[idx]);
     }
 
     /// Scale CPU frequency up (called by ondemand governor when load is high)
@@ -135,10 +132,7 @@ impl PowerManager {
             Self::set_frequency(0);
         } else if temp >= THROTTLE_TEMP {
             // Throttle: drop one frequency step
-            println!(
-                "[power] High temperature: {}mC — throttling down",
-                temp
-            );
+            println!("[power] High temperature: {}mC — throttling down", temp);
             Self::scale_down();
         }
     }
@@ -167,10 +161,7 @@ impl PowerManager {
 
     /// Initialize hardware watchdog (PMIC watchdog)
     pub fn init_watchdog(timeout_secs: u32) {
-        println!(
-            "[power] Watchdog initialized: {}s timeout",
-            timeout_secs
-        );
+        println!("[power] Watchdog initialized: {}s timeout", timeout_secs);
         // BCM2712 PMIC watchdog — write timeout to PMIC register
         // The Pi 5 uses a watchdog via the watchdog interface in the PMIC
         // This prevents hangs: if the OS doesn't ping the watchdog within

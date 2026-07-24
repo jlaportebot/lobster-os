@@ -1,7 +1,6 @@
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::collections::BTreeMap;
-use crate::println;
 
 /// Controller types for cgroups
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +38,12 @@ pub struct CgroupManager {
     cgroups: BTreeMap<(u64, u64), Cgroup>,
 }
 
+impl Default for CgroupManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CgroupManager {
     /// Create a new cgroup manager
     pub const fn new() -> Self {
@@ -50,7 +55,7 @@ impl CgroupManager {
     }
 
     /// Create a new hierarchy and return its ID
-    pub fn create_hierarchy(&mut self, controllers: Vec<ControllerType>) -> u64 {
+    pub fn create_hierarchy(&mut self, _controllers: Vec<ControllerType>) -> u64 {
         let hid = self.next_hierarchy_id;
         self.next_hierarchy_id += 1;
         self.next_cgroup_id.insert(hid, 1); // Start cgroup IDs at 1 for each hierarchy
@@ -58,8 +63,15 @@ impl CgroupManager {
     }
 
     /// Create a new cgroup in the given hierarchy
-    pub fn create_cgroup(&mut self, hierarchy: u64, path: String, controllers: Vec<ControllerType>) -> Result<u64, &'static str> {
-        let next_id = self.next_cgroup_id.get_mut(&hierarchy)
+    pub fn create_cgroup(
+        &mut self,
+        hierarchy: u64,
+        path: String,
+        controllers: Vec<ControllerType>,
+    ) -> Result<u64, &'static str> {
+        let next_id = self
+            .next_cgroup_id
+            .get_mut(&hierarchy)
             .ok_or("hierarchy does not exist")?;
         let cid = *next_id;
         *next_id += 1;
@@ -75,7 +87,7 @@ impl CgroupManager {
 
     /// Look up a cgroup by hierarchy and ID
     pub fn get(&self, hierarchy: u64, id: u64) -> Option<&Cgroup> {
-        group.get(&(hierarchy, id))
+        self.cgroups.get(&(hierarchy, id))
     }
 
     /// Remove a cgroup
@@ -98,15 +110,19 @@ pub fn init() {
 /// Create a new hierarchy with the given controllers
 pub fn create_hierarchy(controllers: Vec<ControllerType>) -> Result<u64, &'static str> {
     unsafe {
-        CGROUP_MANAGER
+        Ok(CGROUP_MANAGER
             .as_mut()
             .ok_or("cgroup manager not initialized")?
-            .create_hierarchy(controllers)
+            .create_hierarchy(controllers))
     }
 }
 
 /// Create a new cgroup in the given hierarchy
-pub fn create_cgroup(hierarchy: u64, path: String, controllers: Vec<ControllerType>) -> Result<u64, &'static str> {
+pub fn create_cgroup(
+    hierarchy: u64,
+    path: String,
+    controllers: Vec<ControllerType>,
+) -> Result<u64, &'static str> {
     unsafe {
         CGROUP_MANAGER
             .as_mut()

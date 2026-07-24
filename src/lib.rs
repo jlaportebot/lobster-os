@@ -72,6 +72,8 @@ pub mod terminal;
 #[cfg(target_arch = "aarch64")]
 pub mod apps;
 #[cfg(target_arch = "aarch64")]
+pub mod cgroups;
+#[cfg(target_arch = "aarch64")]
 pub mod display;
 #[cfg(target_arch = "aarch64")]
 pub mod drivers;
@@ -79,6 +81,8 @@ pub mod drivers;
 pub mod dtb;
 #[cfg(target_arch = "aarch64")]
 pub mod fs;
+#[cfg(target_arch = "aarch64")]
+pub mod namespaces;
 #[cfg(target_arch = "aarch64")]
 pub mod pkg;
 #[cfg(target_arch = "aarch64")]

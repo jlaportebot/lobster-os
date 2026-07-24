@@ -1,7 +1,5 @@
-use alloc::string::String;
-use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
-use crate::println;
+use alloc::string::String;
 
 /// Namespace types supported by LobsterOS
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +35,12 @@ pub struct NamespaceManager {
     next_id: u64,
     /// Map of namespace ID to namespace
     namespaces: BTreeMap<u64, Namespace>,
+}
+
+impl Default for NamespaceManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NamespaceManager {
@@ -82,10 +86,10 @@ pub fn init() {
 /// Create a new namespace
 pub fn create(ty: NamespaceType, name: Option<String>) -> Result<u64, &'static str> {
     unsafe {
-        NAMESPACE_MANAGER
+        Ok(NAMESPACE_MANAGER
             .as_mut()
             .ok_or("namespace manager not initialized")?
-            .create(ty, name)
+            .create(ty, name))
     }
 }
 
@@ -105,7 +109,11 @@ pub fn unshare(_flags: u32) -> Result<(), &'static str> {
 
 /// (Stub) This function is called by the scheduler when a task calls `setns(2)`.
 pub fn setns(_fd: u32, _nstype: u32) -> Result<(), &'static str> {
-    crate::println!("[namespaces] setns called with fd: {}, type: {}", _fd, _nstype);
+    crate::println!(
+        "[namespaces] setns called with fd: {}, type: {}",
+        _fd,
+        _nstype
+    );
     Ok(())
 }
 

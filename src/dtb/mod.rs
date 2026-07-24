@@ -90,9 +90,8 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
                 current_node_name[depth as usize] = name;
                 depth += 1;
 
-                in_memory_node = name.starts_with("memory@")
-                    || name == "memory"
-                    || name.starts_with("memory");
+                in_memory_node =
+                    name.starts_with("memory@") || name == "memory" || name.starts_with("memory");
             }
             FDT_END_NODE => {
                 depth = depth.saturating_sub(1);
