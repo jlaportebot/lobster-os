@@ -1,7 +1,8 @@
 //! Drivers module — hardware peripherals
-//! Drivers module — hardware peripherals
 
 pub mod audio;
+#[cfg(target_arch = "aarch64")]
+pub mod audio_mixer;
 #[cfg(target_arch = "aarch64")]
 pub mod emmc;
 #[cfg(target_arch = "aarch64")]

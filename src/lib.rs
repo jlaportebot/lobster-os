@@ -62,6 +62,8 @@ pub mod klog;
 pub mod memory;
 pub mod net;
 pub mod panic_handler;
+#[cfg(target_arch = "aarch64")]
+pub mod panic_recovery;
 pub mod qemu_test;
 pub mod security;
 pub mod sync;
