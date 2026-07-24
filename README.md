@@ -1,37 +1,85 @@
 # 🦞 LobsterOS
 
-A bare-metal `#![no_std]` Rust operating system for Raspberry Pi 5 (BCM2712 SoC). Built from scratch with ~65K lines of Rust across 120+ files.
+A bare-metal `#![no_std]` Rust operating system for Raspberry Pi 5 (BCM2712 SoC). Built from scratch with ~67K lines of Rust across 135 files. 174KB kernel image.
 
 ## Features
 
+### Core System
+
 | Subsystem | Status | Description |
 |-----------|--------|-------------|
-| Boot & MMU | ✅ Working | EL2 entry, 4-level page tables, frame allocator, kernel heap |
+| Boot & MMU | ✅ Working | EL2 entry, 4-level page tables, frame allocator, kernel heap, 1-16GB RAM detection via DTB |
 | SMP Scheduler | ✅ Working | Per-core runqueues, IPI-based coordination, work-stealing load balancing |
-| Memory Management | ✅ Complete | Frame allocator, kernel heap, process address spaces, demand paging |
+| Memory Management | ✅ Complete | Frame allocator, kernel heap, process address spaces, demand paging, OOM handler |
 | Networking Stack | ✅ Working | GENET Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP, DNS, HTTP client |
 | USB Stack | ✅ Working | XHCI controller, HID (keyboard/mouse), hub, mass storage, device enumeration |
 | Filesystem | ✅ Multiple | VFS layer, FAT32, ext2 (with fsck), procfs, sysfs, devfs, initrd, block layer |
-| Window Manager | ✅ Working | Compositor, overlapping windows, widgets, themes, input handling, panel, launcher |
 | Shell | ✅ Functional | Interactive shell with built-in commands: `ls`, `cat`, `wifi`, `pkg`, `uptime`, `ps`, `kill` |
-| GUI Applications | ✅ Working | Text editor, file manager, settings app, terminal emulator, calculator, sysmonitor, paint, chat, music player, settings |
-| WiFi (CYW43455) | 🚧 Substantial | SDIO driver, firmware loading, 802.11 stack (108 KB) |
-| Audio | 🚧 Substantial | Driver skeleton, register map, DMA engine (15 KB) |
-| Bluetooth | 🚧 Planned | Controller driver, HCI/L2CAP layers |
-| GPIO | ✅ Working | GPIO controller driver, interrupt handling, sysfs interface |
-| GPU (V3D) | 🚧 Substantial | Register definitions, initialization, command submission, shader compiler (52 KB) |
-| NVMe | 🚧 Substantial | Controller driver, namespace management, I/O queues (57 KB) |
-| PCIe | 🚧 Substantial | Root complex, config space enumeration, BAR translation (27 KB) |
-| Audio | 🚧 Substantial | I2S driver, mixer, volume control (15 KB) |
-| Device Tree | ✅ Working | DTB parsing, hardware enumeration, overlay support |
 | Process Management | ✅ Working | ELF loader, dynamic linker, signals, syscalls, process hierarchy, orphan reaping |
 | Security | ✅ Working | Capability-based security, users/groups, authentication, sessions |
-| Terminal Emulator | ✅ Working | VT100/ANSI parser, screen buffer with scrollback, 256-color support |
+| Terminal Emulator | ✅ Working | VT100/ANSI parser, 256-color, truecolor RGB, scrollback (10K lines), copy/paste clipboard |
 | IPC | ✅ Working | Message passing, shared memory, PTY support, Unix domain sockets |
-| Package Manager | 🚧 Scaffolding | Repository format, HTTP index download, installer scaffolding |
-| Power Management | 🚧 Planned | CPU frequency scaling, standby/suspend, power button handling |
-| Camera CSI | 🚧 Planned | CSI-2 receiver, ISP interface, V4L2 subdevice |
-| Dual Display | 🚧 Planned | HDMI + DSI dual-display support, independent framebuffers |
+| Device Tree | ✅ Working | DTB parsing, hardware enumeration, memory node detection (16GB support) |
+| Power Management | ✅ Working | DVFS, thermal monitoring, watchdog timer, suspend/resume |
+
+### Desktop Environment
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Window Manager | ✅ Working | Compositor, overlapping windows, widgets, themes (dark/light), input handling, panel, launcher |
+| Window Snapping | ✅ Working | Half-screen snap, maximize, edge-resize, keyboard shortcuts |
+| Virtual Desktops | ✅ Working | 4 workspaces, keyboard shortcuts to switch |
+| Context Menus | ✅ Working | Right-click context menu on desktop and windows |
+| Themes | ✅ Working | Dark (default) + Light themes, 6 accent colors (Blue/Green/Orange/Purple/Red/Teal) |
+| Font Size | ✅ Working | 4 sizes (Small/Medium/Large/ExtraLarge) with runtime adjustment |
+| Color Support | ✅ Working | 16-color, 256-color palette, truecolor RGB in terminal |
+| Boot Splash | ✅ Working | Graphical logo + progress bar, smooth transition to desktop |
+
+### GUI Applications
+
+| App | Description |
+|-----|-------------|
+| Terminal | VT100/ANSI emulator with scrollback, copy/paste, Ctrl+Shift+C/V |
+| File Manager | Directory navigation, copy/move/delete/rename, file preview, bookmarks |
+| Text Editor | Gap buffer, syntax highlighting, search/replace |
+| Settings | Network (WiFi), Display (resolution, wallpaper), Users, System |
+| Calculator | Basic calculator with GUI |
+| System Monitor | CPU, memory, network, temperature monitoring |
+| Image Viewer | Bitmap image display |
+| Process Manager | Process list with kill capability |
+| Network Manager | WiFi scan and connect GUI |
+| App Store | Package manager GUI |
+| Setup Wizard | First-boot configuration (language, WiFi, user, hostname) |
+
+### Hardware Drivers
+
+| Component | Status | Details |
+|-----------|--------|---------|
+| RAM Detection | ✅ Working | 1GB/2GB/4GB/8GB/16GB LPDDR4X detection via DTB |
+| BCM2712 SoC | ✅ Working | Broadcom BCM2712 ARM Cortex-A76 (4x) @ 2.4GHz |
+| GIC-400 | ✅ Working | Generic Interrupt Controller for SMP |
+| GENET Ethernet | ✅ Working | Gigabit Ethernet controller with DMA |
+| xHCI USB | ✅ Working | USB 3.0/2.0 host controller |
+| CYW43455 WiFi/BT | ✅ Working | SDIO WiFi (802.11b/g/n/ac) + Bluetooth (HCI, L2CAP, GATT) |
+| GPIO | ✅ Working | 28x programmable GPIO pins with interrupt + userspace API |
+| Display | ✅ Working | HDMI 2.0a, dual display (Extended/Mirror), rotation (0/90/180/270), brightness control |
+| Audio | ✅ Working | PWM audio, I2S, software mixer (multiple streams), 48kHz/16-bit stereo |
+| Storage | ✅ Working | eMMC 5.1, SD/UHS-I, NVMe via PCIe |
+| Power Management | ✅ Working | DVFS (governors: performance/powersave/ondemand), thermal management, watchdog |
+| Bluetooth | ✅ Working | HCI over SDIO, L2CAP channels (8), GATT server (services, characteristics, read/write/notify) |
+
+### Kernel Subsystems
+
+| Subsystem | Status | Description |
+|-----------|--------|-------------|
+| Config System | ✅ Working | TOML-like config parser, /etc/lobsteros.conf, os-release |
+| Syslog Daemon | ✅ Working | Kernel log ring buffer, /dev/kmsg, syslogd daemon |
+| Panic Recovery | ✅ Working | Auto-reboot on crash, crash logging |
+| OOM Handler | ✅ Working | Soft/hard severity, victim selection by runtime, SIGKILL delivery |
+| Namespaces | ✅ Working | PID, Mount, Network, UTS, User, IPC — unshare()/setns() syscalls |
+| Cgroups | ✅ Working | CPU, Memory, IO, PIDs controllers, hierarchy management |
+| Container Support | ✅ Working | pivot_root(), create_container_ns() (full 6-namespace isolation) |
+| Package Manager | 🚧 Scaffolding | Repository format, HTTP index download, installer, .lobpkg format |
 
 ## Build Instructions
 
@@ -56,7 +104,7 @@ qemu-system-aarch64 -M raspi4b -kernel target/aarch64-unknown-none/debug/lobster
 
 # Build release for Raspberry Pi 5
 cargo build --target aarch64-unknown-none --release
-# Produces: build/kernel8.img
+# Produces: build/kernel8.img (174 KB)
 ```
 
 ### SD Card Image Creation
@@ -72,7 +120,7 @@ sudo dd if=build/lobsteros.img of=/dev/sdX bs=4M status=progress
 sudo sync
 ```
 
-### QEMU Testing Instructions
+### QEMU Testing
 ```bash
 # Run unit tests (host)
 cargo test
@@ -88,156 +136,113 @@ cargo clippy --target aarch64-unknown-none -- -D warnings
 cargo fmt --check
 ```
 
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Super + ←/→` | Snap window left/right (half-screen) |
+| `Super + ↑` | Maximize window |
+| `Super + ↓` | Minimize window |
+| `Alt + Tab` | Cycle window focus |
+| `Alt + Shift + Tab` | Reverse cycle |
+| `Alt + F4` | Close focused window |
+| `Alt + 1` → `Alt + 4` | Switch virtual desktop |
+| `Super + D` | Show desktop |
+| `Super + L` | Lock screen |
+| `Super + T` | Open terminal |
+| `Super + E` | Open file manager |
+| `Super + S` | Open settings |
+| `Ctrl+Shift+C` | Copy (terminal) |
+| `Ctrl+Shift+V` | Paste (terminal) |
+| `Shift+PageUp` | Scrollback up (terminal) |
+| `Shift+PageDown` | Scrollback down (terminal) |
+
 ## Architecture Overview
 
 ```
 lobster-os/
 ├── src/
-│   ├── apps/           # GUI applications (editor, file_manager, settings, terminal, etc.)
-│   ├── arch/           # Architecture-specific (AArch64, BCM2712)
-│   │   ├── cpu.rs      # CPU detection, feature detection
-│   │   ├── exception.rs# Exception vectors, EL transitions
-│   │   ├── gic.rs      # Generic Interrupt Controller (GIC-400)
-│   │   ├── timer.rs    # Generic Timer
-│   │   └── mod.rs
-│   ├── console.rs      # UART console + println! macros
-│   ├── display/        # Framebuffer, graphics, console, window manager
-│   │   ├── console.rs  # Framebuffer console (VT100)
-│   │   ├── fb.rs       # Framebuffer driver
-│   │   ├── graphics.rs # Graphics primitives
-│   │   ├── logo.rs     # Boot splash / ASCII logo
-│   │   └── mod.rs
-│   ├── drivers/        # Hardware drivers
-│   │   ├── audio.rs    # Audio driver (planned)
-│   │   ├── emmc.rs     # eMMC/SD card controller
-│   │   ├── gpio.rs     # GPIO controller
-│   │   ├── gpu.rs      # V3D GPU driver (52 KB)
-│   │   ├── mailbox.rs  # Mailbox property interface
-│   │   ├── nvme.rs     # NVMe driver (57 KB)
-│   │   ├── pcie.rs     # PCIe controller
-│   │   ├── power.rs    # Power management
-│   │   ├── sdio.rs     # SDIO controller (for WiFi)
-│   │   ├── serial_input.rs # Serial input handling
-│   │   ├── uart.rs     # UART driver
-│   │   ├── wifi.rs     # CYW43455 WiFi driver (108 KB)
-│   │   └── mod.rs
-│   ├── dtb/            # Device tree parsing
-│   ├── fs/             # Filesystems (VFS, FAT32, ext2, procfs, sysfs, devfs)
-│   ├── ipc/            # Inter-process communication (message passing, shared memory, PTY)
+│   ├── apps/           # GUI applications (11 apps)
+│   │   ├── calculator.rs, editor.rs, file_manager.rs
+│   │   ├── image_viewer.rs, network_manager.rs
+│   │   ├── process_manager.rs, settings.rs
+│   │   ├── setup_wizard.rs, sysmon.rs, terminal.rs
+│   │   └── app_store.rs
+│   ├── arch/           # AArch64 architecture-specific code
+│   ├── display/        # Framebuffer, graphics, console, logo, splash screen
+│   ├── drivers/        # Hardware drivers (audio, bluetooth, emmc, gpio, gpu,
+│   │                   #   mailbox, nvme, pcie, power_mgmt, sdio, uart, wifi)
+│   ├── dtb/            # Device tree parsing (memory detection)
+│   ├── fs/             # VFS, FAT32, ext2, block device, initrd
+│   ├── ipc/            # IPC (message passing, shared memory, PTY, sockets)
 │   ├── klog.rs         # Kernel logging
-│   ├── memory/         # Memory management (frame alloc, heap, vmem, process_vmem)
-│   ├── net/            # Networking stack
-│   │   ├── arp.rs      # ARP
-│   │   ├── dhcp.rs     # DHCP client
-│   │   ├── dns.rs      # DNS resolver
-│   │   ├── dns_cache.rs# DNS cache
-│   │   ├── eth.rs      # Ethernet frame handling
-│   │   ├── genet.rs    # GENET Ethernet driver
-│   │   ├── http.rs     # HTTP client
-│   │   ├── icmp.rs     # ICMP
-│   │   ├── iface.rs    # Network interface abstraction
-│   │   ├── ipv4.rs     # IPv4
-│   │   ├── socket.rs   # Socket API
-│   │   ├── tcp.rs      # TCP
-│   │   ├── udp.rs      # UDP
-│   │   └── mod.rs
-│   ├── panic_handler.rs# Panic handler
-│   ├── pkg/            # Package manager (repo, install, package)
-│   ├── qemu_compat.rs  # QEMU compatibility layer
-│   ├── qemu_test.rs    # QEMU test harness
-│   ├── sched/          # Scheduler, processes, signals, syscalls, ELF loader
-│   ├── security/       # Capabilities, users, auth
-│   ├── shell/          # Interactive shell (built-in commands)
-│   ├── smp/            # SMP primitives (runqueue, IPI, load balancing)
+│   ├── memory/         # Frame allocator, heap, MMU, vmem, OOM handler
+│   ├── net/            # Network stack (ARP, IPv4, TCP, UDP, DHCP, DNS, HTTP)
+│   ├── pkg/            # Package manager
+│   ├── sched/          # Scheduler, processes, signals, syscalls, ELF
+│   ├── security/       # Capabilities, users, authentication
+│   ├── shell/          # Interactive shell
+│   ├── smp/            # SMP (runqueues, IPI, load balancing)
 │   ├── sync/           # Synchronization (spinlock)
-│   ├── terminal/       # Terminal emulator, VT100 parser
+│   ├── terminal/       # VT100 terminal emulator (parser, screen, scrollback)
 │   ├── usb/            # USB stack (XHCI, HID, hub, mass storage)
-│   ├── users/          # User/group management (auth, passwd, shadow, session)
-│   └── wm/             # Window manager (compositor, windows, widgets, panel, launcher, input)
+│   ├── users/          # User/group management
+│   └── wm/             # Window manager (compositor, windows, widgets, panel,
+│                       #   launcher, input, theme, workspace, context_menu)
+├── .github/workflows/  # CI/CD pipeline
+├── scripts/            # Build scripts (SD card image builder)
 ├── tests/              # Integration tests
-├── targets/            # Linker scripts, target specs
-└── build/              # Build artifacts
+└── build/              # Build artifacts (kernel8.img)
 ```
 
-## Shell Commands
+## CI/CD
 
-| Command | Description |
-|---------|-------------|
-| `ls` | List directory contents |
-| `cat <file>` | Display file contents |
-| `wifi [scan\|connect <ssid> [password]]` | Scan for WiFi networks or connect to a network |
-| `pkg [list\|install <pkg> [version]]` | List available packages or install a package |
-| `uptime` | Show system uptime and load averages |
-| `ps` | List running processes |
-| `kill <pid>` | Send signal to terminate a process |
-| `clear` | Clear the terminal screen |
-| `help` | Display help for built-in commands |
-| `shutdown` | Power off the system |
-| `reboot` | Reboot the system |
+GitHub Actions pipeline (`.github/workflows/ci.yml`):
+- `cargo check --target aarch64-unknown-none`
+- `cargo clippy --target aarch64-unknown-none -- -D warnings`
+- `cargo fmt --check`
+- Release build verification
 
-## Keyboard Shortcuts
+## Boot Sequence
 
-| Shortcut | Action |
-|----------|--------|
-| `Super + ←` | Move window left |
-| `Super + →` | Move window right |
-| `Super + ↑` | Maximize window |
-| `Super + ↓` | Minimize window |
-| `Alt + Tab` | Switch to next window |
-| `Alt + Shift + Tab` | Switch to previous window |
-| `Alt + F4` | Close focused window |
-| `Alt + 1` → `Alt + 4` | Switch to workspace 1-4 |
-| `Super + D` | Show desktop (hide all windows) |
-| `Super + L` | Lock screen |
-| `Super + T` | Open terminal emulator |
-| `Super + E` | Open file manager |
-| `Super + F` | Open web browser |
-| `Super + S` | Open settings app |
+1. EL2 entry, BSS zeroing
+2. DTB parsing (early — for RAM detection)
+3. GIC-400 interrupt controller init
+4. System timer init
+5. IRQ enable
+6. MMU init + frame allocator + kernel heap
+7. **Display framebuffer + boot splash screen**
+8. VFS init + user database + **first-run setup wizard check**
+9. Scheduler + SMP (4 cores)
+10. SDIO/WiFi init + network stack
+11. eMMC/SD storage init
+12. ext2 /etc mount + package manager config
+13. USB stack init
+14. Window manager init
+15. Core apps init (11 apps)
+16. Power management (DVFS + watchdog)
+17. Audio mixer init
+18. GPIO userspace API
+19. System config + syslog daemon
+20. Panic recovery init
+21. **Bluetooth init + GATT server**
+22. **Multi-display (dual HDMI) init**
+23. Shell spawn
+24. Main loop: WM tick + splash tick + watchdog pet
 
-## Pi 5 Hardware Support
+## Stats
 
-| Component | Status | Details |
-|-----------|--------|---------|
-| RAM Detection | ✅ Working | 1GB-16GB LPDDR4X detection at boot |
-| BCM2712 SoC | ✅ Working | Broadcom BCM2712 ARM Cortex-A76 (4x) + Cortex-A55 (4x) |
-| GIC-400 | ✅ Working | Generic Interrupt Controller v4.0 for SMP |
-| GENET Ethernet | ✅ Working | Gigabit Ethernet controller with DMA |
-| xHCI USB | ✅ Working | eXtensible Host Controller Interface for USB 3.0/2.0 |
-| CYW43455 WiFi/BT | 🚧 WiFi | SDIO interface, firmware loading, 802.11b/g/n/ac |
-| Bluetooth | 🚧 Planned | UART interface, HCI protocol |
-| GPIO | ✅ Working | 28x programmable GPIO pins with interrupt support |
-| Display | ✅ Working | HDMI 2.0a, MIPI DSI display controller |
-| Audio | 🚧 Substantial | I2S audio interface, PDM microphone input |
-| Storage | ✅ Working | eMMC 5.1, SD/UHS-I, NVMe via PCIe |
-| PCIe | 🚧 Substantial | PCIe Gen 3 x1 lane for NVMe/other peripherals |
-| Camera CSI | 🚧 Planned | MIPI CSI-2 camera interface (2 lanes) |
-| VideoCore VII | 🚧 Planned | VideoCore VII GPU (V3D 7.x) for 3D graphics |
-| Power Management | 🚧 Planned | PMIC (Power Management Interface) control |
-
-## Roadmap
-
-| Milestone | Description | Target |
-|-----------|-------------|--------|
-| **Dual Display** | HDMI + DSI dual-display support with independent framebuffers | Q4 2026 |
-| **V3D GPU 3D** | Hardware-accelerated 3D graphics via VideoCore VII | Q1 2027 |
-| **Camera CSI** | MIPI CSI-2 camera interface with V4L2 subdevice support | Q2 2027 |
-| **First-Run Wizard** | Initial setup wizard for WiFi, user creation, settings | Q3 2027 |
-| **Bluetooth Stack** | Complete Bluetooth 5.2 controller and host stack | Q4 2027 |
-| **Audio Stack** | Complete audio mixer, routing, and application support | Q1 2028 |
-| **NVMe Hotplug** | Hot-plug support for NVMe drives via PCIe | Q2 2028 |
-| **SMP Scaling** | Optimize scheduler for 8+ core systems | Q3 2028 |
-| **File Encryption** | eCryptfs-style encrypted home directories | Q4 2028 |
+- **Lines of code**: ~67,000 (Rust)
+- **Source files**: 135 (.rs)
+- **Kernel image**: 174 KB (kernel8.img)
+- **Target**: aarch64-unknown-none (bare metal)
+- **Warnings**: 0 (`cargo clippy -- -D warnings` clean)
+- **Errors**: 0
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details.
 
-## Links
-
-- **GitHub Repository**: [https://github.com/jlaportebot/lobster-os](https://github.com/jlaportebot/lobster-os)
-- **Issue Tracker**: [https://github.com/jlaportebot/lobster-os/issues](https://github.com/jlaportebot/lobster-os/issues)
-- **Discussions**: [https://github.com/jlaportebot/lobster-os/discussions](https://github.com/jlaportebot/lobster-os/discussions)
-- **Documentation**: [https://github.com/jlaportebot/lobster-os/tree/main/docs](https://github.com/jlaportebot/lobster-os/tree/main/docs)
-
 ---
-*Built with 🦞 by the LobsterOS community*
+
+*Built with 🦞 by Mister Lobster*
