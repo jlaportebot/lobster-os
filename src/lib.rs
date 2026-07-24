@@ -514,6 +514,10 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::display::logo::draw_splash(info);
         crate::display::logo::draw_ascii_logo();
         crate::println!("[display] Framebuffer + console ready");
+
+        // Initialize boot splash screen
+        crate::display::splash::init();
+        crate::display::splash::update_progress(1, "Display initialized");
     } else {
         crate::println!("[display] No framebuffer available (UART only)");
         crate::display::logo::draw_ascii_logo();
@@ -523,11 +527,16 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::println!("[fs] Initializing VFS...");
     crate::fs::vfs::init();
     crate::println!("[fs] VFS initialized");
+    crate::display::splash::update_progress(2, "Filesystem ready");
 
     // 8b. Initialize user database (create default users if missing)
     crate::println!("[users] Initializing user database...");
     crate::users::init();
     crate::println!("[users] User database initialized");
+    crate::display::splash::update_progress(3, "Users initialized");
+
+    // 8c. Check for first-run setup
+    crate::apps::setup_wizard::init();
 
     // 9. DTB already parsed early (step 2b), no need to re-parse
 
@@ -539,6 +548,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::println!("[smp] Starting secondary cores...");
     crate::smp::init_core0();
     crate::smp::boot_secondary_cores();
+    crate::display::splash::update_progress(4, "SMP initialized");
 
     // 12. Initialize SDIO bus (for WiFi) - skip on QEMU
     #[cfg(not(feature = "qemu"))]
@@ -627,14 +637,17 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     // 20. Initialize USB
     crate::println!("[usb] Initializing USB stack...");
     crate::usb::init();
+    crate::display::splash::update_progress(5, "USB initialized");
 
     // 14. Initialize window manager
     crate::println!("[wm] Initializing window manager...");
     crate::wm::init();
+    crate::display::splash::update_progress(6, "Window manager ready");
 
     // 15. Initialize core apps
     crate::println!("[apps] Initializing core applications...");
     crate::apps::init();
+    crate::display::splash::update_progress(7, "Apps initialized");
 
     // 15a. Initialize power management
     crate::println!("[power] Initializing power management...");
@@ -666,6 +679,12 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     // 15e. Initialize Bluetooth
     crate::println!("[bt] Initializing Bluetooth...");
     crate::drivers::bluetooth::init();
+    crate::drivers::bluetooth::gatt_init();
+    crate::display::splash::update_progress(8, "Bluetooth + GATT ready");
+
+    // 15f. Initialize multi-display support (dual HDMI)
+    crate::drivers::gpu::init_multi_display();
+    crate::display::splash::update_progress(9, "Display configured");
 
     // 16. Spawn shell on UART for serial console
     crate::println!("[boot] Spawning shell on UART...");
@@ -674,9 +693,25 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     // 17. Run kernel main loop — drive WM and scheduler
     crate::println!("[boot] LobsterOS v0.2.0 initialization complete!");
     crate::println!("[boot] Entering main loop (WM tick + WFE)...");
+
+    // Final splash progress — boot is done
+    crate::display::splash::update_progress(10, "Boot complete");
+
+    let mut watchdog_counter: u64 = 0;
     loop {
         // Drive window manager
         crate::wm::tick();
+
+        // Drive splash screen (handles transition to desktop)
+        crate::display::splash::tick();
+
+        // Pet the watchdog every ~100 iterations (prevents hangs)
+        watchdog_counter += 1;
+        if watchdog_counter >= 100 {
+            crate::drivers::power_mgmt::PowerManager::pet_watchdog();
+            watchdog_counter = 0;
+        }
+
         // Wait for interrupt
         crate::arch::cpu::wfe();
     }
