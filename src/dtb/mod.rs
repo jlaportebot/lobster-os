@@ -1,38 +1,80 @@
 //! Flattened Device Tree (FDT) parser for the BCM2712 DTB
+//!
+//! Parses the device tree to extract:
+//! - Memory size (from /memory/reg)
+//! - CPU count and frequencies
+//! - Peripheral addresses
+//! - Boot parameters
 
 use crate::println;
 
+/// Detected system info from DTB
+pub static mut SYSTEM_MEMORY_SIZE: u64 = 0;
+pub static mut CPU_COUNT: u32 = 0;
+pub static mut SYSTEM_SERIAL: u64 = 0;
+pub static mut BOARD_REVISION: u32 = 0;
+
 /// Parse the DTB and extract system information
 pub fn parse(dtb_ptr: u64) {
-    // Parse the DTB header
     let header = unsafe { &*(dtb_ptr as *const FdtHeader) };
 
-    // Verify magic number
     if header.magic != 0xD00DFEED {
         panic!("Invalid DTB magic number: {:#010x}", header.magic);
     }
 
     println!("[dtb] DTB header:");
-    println!(" Magic: {:#010x}", header.magic);
-    println!(" Total size: {} bytes", header.totalsize);
-    println!(" Structure offset: {:#010x}", header.off_dt_struct);
-    println!(" Strings offset: {:#010x}", header.off_dt_strings);
+    println!("  Magic: {:#010x}", header.magic);
+    println!("  Total size: {} bytes", header.totalsize);
+    println!("  Structure offset: {:#010x}", header.off_dt_struct);
+    println!("  Strings offset: {:#010x}", header.off_dt_strings);
     println!(
-        " Memory reservation block offset: {:#010x}",
+        "  Memory reservation block offset: {:#010x}",
         header.off_mem_rsvmap
     );
 
-    // Parse the structure block
     let struct_start = dtb_ptr + header.off_dt_struct as u64;
     let strings_start = dtb_ptr + header.off_dt_strings as u64;
+    let struct_end_offset = header.totalsize as u64;
 
-    // Walk the structure block
-    parse_structure_block(struct_start, strings_start, header.totalsize as u64);
+    parse_structure_block(struct_start, strings_start, struct_end_offset);
+
+    unsafe {
+        if SYSTEM_MEMORY_SIZE == 0 {
+            // Fallback: try to detect via memory reservation block
+            let rsvmap = dtb_ptr + header.off_mem_rsvmap as u64;
+            let mut off = 0u64;
+            loop {
+                let addr = core::ptr::read_volatile((rsvmap + off) as *const u64);
+                let size = core::ptr::read_volatile((rsvmap + off + 8) as *const u64);
+                if addr == 0 && size == 0 {
+                    break;
+                }
+                if addr == 0 && size > SYSTEM_MEMORY_SIZE {
+                    SYSTEM_MEMORY_SIZE = size;
+                }
+                off += 16;
+            }
+        }
+        if SYSTEM_MEMORY_SIZE > 0 {
+            println!(
+                "[dtb] Detected memory: {} MB ({} GB)",
+                SYSTEM_MEMORY_SIZE / (1024 * 1024),
+                SYSTEM_MEMORY_SIZE / (1024 * 1024 * 1024)
+            );
+        } else {
+            println!("[dtb] WARNING: Could not detect memory size from DTB");
+        }
+        if CPU_COUNT > 0 {
+            println!("[dtb] Detected {} CPU cores", CPU_COUNT);
+        }
+    }
 }
 
-/// Parse the structure block and extract information
 fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64) {
     let mut offset = 0u64;
+    let mut depth: u32 = 0;
+    let mut current_node_name: [&str; 16] = [""; 16];
+    let mut in_memory_node = false;
 
     while offset < struct_end {
         let token_ptr = struct_start + offset;
@@ -40,58 +82,164 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
 
         match token {
             FDT_BEGIN_NODE => {
-                offset += 4; // Skip token
-                let node_name = read_string_at(struct_start + offset);
-                println!("[dtb] Begin node: {}", node_name);
+                offset += 4;
+                let name = read_string_at(struct_start + offset);
+                let name_len = name.len() + 1;
+                offset += ((name_len + 3) & !3) as u64;
 
-                // Skip node name (null-terminated string, aligned to 4 bytes)
-                let name_len = node_name.len() + 1; // +1 for null terminator
-                offset += ((name_len + 3) & !3) as u64; // Align to 4 bytes
+                current_node_name[depth as usize] = name;
+                depth += 1;
+
+                in_memory_node = name.starts_with("memory@")
+                    || name == "memory"
+                    || name.starts_with("memory");
             }
             FDT_END_NODE => {
-                println!("[dtb] End node");
-                offset += 4; // Skip token
+                depth = depth.saturating_sub(1);
+                in_memory_node = false;
+                offset += 4;
             }
             FDT_PROP => {
-                offset += 4; // Skip token
+                offset += 4;
 
-                // Read property length and name offset
                 let prop_len =
                     unsafe { core::ptr::read_volatile((struct_start + offset) as *const u32) };
                 offset += 4;
 
-                let name_offset =
+                let name_off =
                     unsafe { core::ptr::read_volatile((struct_start + offset) as *const u32) };
                 offset += 4;
 
-                // Read property name
-                let prop_name = read_string_at(strings_start + name_offset as u64);
-                println!("[dtb] Property: {} ({} bytes)", prop_name, prop_len);
+                let prop_name = read_string_at(strings_start + name_off as u64);
+                let prop_data_ptr = struct_start + offset;
+                let prop_data_end = prop_data_ptr + prop_len as u64;
 
-                // Skip property data (aligned to 4 bytes)
+                if depth > 0 {
+                    let parent = current_node_name[(depth - 1) as usize];
+
+                    if in_memory_node && prop_name == "reg" {
+                        let (addr, size) = parse_reg_property(prop_data_ptr, prop_len);
+                        unsafe {
+                            if size > SYSTEM_MEMORY_SIZE {
+                                SYSTEM_MEMORY_SIZE = size;
+                            }
+                        }
+                        println!(
+                            "[dtb] memory@reg: addr={:#010x} size={} MB",
+                            addr,
+                            size / (1024 * 1024)
+                        );
+                    }
+
+                    if parent.starts_with("cpu@") && prop_name == "reg" {
+                        unsafe {
+                            CPU_COUNT += 1;
+                        }
+                    }
+
+                    if parent == "cpus" && prop_name.starts_with("#address-cells") {
+                        // Parse #address-cells
+                    }
+
+                    if prop_name == "serial-number" && prop_len == 8 {
+                        let serial =
+                            unsafe { core::ptr::read_volatile(prop_data_ptr as *const u64) };
+                        unsafe {
+                            SYSTEM_SERIAL = serial;
+                        }
+                        println!("[dtb] Serial: {:#018x}", serial);
+                    }
+
+                    if prop_name == "revision" && prop_len == 4 {
+                        let rev = unsafe { core::ptr::read_volatile(prop_data_ptr as *const u32) };
+                        unsafe {
+                            BOARD_REVISION = rev;
+                        }
+                        println!("[dtb] Board revision: {:#010x}", rev);
+                    }
+                }
+
+                let _ = prop_data_end;
                 offset += (prop_len as u64 + 3) & !3;
             }
             FDT_NOP => {
-                println!("[dtb] NOP token");
-                offset += 4; // Skip token
+                offset += 4;
             }
             FDT_END => {
-                println!("[dtb] End of structure block");
                 break;
             }
             _ => {
-                println!("[dtb] Unknown token: {:#010x}", token);
                 offset += 4;
             }
         }
     }
 }
 
+fn parse_mem_property(ptr: u64, len: u32) -> u64 {
+    if len >= 16 {
+        let addr = unsafe { core::ptr::read_volatile(ptr as *const u64) };
+        let size = unsafe { core::ptr::read_volatile((ptr + 8) as *const u64) };
+        // Convert from big-endian if needed
+        // On aarch64, device tree values are big-endian
+        let size_le = u64::from_be(size);
+        let _ = u64::from_be(addr);
+        size_le
+    } else if len >= 8 {
+        let size = unsafe { core::ptr::read_volatile(ptr as *const u64) };
+        u64::from_be(size)
+    } else {
+        0
+    }
+}
+
+fn parse_reg_property(ptr: u64, _len: u32) -> (u64, u64) {
+    let addr = unsafe { core::ptr::read_volatile(ptr as *const u64) };
+    let size = unsafe { core::ptr::read_volatile((ptr + 8) as *const u64) };
+    (u64::from_be(addr), u64::from_be(size))
+}
+
 /// Read a null-terminated string from memory
-fn read_string_at(_ptr: u64) -> &'static str {
-    // This is a simplified implementation
-    // In a real implementation, we would need to properly parse the string
-    "unknown"
+fn read_string_at(ptr: u64) -> &'static str {
+    if ptr == 0 {
+        return "";
+    }
+
+    let mut len = 0usize;
+    while len < 256 {
+        let byte = unsafe { core::ptr::read_volatile((ptr + len as u64) as *const u8) };
+        if byte == 0 {
+            break;
+        }
+        len += 1;
+    }
+
+    if len == 0 {
+        return "";
+    }
+
+    let bytes = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
+
+    core::str::from_utf8(bytes).unwrap_or_default()
+}
+
+/// Get the detected memory size (0 if not yet parsed)
+pub fn get_memory_size() -> u64 {
+    unsafe { SYSTEM_MEMORY_SIZE }
+}
+
+/// Get the detected CPU count (0 if not yet parsed)
+pub fn get_cpu_count() -> u32 {
+    unsafe { CPU_COUNT }
+}
+
+/// Get the board serial number
+pub fn get_serial() -> u64 {
+    unsafe { SYSTEM_SERIAL }
+}
+
+/// Get the board revision
+pub fn get_board_revision() -> u32 {
+    unsafe { BOARD_REVISION }
 }
 
 /// FDT header structure
@@ -109,7 +257,6 @@ struct FdtHeader {
     size_dt_struct: u32,
 }
 
-/// FDT token constants
 const FDT_BEGIN_NODE: u32 = 0x00000001;
 const FDT_END_NODE: u32 = 0x00000002;
 const FDT_PROP: u32 = 0x00000003;

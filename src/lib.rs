@@ -55,6 +55,7 @@ extern crate alloc;
 
 // Core modules available on all targets (stubbed for x86_64)
 pub mod arch;
+pub mod config;
 pub mod console;
 pub mod ipc;
 pub mod klog;
@@ -64,6 +65,7 @@ pub mod panic_handler;
 pub mod qemu_test;
 pub mod security;
 pub mod sync;
+pub mod syslog;
 pub mod terminal;
 
 // AArch64-specific modules
@@ -312,17 +314,49 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         bss_size
     );
 
-    // 3. Memory Management (Phase 2) — enable MMU EARLY so we can access 40-bit physical addresses
+    // 2b. Parse DTB early for memory detection (16GB Pi 5 variant support)
+    crate::println!("[dtb] Parsing device tree (early)...");
+    crate::dtb::parse(dtb_ptr as u64);
+
+    // 3. GIC
+    crate::println!("[gic] Initializing GIC-400...");
+    unsafe {
+        crate::arch::gic::Gic::init();
+    }
+    crate::println!("[gic] GIC-400 distributor + CPU interface enabled");
+
+    // 4. Timer
+    crate::println!("[timer] Initializing system timer...");
+    unsafe {
+        crate::arch::timer::Timer::init();
+    }
+
+    // 5. Enable IRQs
+    crate::println!("[boot] Enabling IRQs...");
+    crate::arch::cpu::enable_irqs();
+    crate::println!("[boot] IRQs enabled");
+
+    // 6. Memory Management (Phase 2) — enable MMU
     let kernel_phys_start = 0x80000u64; // kernel8.img load address
     let kernel_end = unsafe { &__kernel_end as *const u64 as u64 };
     let kernel_size = kernel_end - kernel_phys_start;
-    // RAM size: 8GB for Pi 5, 2GB for QEMU raspi4b, 4GB for QEMU raspi5b
+    // RAM size detection: DTB first, then feature-based defaults
+    // Pi 5 16GB variant reports full memory via DTB /memory/reg
     #[cfg(feature = "qemu_raspi5b")]
     let ram_size = 4 * 1024 * 1024 * 1024u64;
     #[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
     let ram_size = 2 * 1024 * 1024 * 1024u64;
     #[cfg(not(feature = "qemu"))]
-    let ram_size = 8 * 1024 * 1024 * 1024u64;
+    let ram_size = {
+        // Try DTB-detected memory first (supports 1/2/4/8/16GB variants)
+        let dtb_mem = crate::dtb::get_memory_size();
+        if dtb_mem > 0 {
+            dtb_mem
+        } else {
+            // Fallback: 8GB default for Pi 5
+            8 * 1024 * 1024 * 1024u64
+        }
+    };
 
     crate::println!(
         "[boot] Kernel: {:#010x}..{:#010x} ({} KB)",
@@ -488,9 +522,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::users::init();
     crate::println!("[users] User database initialized");
 
-    // 9. Parse the DTB
-    crate::println!("[dtb] Parsing device tree...");
-    crate::dtb::parse(dtb_ptr as u64);
+    // 9. DTB already parsed early (step 2b), no need to re-parse
 
     // 10. Start scheduler and services
     crate::println!("[sched] Starting scheduler...");
@@ -597,9 +629,19 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::println!("[apps] Initializing core applications...");
     crate::apps::init();
 
+    // 15b. Initialize system config and OS release
+    crate::println!("[config] Loading system configuration...");
+    let _sys_config = crate::config::SystemConfig::load_from_file();
+    crate::config::write_os_release();
+    crate::println!("[config] System configuration loaded");
+
+    // 15c. Start syslog daemon as kernel task
+    crate::println!("[syslog] Starting syslog daemon...");
+    crate::sched::create_kernel_task(crate::syslog::start, crate::sched::Priority::Low);
+
     // 16. Spawn shell on UART for serial console
     crate::println!("[boot] Spawning shell on UART...");
-    crate::sched::create_kernel_task(|| crate::shell::run(), crate::sched::Priority::Normal);
+    crate::sched::create_kernel_task(crate::shell::run, crate::sched::Priority::Normal);
 
     // 17. Run kernel main loop
     crate::println!("[boot] LobsterOS initialization complete!");
