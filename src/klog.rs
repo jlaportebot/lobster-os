@@ -126,7 +126,7 @@ impl KernelLog {
     }
 
     /// Get total log length
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.len
     }
 
@@ -140,6 +140,11 @@ impl KernelLog {
 }
 
 static KLOG: Spinlock<KernelLog> = Spinlock::new(KernelLog::new());
+
+/// Get the kernel log length
+pub fn klog_len() -> usize {
+    KLOG.lock().len()
+}
 
 /// Initialize the kernel logging subsystem
 pub fn init() {

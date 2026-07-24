@@ -247,7 +247,45 @@ fn dev_ptmx_ioctl(_dev_idx: usize, cmd: u64, arg: u64) -> i64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════
+/// /dev/kmsg read — returns kernel log entries
+fn dev_kmsg_read(_dev_idx: usize, buf: *mut u8, len: usize) -> usize {
+    let mut user_buf = unsafe { core::slice::from_raw_parts_mut(buf, len) };
+    let mut seq = 0;
+    crate::klog::klog_read(&mut user_buf, &mut seq)
+}
+
+/// /dev/kmsg write — allows userspace to write to kernel log (for syslogd)
+fn dev_kmsg_write(_dev_idx: usize, buf: *const u8, len: usize) -> usize {
+    let user_buf = unsafe { core::slice::from_raw_parts(buf, len) };
+    if let Ok(msg) = core::str::from_utf8(user_buf) {
+        crate::klog::klog_write(crate::klog::LogLevel::Info, msg);
+    }
+    len
+}
+
+/// /dev/kmsg ioctl — supports klogctl operations
+fn dev_kmsg_ioctl(_dev_idx: usize, cmd: u64, _arg: u64) -> i64 {
+    match cmd {
+        2 => {
+            // Read log (SYSLOG_ACTION_READ)
+            // arg = buffer, len in arg
+            0 // Simplified - actual read via syscall
+        }
+        3 => {
+            // Read and clear (SYSLOG_ACTION_READ_CLEAR)
+            crate::klog::klog_clear();
+            0
+        }
+        6 => {
+            // Clear ring buffer (SYSLOG_ACTION_CLEAR)
+            crate::klog::klog_clear();
+            0
+        }
+        _ => -25, // -ENOTTY
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
 // Device registration
 // ═══════════════════════════════════════════════════════════════
 
@@ -401,6 +439,20 @@ pub fn init() {
             ioctl: None,
         },
         0o666,
+    );
+
+    // /dev/kmsg (1:11) — kernel message log
+    register_device(
+        "kmsg",
+        1,
+        11,
+        false,
+        DeviceOps {
+            read: Some(dev_kmsg_read),
+            write: Some(dev_kmsg_write),
+            ioctl: Some(dev_kmsg_ioctl),
+        },
+        0o644,
     );
 
     // /dev/ttyS0 (4:64) — serial console (ops are stubs for now)

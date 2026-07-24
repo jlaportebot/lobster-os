@@ -120,6 +120,7 @@ pub const SYS_CHMOD: u64 = 63;
 pub const SYS_CHOWN: u64 = 64;
 pub const SYS_SET_NO_NEW_PRIVS: u64 = 65;
 pub const SYS_GET_NO_NEW_PRIVS: u64 = 66;
+pub const SYS_KLOGCTL: u64 = 67;
 
 /// Maximum syscall number
 const MAX_SYSCALL: u64 = 67;
@@ -341,6 +342,8 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_GET_NO_NEW_PRIVS => crate::security::sys_get_no_new_privs() as u64,
         // ── Signal return ──
         SYS_RT_SIGRETURN => sys_rt_sigreturn(),
+        // ── Kernel log control (dmesg) ──
+        SYS_KLOGCTL => sys_klogctl(args[0] as i32, args[1] as u64, args[2] as usize),
         _ => u64::MAX, // -1 (ENOSYS)
     }
 }
@@ -668,6 +671,51 @@ fn sys_rt_sigreturn() -> u64 {
     match unsafe { sigreturn(regs) } {
         Ok(()) => 0,
         Err(_) => u64::MAX,
+    }
+}
+
+/// sys_klogctl(type, buf, len) — kernel log control (dmesg)
+/// type 2: read log into buffer (dmesg -r)
+/// type 3: read and clear log (dmesg -c)
+/// type 4: get log buffer size
+/// type 5: get log buffer len
+/// type 6: clear ring buffer (CAP_SYS_ADMIN)
+/// type 8: wait for new message (blocking)
+/// type 9: read next message (non-blocking)
+fn sys_klogctl(tp: i32, buf: u64, len: usize) -> u64 {
+    use crate::klog::{klog_read, klog_clear};
+
+    match tp {
+        2 | 3 => {
+            // Read log (and optionally clear)
+            let mut user_buf = unsafe { core::slice::from_raw_parts_mut(buf as *mut u8, len) };
+            let mut seq = 0;
+            let read = klog_read(&mut user_buf, &mut seq);
+            if tp == 3 {
+                klog_clear();
+            }
+            read as u64
+        }
+        4 => {
+            // Get buffer size
+            crate::klog::klog_len() as u64
+        }
+        5 => {
+            // Get buffer len (same as 4 for us)
+            crate::klog::klog_len() as u64
+        }
+        6 => {
+            // Clear ring buffer
+            klog_clear();
+            0
+        }
+        8 | 9 => {
+            // Wait for/read message (simplified - just read available)
+            let mut user_buf = unsafe { core::slice::from_raw_parts_mut(buf as *mut u8, len) };
+            let mut seq = 0;
+            klog_read(&mut user_buf, &mut seq) as u64
+        }
+        _ => u64::MAX,
     }
 }
 
