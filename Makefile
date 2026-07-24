@@ -46,7 +46,7 @@ all: $(IMG)
 
 # ─── Release build ─────────────────────────────────────────────────────
 $(BUILDDIR)/release/lobster-os:
-	cargo build --release --target $(TARGET)
+	cargo build --release --target $(TARGET) $(if $(FEATURES),--features $(FEATURES),)
 
 $(ELF): $(BUILDDIR)/release/lobster-os
 	@mkdir -p $(BINDIR)
@@ -66,7 +66,7 @@ $(IMG): $(ELF)
 dev: $(BINDIR)/kernel8-debug.img
 
 $(BUILDDIR)/debug/lobster-os:
-	cargo build --target $(TARGET)
+	cargo build --target $(TARGET) $(if $(FEATURES),--features $(FEATURES),)
 
 $(BINDIR)/kernel8-debug.elf: $(BUILDDIR)/debug/lobster-os
 	@mkdir -p $(BINDIR)

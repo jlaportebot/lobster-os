@@ -35,10 +35,10 @@ SECTIONS
   . = ALIGN(4096);
   __kernel_end = .;
 
-  /* Stack area — 4 cores × 8KB each = 32KB */
+  /* Stack area — 4 cores × 4MB each = 16MB (large enough for kernel_main stack probes) */
   . = ALIGN(4096);
   __stack_start = .;
-  . += 0x8000;  /* 32KB total */
+  . += 0x4000000;  /* 16MB total */
   __stack_end = .;
 
   /DISCARD/ : {

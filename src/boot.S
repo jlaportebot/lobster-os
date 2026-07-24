@@ -154,9 +154,9 @@ _boot:
     str     x9, [x8, #0x1038]
 
     // Set up SP_EL1 for core 0 before dropping to EL1
-    // Stack area: __stack_start + 0x800 (top of core 0's 8KB stack)
+    // Stack area: __stack_start + 0x400000 (top of core 0's 4MB stack)
     ldr     x8, =__stack_start
-    add     x8, x8, #0x800
+    add     x8, x8, #0x400000
     msr     SP_EL1, x8
 
     // Set VBAR_EL1 before dropping to EL1 so exceptions don't go to address 0x200
@@ -190,9 +190,9 @@ _boot:
     msr     SPSR_EL2, x8
 
     // Set up SP_EL1 for core 0 before dropping to EL1
-    // Stack area: __stack_start + 0x800 (top of core 0's 8KB stack)
+    // Stack area: __stack_start + 0x400000 (top of core 0's 4MB stack)
     ldr     x8, =__stack_start
-    add     x8, x8, #0x800
+    add     x8, x8, #0x400000
     msr     SP_EL1, x8
 
     // Set VBAR_EL1 before dropping to EL1 so exceptions don't go to address 0x200
@@ -209,11 +209,12 @@ _boot:
     msr     VBAR_EL1, x8
     isb
 
-    // Set SP_EL1 before any memory access
+    // Set SP before any memory access
+    // At EL1h, "mov sp, x8" writes to SP_EL1 (current banked SP)
+    // "msr SP_EL1" is illegal at EL1 (PL2_RW only in QEMU/ARMv8)
     ldr     x8, =__stack_start
-    add     x8, x8, #0x800
-    msr     SP_EL1, x8
-    isb
+    add     x8, x8, #0x400000
+    mov     sp, x8
 
     // DEBUG: Mark that we reached EL1 setup - FIRST INSTRUCTION
     ldr     x8, =0x80000
@@ -297,18 +298,15 @@ _boot:
 
     // -------------------------------------------------------
     // Step 5: Set up stack for core 0
-    // Stack grows downward. We split the stack area:
-    //   Core 0: __stack_start + 0x2000 (8KB offset)
-    //   Core 1: __stack_start + 0x4000
-    //   Core 2: __stack_start + 0x6000
-    //   Core 3: __stack_start + 0x8000
+    // Stack grows downward. We split the 16MB stack area:
+    //   Core N: __stack_start + N * 4MB + 4MB (top of core N's 4MB stack)
     // -------------------------------------------------------
     mrs     x8, MPIDR_EL1
     and     x8, x8, #0xFF       // Get core ID (Aff0)
-    lsl     x8, x8, #11         // core_id * 2048 (0x800)
+    lsl     x8, x8, #22         // core_id * 4MB (0x400000)
     ldr     x9, =__stack_start
     add     x9, x9, x8
-    add     x9, x9, #0x800      // Top of this core's stack
+    add     x9, x9, #0x400000  // Top of this core's 4MB stack
     mov     sp, x9
 
     // -------------------------------------------------------
