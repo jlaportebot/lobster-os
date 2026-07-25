@@ -132,14 +132,16 @@ pub unsafe fn heap_alloc(layout: Layout) -> *mut u8 {
 
     while !current.is_null() {
         if (*current).is_free {
-            // Check alignment
+            // data_start = header + HEADER_SIZE, then align up
             let data_start = current as usize + HEADER_SIZE;
             let aligned = (data_start + align - 1) & !(align - 1);
             let padding = aligned - data_start;
-            let total_needed = size + padding;
+            // total_needed = HEADER + padding + data — must include the header
+            // so the split block starts AFTER the data, not overlapping it
+            let total_needed = HEADER_SIZE + padding + size;
 
             if (*current).size >= total_needed + HEADER_SIZE {
-                // Split the block
+                // Split the block: new free block starts right after our data
                 let remaining = (*current).size - total_needed;
                 if remaining > HEADER_SIZE {
                     let next_block = (current as usize + total_needed) as *mut HeapHeader;
@@ -154,11 +156,9 @@ pub unsafe fn heap_alloc(layout: Layout) -> *mut u8 {
 
                 (*current).is_free = false;
                 return aligned as *mut u8;
-            } else if (*current).size >= size {
-                // Use the whole block (even with some waste)
+            } else if (*current).size >= total_needed {
+                // Use the whole block (no split, padding absorbed)
                 (*current).is_free = false;
-                let data_start = current as usize + HEADER_SIZE;
-                let aligned = (data_start + align - 1) & !(align - 1);
                 return aligned as *mut u8;
             }
         }
@@ -181,39 +181,45 @@ pub unsafe fn heap_free(ptr: *mut u8, _layout: Layout) {
         return;
     }
 
-    // Find the block header (it's right before the data)
-    let header = (ptr as usize - HEADER_SIZE) as *mut HeapHeader;
+    // Find the block header by scanning the free list (not by assuming
+    // ptr - HEADER_SIZE, because alignment padding may offset the data).
+    // We search for the block whose data range contains `ptr`.
+    let mut header_ptr: *mut HeapHeader = core::ptr::null_mut();
+    let mut current = HEAP_HEAD;
+    while !current.is_null() {
+        let data_start = current as usize + HEADER_SIZE;
+        let data_end = current as usize + (*current).size;
+        if (ptr as usize) >= data_start && (ptr as usize) < data_end {
+            header_ptr = current;
+            break;
+        }
+        current = (*current).next;
+    }
 
-    // Validate this is actually a heap pointer
-    let addr = header as usize;
-    if addr < HEAP_VIRT_START || addr >= HEAP_CURRENT_TOP {
+    if header_ptr.is_null() {
         return;
     }
 
-    (*header).is_free = true;
+    (*header_ptr).is_free = true;
 
-    // Coalesce adjacent free blocks
-    let mut current = HEAP_HEAD;
-    while !current.is_null() {
-        if (*current).is_free {
-            let next = (*current).next;
-            while !next.is_null() && (*next).is_free {
-                // Check adjacency
-                if current as usize + (*current).size == next as usize {
-                    (*current).size += (*next).size;
-                    (*current).next = (*next).next;
+    // Coalesce adjacent free blocks — walk the list and merge each
+    // free block with its free, immediately-adjacent successor.
+    let mut iter = HEAP_HEAD;
+    while !iter.is_null() {
+        if (*iter).is_free {
+            // Re-fetch successor after each merge so we keep merging
+            // a run of free blocks in one pass.
+            while !(*iter).next.is_null() {
+                let next = (*iter).next;
+                if (*next).is_free && iter as usize + (*iter).size == next as usize {
+                    (*iter).size += (*next).size;
+                    (*iter).next = (*next).next;
                 } else {
                     break;
                 }
-                let next = (*current).next;
-                if next.is_null() {
-                    break;
-                }
-                // Safe: we just set current.next above
-                break;
             }
         }
-        current = (*current).next;
+        iter = (*iter).next;
     }
 }
 

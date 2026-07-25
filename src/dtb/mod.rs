@@ -106,14 +106,14 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
             FDT_PROP => {
                 offset += 4;
 
-                let prop_len = u32::from_be(
-                    unsafe { core::ptr::read_volatile((struct_start + offset) as *const u32) }
-                ) as u64;
+                let prop_len = u32::from_be(unsafe {
+                    core::ptr::read_volatile((struct_start + offset) as *const u32)
+                }) as u64;
                 offset += 4;
 
-                let name_off = u32::from_be(
-                    unsafe { core::ptr::read_volatile((struct_start + offset) as *const u32) }
-                ) as u64;
+                let name_off = u32::from_be(unsafe {
+                    core::ptr::read_volatile((struct_start + offset) as *const u32)
+                }) as u64;
                 offset += 4;
 
                 let prop_name = read_string_at(strings_start + name_off);
@@ -148,9 +148,9 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
                     }
 
                     if prop_name == "serial-number" && prop_len == 8 {
-                        let serial = u64::from_be(
-                            unsafe { core::ptr::read_volatile(prop_data_ptr as *const u64) }
-                        );
+                        let serial = u64::from_be(unsafe {
+                            core::ptr::read_volatile(prop_data_ptr as *const u64)
+                        });
                         unsafe {
                             SYSTEM_SERIAL = serial;
                         }
@@ -158,9 +158,9 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
                     }
 
                     if prop_name == "revision" && prop_len == 4 {
-                        let rev = u32::from_be(
-                            unsafe { core::ptr::read_volatile(prop_data_ptr as *const u32) }
-                        );
+                        let rev = u32::from_be(unsafe {
+                            core::ptr::read_volatile(prop_data_ptr as *const u32)
+                        });
                         unsafe {
                             BOARD_REVISION = rev;
                         }

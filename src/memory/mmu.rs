@@ -33,6 +33,10 @@ pub const PTE_KERNEL_DATA: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_ISH | M
 pub const PTE_KERNEL_CODE: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_ISH | MT_NORMAL;
 pub const PTE_DEVICE: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_OSH | MT_DEVICE;
 pub const PTE_DEVICE_NG: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_NG | PTE_OSH | MT_DEVICE;
+
+// Block variants (for L1/L2 block mappings — bit 1 = 0, not PTE_PAGE)
+pub const PTE_KERNEL_CODE_BLOCK: u64 = PTE_VALID | PTE_ACCESS | PTE_ISH | MT_NORMAL;
+pub const PTE_KERNEL_DATA_BLOCK: u64 = PTE_VALID | PTE_ACCESS | PTE_ISH | MT_NORMAL;
 /// Block entry (2MB) for device memory — bit 1 (Table/Block) must be 0
 pub const PTE_DEVICE_BLOCK: u64 = PTE_VALID | PTE_ACCESS | PTE_OSH | MT_DEVICE;
 
@@ -53,9 +57,12 @@ const VA_INDEX_MASK: u64 = 0x1FF;
 /// 2 roots + 2 L1 + ~12 L2 = ~16. Use 64 for headroom.
 const MAX_EARLY_PAGE_TABLES: usize = 64;
 
-/// Storage for page tables (must be page-aligned)
-static mut PAGE_TABLE_STORAGE: [[u64; PT_ENTRIES]; MAX_EARLY_PAGE_TABLES] =
-    [[0u64; PT_ENTRIES]; MAX_EARLY_PAGE_TABLES];
+/// Storage for page tables — must be page-aligned (4KB) for TTBR registers.
+#[repr(C, align(4096))]
+struct PageTableStorage([[u64; PT_ENTRIES]; MAX_EARLY_PAGE_TABLES]);
+
+static mut PAGE_TABLE_STORAGE: PageTableStorage =
+    PageTableStorage([[0u64; PT_ENTRIES]; MAX_EARLY_PAGE_TABLES]);
 static mut NEXT_PT_INDEX: usize = 0;
 
 /// Allocate a zeroed page table from our static storage
@@ -72,16 +79,23 @@ unsafe fn alloc_page_table() -> *mut [u64; PT_ENTRIES] {
     let idx = NEXT_PT_INDEX;
     NEXT_PT_INDEX += 1;
     // Zero the table
-    for entry in &mut PAGE_TABLE_STORAGE[idx] {
+    for entry in &mut PAGE_TABLE_STORAGE.0[idx] {
         *entry = 0;
     }
-    &mut PAGE_TABLE_STORAGE[idx]
+    &mut PAGE_TABLE_STORAGE.0[idx]
 }
 
 /// Physical address of a page table
 unsafe fn pt_phys(table: *mut [u64; PT_ENTRIES]) -> u64 {
-    // In early boot before MMU is enabled, phys = virt
-    table as u64
+    // After MMU is enabled, static data lives at a high VA in the
+    // phys-map region (VA = PA + PHYS_MAP_OFFSET). Convert back to PA.
+    let va = table as u64;
+    if va >= crate::memory::PHYS_MAP_OFFSET {
+        va - crate::memory::PHYS_MAP_OFFSET
+    } else {
+        // Early boot (pre-MMU): phys == virt
+        va
+    }
 }
 
 /// Extract the page table index at a given level
@@ -218,20 +232,20 @@ unsafe fn setup_mair() {
 
 /// Set up TCR_EL1 (Translation Control Register)
 unsafe fn setup_tcr() {
-    let tcr: u64 = (0xFFFFu64 << 48) // T1SZ = 16 (48-bit TTBR1 space)
-            | (0xFFFFu64 << 32) // T0SZ = 16 (48-bit TTBR0 space)
-            | (0b11u64 << 30)   // TG1 = 4KB granule for TTBR1
-            | (0b00u64 << 14)   // TG0 = 4KB granule for TTBR0
-            | (3u64 << 28)      // SH1 = Inner Shareable
-            | (3u64 << 12)      // SH0 = Inner Shareable
-            | (1u64 << 26)      // ORGN1 = Write-Back Cacheable
-            | (1u64 << 10)      // ORGN0 = Write-Back Cacheable
-            | (1u64 << 24)      // IRGN1 = Write-Back Cacheable
-            | (1u64 << 8)       // IRGN0 = Write-Back Cacheable
-            | (1u64 << 23)      // EPD1 = Enable TTBR1 walks
-            | (1u64 << 7)       // EPD0 = Enable TTBR0 walks
-            | (0u64 << 22)      // A1 = TTBR0 ASID
-            | (0u64 << 6); // A1 = TTBR0 ASID
+    let tcr: u64 = (16u64 << 16)   // T1SZ = 16 (48-bit TTBR1 VA space)
+            | (16u64 << 0)        // T0SZ = 16 (48-bit TTBR0 VA space)
+            | (0b10u64 << 30)     // TG1 = 4KB granule for TTBR1 (0b10 = 4KB)
+            | (0b00u64 << 14)     // TG0 = 4KB granule for TTBR0
+            | (3u64 << 28)        // SH1 = Inner Shareable
+            | (3u64 << 12)        // SH0 = Inner Shareable
+            | (1u64 << 26)        // ORGN1 = Write-Back Cacheable
+            | (1u64 << 10)        // ORGN0 = Write-Back Cacheable
+            | (1u64 << 24)        // IRGN1 = Write-Back Cacheable
+            | (1u64 << 8)         // IRGN0 = Write-Back Cacheable
+            // EPD1 (bit 23) = 0 → ENABLE TTBR1 walks
+            // EPD0 (bit 7)  = 0 → ENABLE TTBR0 walks
+            // IPS (bits 34:32) = 2 → 40-bit PA (1TB), covers SoC peripherals at 0x10_xxxx_xxxx
+            | (2u64 << 32);
     core::arch::asm!("msr TCR_EL1, {0}", in(reg) tcr);
 }
 
@@ -250,20 +264,24 @@ unsafe fn enable_mmu_and_caches(ttbr0: u64, ttbr1: u64) {
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
 
-    // Read SCTLR, set M (MMU), C (D-cache), I (I-cache)
+    // Read SCTLR, set ONLY M (MMU enable). No caches, no features.
+    // This is the minimal safest MMU enable for debugging.
     let mut sctlr: u64;
     core::arch::asm!("mrs {0}, SCTLR_EL1", out(reg) sctlr);
-    sctlr |= (1 << 0)  // M: MMU enable
-           | (1 << 2)  // C: Data cache enable
-           | (1 << 12) // I: Instruction cache enable
-           | (1 << 3)  // SPAN: Privileged Access Never
-           | (1 << 25) // UCT: EL0 access to CTR_EL0
-           | (1 << 26) // DZE: EL0 DC ZVA
-           | (1 << 27) // UMA: EL0 access to AMAIR
-           ;
+
+    // Debug: dump TCR value
+    let mut tcr_val: u64;
+    core::arch::asm!("mrs {0}, TCR_EL1", out(reg) tcr_val);
+    crate::println!("[mmu] TCR_EL1 = {:#018x}", tcr_val);
+    crate::println!("[mmu] SCTLR before = {:#018x}", sctlr);
+
+    sctlr |= 1 << 0; // M: MMU enable ONLY
+
     // Clear WXN (write implies XN) and other restrictive bits
     sctlr &= !((1 << 19)  // WXN
-             | (1 << 28)); // NTI — no trap on cache ins
+             | (1 << 28)); // NTI
+
+    crate::println!("[mmu] SCTLR after  = {:#018x}", sctlr);
 
     core::arch::asm!("msr SCTLR_EL1, {0}", in(reg) sctlr);
     crate::arch::cpu::isb();
@@ -281,8 +299,62 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
     let ttbr0_root = alloc_page_table(); // User space (initially empty)
     let ttbr1_root = alloc_page_table(); // Kernel space
 
-    // Identity map the first 2MB as device memory (for bootloader/DTB region) - use 2MB block
-    map_range_blocks(ttbr1_root, 0x0, 0x0, 2 * 1024 * 1024, PTE_DEVICE);
+    // Identity map the first 128MB in TTBR0 (low VA range).
+    // Covers kernel image (~0x80000-0x13e000), BSS, page tables, and
+    // the 16MB stack area (up to ~0x41f2000). 128MB = 64 × 2MB blocks.
+    map_range_blocks(
+        ttbr0_root,
+        0x0,
+        0x0,
+        128 * 1024 * 1024,
+        PTE_KERNEL_CODE_BLOCK,
+    );
+
+    // Identity-map the full QEMU peripheral range in TTBR0 as device memory.
+    // QEMU raspi5b puts peripherals at 0x7C00_0000 - 0x7E00_0000 (32MB).
+    // These VAs have bit 55 = 0 → resolved via TTBR0, not TTBR1.
+    // Without this, any device access (UART, timer, GIC GIC) faults.
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        const QEMU_PERIPH_BASE: u64 = 0x7C00_0000;
+        const QEMU_PERIPH_SIZE: u64 = 0x200_0000; // 32MB = 16 × 2MB blocks
+        map_range_blocks(
+            ttbr0_root,
+            QEMU_PERIPH_BASE,
+            QEMU_PERIPH_BASE,
+            QEMU_PERIPH_SIZE,
+            PTE_DEVICE_BLOCK,
+        );
+
+        // Identity-map GIC-400 at 0x10_7FFF_0000 in TTBR0.
+        // The GIC is at PA 0x10_7FFF_9000 (GICD) / 0x10_7FFF_A000 (GICC).
+        // VA bit 55 = 0, so TTBR0 handles it.
+        const GIC_PERIPH_BASE: u64 = 0x10_7FFF_0000;
+        const GIC_PERIPH_SIZE: u64 = 0x20_0000; // 2MB block
+        println!(
+            "[mmu] GIC identity map: base={:#010x} size={:#x}",
+            GIC_PERIPH_BASE, GIC_PERIPH_SIZE
+        );
+        map_range_blocks(
+            ttbr0_root,
+            GIC_PERIPH_BASE,
+            GIC_PERIPH_BASE,
+            GIC_PERIPH_SIZE,
+            PTE_DEVICE_BLOCK,
+        );
+        println!("[mmu] GIC identity map done, next_pt={}", unsafe {
+            NEXT_PT_INDEX
+        });
+
+        // Debug: verify L1[65] was created by reading from the L1 table
+        let l0_entry0 = (*ttbr0_root)[0];
+        let l1_table_phys = (l0_entry0 & !(PAGE_SIZE - 1)) as *const [u64; PT_ENTRIES];
+        let l1_65 = unsafe { (*l1_table_phys)[65] };
+        println!(
+            "[mmu] Debug: L0[0]={:#018x} L1[65]={:#018x}",
+            l0_entry0, l1_65
+        );
+    }
 
     // Map kernel image at high VA (identity map only needed during boot transition, not in final page tables)
     let kernel_map_size = ((kernel_size + 0x1FFFFF) & !0x1FFFFF).max(2 * 1024 * 1024);
@@ -291,12 +363,18 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
         KERNEL_IMAGE_START & !0x1FFFFF,
         kernel_phys_start & !0x1FFFFF,
         kernel_map_size,
-        PTE_KERNEL_CODE,
+        PTE_KERNEL_CODE_BLOCK,
     );
 
     // Direct physical memory map (all RAM) — use 2MB/1GB block mappings
     let _phys_map_end = PHYS_MAP_OFFSET + ram_size;
-    map_range_blocks(ttbr1_root, PHYS_MAP_OFFSET, 0x0, ram_size, PTE_KERNEL_DATA);
+    map_range_blocks(
+        ttbr1_root,
+        PHYS_MAP_OFFSET,
+        0x0,
+        ram_size,
+        PTE_KERNEL_DATA_BLOCK,
+    );
 
     // Map BCM2712 peripherals (SOC range: 0x10_0000_0000 .. 0x11_0000_0000)
     // UART10, GIC, System Timer, etc.
@@ -307,14 +385,18 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
         DEVICE_MAP_START,
         SOC_PERIPH_BASE,
         SOC_PERIPH_SIZE,
-        PTE_DEVICE,
+        PTE_DEVICE_BLOCK,
     );
+
+    // GIC-400 is identity-mapped in TTBR0 for QEMU (physical address access).
+    // No separate TTBR1 GIC mapping needed.
     #[cfg(feature = "qemu_raspi5b")]
     {
         // Force compile-time check
         const _: () = assert!(cfg!(feature = "qemu_raspi5b"));
         // Map BCM2711-style peripherals (0x7C00_0000 .. 0x7E00_0000) for QEMU raspi5b
         // System timer, mailbox, UARTs, clocks, GPIOs, etc.
+        // NOTE: These are ALSO identity-mapped in TTBR0 for pre-virtual-address access.
         const BCM2711_PERIPH_BASE: u64 = 0x7C00_0000;
         const BCM2711_PERIPH_SIZE: u64 = 0x2000_0000; // 512MB
         map_range_blocks(
@@ -322,19 +404,6 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
             DEVICE_MAP_START + 0x200_0000,
             BCM2711_PERIPH_BASE,
             BCM2711_PERIPH_SIZE,
-            PTE_DEVICE,
-        );
-
-        // Identity-map UART region (0x7D00_0000 - 0x7D01_0000) so physical UART
-        // accesses work after MMU enable, before init_virtual() switches to virtual addresses.
-        // UART10 at 0x7D00_1000 is within this range.
-        const UART_PERIPH_BASE: u64 = 0x7D00_0000;
-        const UART_PERIPH_SIZE: u64 = 0x10000; // 64KB covers UART10
-        map_range_blocks(
-            ttbr1_root,
-            UART_PERIPH_BASE,
-            UART_PERIPH_BASE,
-            UART_PERIPH_SIZE,
             PTE_DEVICE_BLOCK,
         );
     }
@@ -350,7 +419,7 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
             DEVICE_MAP_START + 0x100_0000,
             BCM_PERIPH_BASE,
             BCM_PERIPH_SIZE,
-            PTE_DEVICE,
+            PTE_DEVICE_BLOCK,
         );
     }
 
@@ -375,6 +444,27 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
     println!("[mmu] Device map: {:#018x}", DEVICE_MAP_START);
 
     println!("[mmu] About to enable MMU...");
+
+    // Debug: dump first few page table entries for TTBR0
+    let ttbr0_entries = PAGE_TABLE_STORAGE.0[0];
+    println!(
+        "[mmu] TTBR0 L0[0]: {:#018x} (expect valid=1, table=1)",
+        ttbr0_entries[0]
+    );
+    if ttbr0_entries[0] & 1 != 0 {
+        let l1_ptr = (ttbr0_entries[0] & !0xFFF) as *const [u64; PT_ENTRIES];
+        println!("[mmu] L1[0]: {:#018x} (expect valid=1, table=1)", unsafe {
+            (*l1_ptr)[0]
+        });
+        if unsafe { (*l1_ptr)[0] } & 1 != 0 {
+            let l2_ptr = (unsafe { (*l1_ptr)[0] } & !0xFFF) as *const [u64; PT_ENTRIES];
+            println!(
+                "[mmu] L2[0]: {:#018x} (expect valid=1, block, AF=1)",
+                unsafe { (*l2_ptr)[0] }
+            );
+        }
+    }
+
     // Enable MMU + caches
     enable_mmu_and_caches(ttbr0_phys, ttbr1_phys);
 
@@ -394,7 +484,6 @@ unsafe fn map_page_via_virt(root_virt: *mut [u64; PT_ENTRIES], va: u64, pa: u64,
             let next = alloc_page_table();
             let next_phys = pt_phys(next);
             (*table)[idx] = next_phys | PTE_VALID | PTE_TABLE;
-            // Convert to virtual address for further walks
             table =
                 crate::memory::phys_to_virt(PhysAddr::new(next_phys)).0 as *mut [u64; PT_ENTRIES];
         } else if entry & PTE_TABLE != 0 {
@@ -402,7 +491,49 @@ unsafe fn map_page_via_virt(root_virt: *mut [u64; PT_ENTRIES], va: u64, pa: u64,
             table =
                 crate::memory::phys_to_virt(PhysAddr::new(next_phys)).0 as *mut [u64; PT_ENTRIES];
         } else {
-            panic!("[mmu] Block entry at L{} during virt map", level);
+            // Block entry — split it into a next-level table.
+            // A block at level N covers (1 << shift_for_N) bytes and
+            // splits into 512 entries at level N+1.
+            let block_pa = entry & !(PAGE_SIZE - 1);
+            let block_flags = entry & (PAGE_SIZE - 1);
+            let current_shift = match level {
+                0 => L0_SHIFT,
+                1 => L1_SHIFT,
+                2 => L2_SHIFT,
+                _ => unreachable!(),
+            };
+            // Each sub-entry is 1/512 of the block = 1 << (shift - 9)
+            let sub_stride: u64 = 1u64 << (current_shift - 9);
+            let sub_level = level + 1;
+
+            let next = alloc_page_table();
+            let next_phys = pt_phys(next);
+            let next_virt =
+                crate::memory::phys_to_virt(PhysAddr::new(next_phys)).0 as *mut [u64; PT_ENTRIES];
+
+            // Populate the new table BEFORE linking it into the parent.
+            // If we link first, the old block mapping is gone and the CPU
+            // faults when dereferencing next_virt (which lives inside the
+            // region being remapped).
+            for i in 0..PT_ENTRIES {
+                let sub_pa = block_pa + (i as u64) * sub_stride;
+                if sub_level == 3 {
+                    // L3 entries are page descriptors (bit 1 = PTE_PAGE)
+                    (*next_virt)[i] = sub_pa | block_flags | PTE_PAGE;
+                } else {
+                    // Sub-level is L1 or L2 — keep as blocks
+                    (*next_virt)[i] = sub_pa | block_flags;
+                }
+            }
+
+            // Now link — the new table is fully populated, so a TLB walk
+            // after this replacement will find valid mappings.
+            (*table)[idx] = next_phys | PTE_VALID | PTE_TABLE;
+            let block_va = va & !((1u64 << current_shift) - 1);
+            core::arch::asm!("tlbi vaae1is, {0}", in(reg) block_va >> 12);
+            crate::arch::cpu::dsb();
+            crate::arch::cpu::isb();
+            table = next_virt;
         }
     }
 
@@ -413,7 +544,7 @@ unsafe fn map_page_via_virt(root_virt: *mut [u64; PT_ENTRIES], va: u64, pa: u64,
 /// Map a page after MMU is enabled (uses virtual addresses for table walks)
 pub unsafe fn map_page_virt(va: u64, pa: u64, flags: u64) {
     // Get the TTBR1 root page table virtual address
-    let ttbr1_root_phys = pt_phys(&mut PAGE_TABLE_STORAGE[1]);
+    let ttbr1_root_phys = pt_phys(&mut PAGE_TABLE_STORAGE.0[1]);
     let ttbr1_root_virt = crate::memory::phys_to_virt(PhysAddr::new(ttbr1_root_phys)).0;
     let root = ttbr1_root_virt as *mut [u64; PT_ENTRIES];
     map_page_via_virt(root, va, pa, flags);
@@ -425,7 +556,7 @@ pub unsafe fn map_page_virt(va: u64, pa: u64, flags: u64) {
 
 /// Unmap a page after MMU is enabled
 pub unsafe fn unmap_page_virt(va: u64) {
-    let ttbr1_root_phys = pt_phys(&mut PAGE_TABLE_STORAGE[1]);
+    let ttbr1_root_phys = pt_phys(&mut PAGE_TABLE_STORAGE.0[1]);
     let ttbr1_root_virt = crate::memory::phys_to_virt(PhysAddr::new(ttbr1_root_phys)).0;
     let mut table = ttbr1_root_virt as *mut [u64; PT_ENTRIES];
 
@@ -448,7 +579,7 @@ pub unsafe fn unmap_page_virt(va: u64) {
 
 /// Change protection flags on a mapped page
 pub unsafe fn protect_page_virt(va: u64, flags: u64) {
-    let ttbr1_root_phys = pt_phys(&mut PAGE_TABLE_STORAGE[1]);
+    let ttbr1_root_phys = pt_phys(&mut PAGE_TABLE_STORAGE.0[1]);
     let ttbr1_root_virt = crate::memory::phys_to_virt(PhysAddr::new(ttbr1_root_phys)).0;
     let mut table = ttbr1_root_virt as *mut [u64; PT_ENTRIES];
 
@@ -475,7 +606,7 @@ pub unsafe fn protect_page_virt(va: u64, flags: u64) {
 
 /// Software page table walk — translate VA → PA
 pub unsafe fn translate(va: u64) -> Option<u64> {
-    let ttbr1_root_phys = pt_phys(&mut PAGE_TABLE_STORAGE[1]);
+    let ttbr1_root_phys = pt_phys(&mut PAGE_TABLE_STORAGE.0[1]);
     let ttbr1_root_virt = crate::memory::phys_to_virt(PhysAddr::new(ttbr1_root_phys)).0;
     let mut table = ttbr1_root_virt as *mut [u64; PT_ENTRIES];
 
@@ -499,5 +630,5 @@ pub unsafe fn translate(va: u64) -> Option<u64> {
 
 /// Get the physical address of TTBR1 root (for secondary cores)
 pub unsafe fn get_ttbr1_phys() -> u64 {
-    pt_phys(&mut PAGE_TABLE_STORAGE[1])
+    pt_phys(&mut PAGE_TABLE_STORAGE.0[1])
 }

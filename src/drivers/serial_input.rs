@@ -47,10 +47,14 @@ pub unsafe fn init() {
     INPUT_LEN = 0;
     ECHO_ENABLED = true;
 
-    // Enable UART10 RX interrupt in the PL011
-    // UART_IMSC: bit 4 = RXIM (receive interrupt mask)
-    // bit 6 = RTIM (receive timeout interrupt mask)
+    // UART base address — QEMU uses 0x7D00_1000, real Pi 5 uses 0x10_7D00_1000
+    #[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
+    const UART10_BASE: u64 = 0x7D00_1000;
+    #[cfg(feature = "qemu_raspi5b")]
+    const UART10_BASE: u64 = 0x7D00_1000;
+    #[cfg(not(feature = "qemu"))]
     const UART10_BASE: u64 = 0x10_7D00_1000;
+
     const UART_IMSC: u64 = UART10_BASE + 0x038;
     const UART_ICR: u64 = UART10_BASE + 0x044;
     // Enable RX interrupt + RX timeout interrupt
@@ -72,6 +76,11 @@ pub unsafe fn init() {}
 /// Called from IRQ handler when UART10 interrupt fires
 #[cfg(target_arch = "aarch64")]
 pub unsafe fn handle_irq() {
+    #[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
+    const UART10_BASE: u64 = 0x7D00_1000;
+    #[cfg(feature = "qemu_raspi5b")]
+    const UART10_BASE: u64 = 0x7D00_1000;
+    #[cfg(not(feature = "qemu"))]
     const UART10_BASE: u64 = 0x10_7D00_1000;
     const UART_DR: u64 = UART10_BASE + 0x000;
     const UART_FR: u64 = UART10_BASE + 0x018;
@@ -108,92 +117,88 @@ pub unsafe fn handle_irq() {
 #[cfg(target_arch = "x86_64")]
 pub unsafe fn handle_irq() {}
 
+/// Process a single byte directly (no ring buffer). Used for cooperative polling.
+#[cfg(target_arch = "aarch64")]
+pub unsafe fn feed_byte(byte: u8) {
+    process_byte(byte);
+}
+
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn feed_byte(_byte: u8) {}
+
 /// Process bytes from the ring buffer into line buffer
 unsafe fn process_rx_bytes() {
     while RX_TAIL != RX_HEAD {
         let byte = RX_RING[RX_TAIL];
         RX_TAIL = (RX_TAIL + 1) & (RX_BUF_SIZE - 1);
 
-        match byte {
-            // Backspace / Delete
-            0x7F | 0x08 => {
-                if INPUT_LEN > 0 {
-                    INPUT_LEN -= 1;
-                    if ECHO_ENABLED {
-                        // Erase character on terminal: BS + space + BS
-                        Uart10::putc(0x08);
-                        Uart10::putc(b' ');
-                        Uart10::putc(0x08);
-                    }
-                }
-            }
-            // Enter / Return
-            b'\r' | b'\n' => {
+        process_byte(byte);
+    }
+}
+
+/// Process a single byte through the line editor
+unsafe fn process_byte(byte: u8) {
+    match byte {
+        // Backspace / Delete
+        0x7F | 0x08 => {
+            if INPUT_LEN > 0 {
+                INPUT_LEN -= 1;
                 if ECHO_ENABLED {
-                    Uart10::puts("\r\n");
-                }
-                // Terminate and submit the line
-                if INPUT_LEN > 0 && LINE_COUNT == 0 {
-                    // Copy input to line buffer
-                    let copy_len = INPUT_LEN.min(LINE_BUF_SIZE - LINE_LEN);
-                    LINE_BUF[LINE_LEN..LINE_LEN + copy_len].copy_from_slice(&INPUT_BUF[..copy_len]);
-                    LINE_LEN += copy_len;
-                    LINE_COUNT = 1;
-                }
-                INPUT_LEN = 0;
-            }
-            // Ctrl+C — cancel current input
-            0x03 => {
-                if ECHO_ENABLED {
-                    Uart10::puts("^C\r\n");
-                }
-                INPUT_LEN = 0;
-            }
-            // Ctrl+U — kill entire line
-            0x15 => {
-                if ECHO_ENABLED {
-                    for _ in 0..INPUT_LEN {
-                        Uart10::putc(0x08);
-                        Uart10::putc(b' ');
-                        Uart10::putc(0x08);
-                    }
-                }
-                INPUT_LEN = 0;
-            }
-            // Escape sequences — swallow ESC + bracket sequences
-            0x1B => {
-                // Just swallow the ESC; arrow key sequences will be
-                // consumed as '[' + 'A'/'B'/'C'/'D' in subsequent bytes
-                // For now we ignore them
-            }
-            // Printable ASCII (excluding '[' which is handled above for escape sequences)
-            0x20..=0x5A => {
-                if INPUT_LEN < INPUT_BUF.len() {
-                    INPUT_BUF[INPUT_LEN] = byte;
-                    INPUT_LEN += 1;
-                    if ECHO_ENABLED {
-                        Uart10::putc(byte);
-                    }
+                    Uart10::putc(0x08);
+                    Uart10::putc(b' ');
+                    Uart10::putc(0x08);
                 }
             }
-            0x5C..=0x7E => {
-                if INPUT_LEN < INPUT_BUF.len() {
-                    INPUT_BUF[INPUT_LEN] = byte;
-                    INPUT_LEN += 1;
-                    if ECHO_ENABLED {
-                        Uart10::putc(byte);
-                    }
-                }
-            }
-            // Tab — basic completion (no-op for now, just echo)
-            b'\t' => {
-                if ECHO_ENABLED {
-                    Uart10::puts("    ");
-                }
-            }
-            // All other control chars — ignore
-            _ => {}
         }
+        // Enter / Return
+        b'\r' | b'\n' => {
+            if ECHO_ENABLED {
+                Uart10::puts("\r\n");
+            }
+            if INPUT_LEN > 0 && LINE_COUNT == 0 {
+                let copy_len = INPUT_LEN.min(LINE_BUF_SIZE - LINE_LEN);
+                LINE_BUF[LINE_LEN..LINE_LEN + copy_len].copy_from_slice(&INPUT_BUF[..copy_len]);
+                LINE_LEN += copy_len;
+                LINE_COUNT = 1;
+            }
+            INPUT_LEN = 0;
+        }
+        // Ctrl+C — cancel current input
+        0x03 => {
+            if ECHO_ENABLED {
+                Uart10::puts("^C\r\n");
+            }
+            INPUT_LEN = 0;
+        }
+        // Ctrl+U — kill entire line
+        0x15 => {
+            if ECHO_ENABLED {
+                for _ in 0..INPUT_LEN {
+                    Uart10::putc(0x08);
+                    Uart10::putc(b' ');
+                    Uart10::putc(0x08);
+                }
+            }
+            INPUT_LEN = 0;
+        }
+        0x1B => {}
+        // Printable ASCII
+        0x20..=0x7E => {
+            if INPUT_LEN < INPUT_BUF.len() {
+                INPUT_BUF[INPUT_LEN] = byte;
+                INPUT_LEN += 1;
+                if ECHO_ENABLED {
+                    Uart10::putc(byte);
+                }
+            }
+        }
+        // Tab — echo spaces
+        b'\t' => {
+            if ECHO_ENABLED {
+                Uart10::puts("    ");
+            }
+        }
+        _ => {}
     }
 }
 

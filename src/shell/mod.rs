@@ -471,6 +471,31 @@ pub fn run_with_pty(pty_slave_fd: Option<usize>) -> ! {
     }
 }
 
+/// Poll the shell once (non-blocking). Called from the cooperative main loop.
+/// Returns true if a command was executed.
+pub fn poll() -> bool {
+    // On QEMU, the UART RX interrupt (SPI 121) doesn't fire reliably.
+    // Poll the UART directly for input bytes instead.
+    let byte_avail = crate::drivers::uart::Uart10::has_data();
+    if byte_avail {
+        while let Some(b) = crate::drivers::uart::Uart10::read_byte_nb() {
+            unsafe { crate::drivers::serial_input::feed_byte(b) };
+        }
+    }
+
+    let mut line_buf = [0u8; MAX_CMD_LEN];
+    let len = serial_input::read_line(&mut line_buf);
+    if len > 0 {
+        let cmd_str = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+        let _result = execute_command(cmd_str.trim());
+        // Re-print prompt after command
+        Uart10::puts(PROMPT);
+        true
+    } else {
+        false
+    }
+}
+
 /// Print prompt to the appropriate output
 fn print_prompt(pty_slave_fd: Option<usize>) {
     if let Some(fd) = pty_slave_fd {
@@ -510,7 +535,7 @@ fn read_line_from_pty(fd: usize, buf: &mut [u8]) -> usize {
 }
 
 /// Print the welcome banner
-fn print_banner() {
+pub fn print_banner() {
     Uart10::puts("\r\n");
     Uart10::puts("  +======================================+\r\n");
     Uart10::puts("  |       Lobster OS v0.5.0              |\r\n");

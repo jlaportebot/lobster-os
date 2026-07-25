@@ -7,9 +7,9 @@
 use crate::memory::{PhysAddr, PAGE_SIZE};
 use crate::println;
 
-/// Maximum RAM we support (8 GB for RPi 5 8GB model)
-const MAX_RAM: u64 = 2 * 1024 * 1024 * 1024;
-const MAX_FRAMES: usize = (MAX_RAM / PAGE_SIZE) as usize; // 2M frames
+/// Maximum RAM we support (16 GB for RPi 5 16GB model)
+const MAX_RAM: u64 = 16 * 1024 * 1024 * 1024;
+const MAX_FRAMES: usize = (MAX_RAM / PAGE_SIZE) as usize; // 4M frames
 
 /// Bitmap: 1 bit per frame, 1 = allocated, 0 = free
 /// 2M bits = 256KB of bitmap storage

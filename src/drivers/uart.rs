@@ -70,6 +70,22 @@ impl Uart10 {
         }
     }
 
+    /// Non-blocking read of a single byte. Returns None if no data.
+    #[inline]
+    pub fn read_byte_nb() -> Option<u8> {
+        if Self::has_data() {
+            Some(Self::getc())
+        } else {
+            None
+        }
+    }
+
+    /// Alias for has_data — true if UART has received data available to read.
+    #[inline]
+    pub fn rx_available() -> bool {
+        Self::has_data()
+    }
+
     /// Write a string
     pub fn puts(s: &str) {
         #[cfg(target_arch = "aarch64")]

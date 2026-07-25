@@ -338,10 +338,9 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::arch::timer::Timer::init();
     }
 
-    // 5. Enable IRQs
-    crate::println!("[boot] Enabling IRQs...");
-    crate::arch::cpu::enable_irqs();
-    crate::println!("[boot] IRQs enabled");
+    // 5. IRQs stay disabled until MMU + virtual address setup is complete.
+    // Enabling IRQs before MMU would cause a Data Abort if a timer interrupt
+    // fires after the MMU is enabled but before device addresses are remapped.
 
     // 6. Memory Management (Phase 2) — enable MMU
     let kernel_phys_start = 0x80000u64; // kernel8.img load address
@@ -384,16 +383,29 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::memory::frame_alloc::init(ram_size, kernel_end);
 
         // Initialize heap
+        crate::println!("[boot] About to init heap...");
         crate::memory::heap::init();
+        crate::println!("[boot] Heap init done.");
 
         // Register memory regions for the memory map
-        crate::memory::vmem::register_region(crate::memory::vmem::MemoryRegion {
+        crate::println!("[boot] About to register memory regions...");
+        crate::println!(
+            "[boot] KERNEL_IMAGE_START = {:#018x}",
+            crate::memory::KERNEL_IMAGE_START
+        );
+        crate::println!("[boot] HEAP_START = {:#018x}", crate::memory::HEAP_START);
+        crate::println!("[boot] Creating region struct...");
+        let region = crate::memory::vmem::MemoryRegion {
             virt_start: crate::memory::VirtAddr::new(crate::memory::KERNEL_IMAGE_START),
             phys_start: crate::memory::PhysAddr::new(kernel_phys_start),
             size: kernel_size,
             flags: crate::memory::vmem::PTE_KERNEL_CODE,
             name: "kernel",
-        });
+        };
+        crate::println!("[boot] Region struct created, registering...");
+        crate::memory::vmem::register_region(region);
+        crate::println!("[boot] Region 1 registered.");
+        crate::println!("[boot] Registering region 2 (phys-map)...");
         crate::memory::vmem::register_region(crate::memory::vmem::MemoryRegion {
             virt_start: crate::memory::VirtAddr::new(crate::memory::PHYS_MAP_OFFSET),
             phys_start: crate::memory::PhysAddr::new(0),
@@ -401,6 +413,8 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
             flags: crate::memory::vmem::PTE_KERNEL_DATA,
             name: "phys-map",
         });
+        crate::println!("[boot] Region 2 registered.");
+        crate::println!("[boot] Registering region 3 (heap)...");
         crate::memory::vmem::register_region(crate::memory::vmem::MemoryRegion {
             virt_start: crate::memory::VirtAddr::new(crate::memory::HEAP_START),
             phys_start: crate::memory::PhysAddr::new(0), // dynamically mapped
@@ -408,6 +422,8 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
             flags: crate::memory::vmem::PTE_KERNEL_DATA,
             name: "heap",
         });
+        crate::println!("[boot] Region 3 registered.");
+        crate::println!("[boot] Registering region 4 (devices)...");
         crate::memory::vmem::register_region(crate::memory::vmem::MemoryRegion {
             virt_start: crate::memory::VirtAddr::new(crate::memory::DEVICE_MAP_START),
             phys_start: crate::memory::PhysAddr::new(0x10_0000_0000),
@@ -415,22 +431,22 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
             flags: crate::memory::vmem::PTE_DEVICE,
             name: "devices",
         });
+        crate::println!("[boot] Region 4 registered.");
     }
 
-    // Initialize UART with virtual address (now that MMU is enabled)
-    // Physical UART10 at 0x7D00_1000 → Virtual at DEVICE_MAP_START + 0x300_1000
-    #[cfg(feature = "qemu_raspi5b")]
-    unsafe {
-        let uart_virt_base = crate::memory::DEVICE_MAP_START + 0x300_1000;
-        crate::drivers::uart::Uart10::init_virtual(uart_virt_base);
-        crate::println!(
-            "[uart] Virtual address initialized: {:#018x}",
-            uart_virt_base
-        );
-    }
+    crate::println!("[boot] Memory regions registered, continuing boot...");
 
-    // 4. GIC - NOW uses virtual addresses (GIC at 0x10_7FFF_9000 is in DEVICE_MAP region)
-    crate::println!("[gic] Initializing GIC-400...");
+    // Initialize UART: keep using physical addresses via TTBR0 identity map.
+    // The TTBR0 identity map covers 0x7C00_0000-0x7E00_0000 as device memory,
+    // so the physical UART at 0x7D00_1000 works after MMU enable.
+    // We skip init_virtual() and let the UART driver use physical addresses.
+    crate::println!("[boot] Using physical UART via TTBR0 identity map");
+
+    // GIC: keep using physical addresses via identity map.
+    // The TTBR0 identity map covers 0x7C00_0000-0x7E00_0000,
+    // and we also mapped the GIC at VA=pysical in TTBR0.
+    // No init_virtual needed — physical addresses work.
+    crate::println!("[gic] Re-initializing GIC-400 (physical addresses)...");
     unsafe {
         crate::arch::gic::Gic::init();
     }
@@ -501,13 +517,23 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     );
 
     // 7. Initialize framebuffer display
-    crate::println!("[display] Initializing framebuffer...");
-    let info = match crate::display::fb::init(1920, 1080, 32) {
-        Ok(info) => info,
-        Err(_) => match crate::display::fb::init(640, 480, 32) {
+    // On QEMU, the mailbox is not emulated — skip fb::init and go UART-only.
+    #[cfg(not(feature = "qemu"))]
+    let info = {
+        crate::println!("[display] Initializing framebuffer...");
+        match crate::display::fb::init(1920, 1080, 32) {
             Ok(info) => info,
-            Err(_) => crate::display::fb::get_info(),
-        },
+            Err(_) => match crate::display::fb::init(640, 480, 32) {
+                Ok(info) => info,
+                Err(_) => crate::display::fb::get_info(),
+            },
+        }
+    };
+    #[cfg(feature = "qemu")]
+    let info = {
+        crate::println!("[display] QEMU mode: no framebuffer (UART only)");
+        crate::display::logo::draw_ascii_logo();
+        crate::display::fb::get_info()
     };
     if info.width > 0 {
         crate::display::console::init(info);
@@ -520,6 +546,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::display::splash::update_progress(1, "Display initialized");
     } else {
         crate::println!("[display] No framebuffer available (UART only)");
+        #[cfg(not(feature = "qemu"))]
         crate::display::logo::draw_ascii_logo();
     }
 
@@ -590,27 +617,40 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::println!("[net] QEMU mode: skipping WiFi/SDIO initialization");
     }
 
-    // 16. Initialize network interface table (for QEMU) or continue
-    crate::println!("[iface] Registering network interfaces...");
-    unsafe { crate::net::iface::init() };
-    crate::println!("[net] Initializing network stack...");
-    unsafe { crate::net::init() };
-
-    // 17. Initialize eMMC/SD card (block device for persistent storage)
-    crate::println!("[emmc] Initializing eMMC2 controller...");
-    unsafe {
-        if let Err(e) = crate::drivers::emmc::init() {
-            crate::println!("[emmc] eMMC init failed: {:?}", e);
-        } else {
-            crate::println!("[emmc] eMMC2 controller ready");
-            // Register block device partitions for ext2 mount
-            crate::fs::block_dev::register_partitions(0);
-        }
+    // 16. Network stack — no GENET/WiFi emulated in QEMU, skip entirely
+    #[cfg(not(feature = "qemu"))]
+    {
+        crate::println!("[iface] Registering network interfaces...");
+        unsafe { crate::net::iface::init() };
+        crate::println!("[net] Initializing network stack...");
+        unsafe { crate::net::init() };
+    }
+    #[cfg(feature = "qemu")]
+    {
+        crate::println!("[net] QEMU mode: skipping network stack (no GENET/WiFi)");
     }
 
-    // 18. Mount persistent /etc from ext2 partition (if available)
-    crate::println!("[ext2] Probing for persistent /etc filesystem...");
-    crate::fs::ext2::probe_and_mount_etc();
+    // 17. Initialize eMMC/SD card — no SDHCI emulated in QEMU, skip
+    #[cfg(not(feature = "qemu"))]
+    {
+        crate::println!("[emmc] Initializing eMMC2 controller...");
+        unsafe {
+            if let Err(e) = crate::drivers::emmc::init() {
+                crate::println!("[emmc] eMMC init failed: {:?}", e);
+            } else {
+                crate::println!("[emmc] eMMC2 controller ready");
+                crate::fs::block_dev::register_partitions(0);
+            }
+        }
+
+        // 18. Mount persistent /etc from ext2 partition (if available)
+        crate::println!("[ext2] Probing for persistent /etc filesystem...");
+        crate::fs::ext2::probe_and_mount_etc();
+    }
+    #[cfg(feature = "qemu")]
+    {
+        crate::println!("[emmc] QEMU mode: skipping eMMC (no SDHCI)");
+    }
 
     // 19. Initialize package manager repositories from /etc/pkg/repos.conf
     crate::println!("[pkg] Loading repository configuration...");
@@ -634,10 +674,17 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         }
     }
 
-    // 20. Initialize USB
-    crate::println!("[usb] Initializing USB stack...");
-    crate::usb::init();
-    crate::display::splash::update_progress(5, "USB initialized");
+    // 20. Initialize USB — no XHCI emulated in QEMU, skip
+    #[cfg(not(feature = "qemu"))]
+    {
+        crate::println!("[usb] Initializing USB stack...");
+        crate::usb::init();
+        crate::display::splash::update_progress(5, "USB initialized");
+    }
+    #[cfg(feature = "qemu")]
+    {
+        crate::println!("[usb] QEMU mode: skipping USB (no XHCI)");
+    }
 
     // 14. Initialize window manager
     crate::println!("[wm] Initializing window manager...");
@@ -649,18 +696,31 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::apps::init();
     crate::display::splash::update_progress(7, "Apps initialized");
 
-    // 15a. Initialize power management
-    crate::println!("[power] Initializing power management...");
-    crate::drivers::power_mgmt::PowerManager::init();
-    crate::drivers::power_mgmt::PowerManager::init_watchdog(30); // 30s watchdog
+    // 15a. Hardware-dependent subsystems — skip on QEMU (no PMU, audio, GPIO, BT, GPU)
+    #[cfg(not(feature = "qemu"))]
+    {
+        crate::println!("[power] Initializing power management...");
+        crate::drivers::power_mgmt::PowerManager::init();
+        crate::drivers::power_mgmt::PowerManager::init_watchdog(30);
 
-    // 15a2. Initialize audio mixer
-    crate::println!("[audio] Initializing audio mixer...");
-    crate::drivers::audio_mixer::init();
+        crate::println!("[audio] Initializing audio mixer...");
+        crate::drivers::audio_mixer::init();
 
-    // 15a3. Initialize GPIO userspace API
-    crate::println!("[gpio] Initializing userspace GPIO...");
-    crate::drivers::gpio_user::init();
+        crate::println!("[gpio] Initializing userspace GPIO...");
+        crate::drivers::gpio_user::init();
+
+        crate::println!("[bt] Initializing Bluetooth...");
+        crate::drivers::bluetooth::init();
+        crate::drivers::bluetooth::gatt_init();
+        crate::display::splash::update_progress(8, "Bluetooth + GATT ready");
+
+        crate::drivers::gpu::init_multi_display();
+        crate::display::splash::update_progress(9, "Display configured");
+    }
+    #[cfg(feature = "qemu")]
+    {
+        crate::println!("[hw] QEMU mode: skipping power/audio/GPIO/BT/GPU");
+    }
 
     // 15b. Initialize system config and OS release
     crate::println!("[config] Loading system configuration...");
@@ -676,19 +736,16 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::println!("[panic] Enabling panic recovery...");
     crate::panic_recovery::init(true);
 
-    // 15e. Initialize Bluetooth
-    crate::println!("[bt] Initializing Bluetooth...");
-    crate::drivers::bluetooth::init();
-    crate::drivers::bluetooth::gatt_init();
-    crate::display::splash::update_progress(8, "Bluetooth + GATT ready");
-
-    // 15f. Initialize multi-display support (dual HDMI)
-    crate::drivers::gpu::init_multi_display();
-    crate::display::splash::update_progress(9, "Display configured");
-
     // 16. Spawn shell on UART for serial console
-    crate::println!("[boot] Spawning shell on UART...");
-    crate::sched::create_kernel_task(crate::shell::run, crate::sched::Priority::Normal);
+    // On QEMU, preemptive context switching isn't fully working because the
+    // eret-from-function approach corrupts the exception frame. Run the shell
+    // cooperatively instead: init serial input, then poll from the main loop.
+    crate::println!("[boot] Initializing UART shell (cooperative)...");
+    unsafe { crate::drivers::serial_input::init() };
+    crate::shell::print_banner();
+
+    // Enable preemptive scheduling (used for timer-driven tasks on real hardware)
+    crate::sched::enable();
 
     // 17. Run kernel main loop — drive WM and scheduler
     crate::println!("[boot] LobsterOS v0.2.0 initialization complete!");
@@ -705,9 +762,13 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         // Drive splash screen (handles transition to desktop)
         crate::display::splash::tick();
 
+        // Poll shell for input (cooperative scheduling on QEMU)
+        crate::shell::poll();
+
         // Pet the watchdog every ~100 iterations (prevents hangs)
         watchdog_counter += 1;
         if watchdog_counter >= 100 {
+            #[cfg(not(feature = "qemu"))]
             crate::drivers::power_mgmt::PowerManager::pet_watchdog();
             watchdog_counter = 0;
         }

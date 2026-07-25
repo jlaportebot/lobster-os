@@ -96,18 +96,25 @@ pub fn init() {
 
 /// Send a message to the mailbox
 pub fn send_message(channel: u32, data: u32) -> Result<u32, MailboxError> {
-    // Wait for the mailbox to be ready
+    // Wait for the mailbox to be ready (bounded — return Timeout if no mailbox)
+    let mut spin = 0u32;
+    const SPIN_LIMIT: u32 = 1_000_000;
     while unsafe { core::ptr::read_volatile(MAILBOX_STATUS as *const u32) } & MAILBOX_STATUS_FULL
         != 0
     {
         crate::arch::cpu::nop();
+        spin += 1;
+        if spin >= SPIN_LIMIT {
+            return Err(MailboxError::Timeout);
+        }
     }
 
     // Send the message
     let msg = (data & !0xF) | (channel & 0xF);
     unsafe { core::ptr::write_volatile(MAILBOX_WRITE as *mut u32, msg) };
 
-    // Wait for a response
+    // Wait for a response (bounded — return Timeout if no mailbox replies)
+    spin = 0;
     loop {
         // Wait for the mailbox to have data
         while unsafe { core::ptr::read_volatile(MAILBOX_STATUS as *const u32) }
@@ -115,6 +122,10 @@ pub fn send_message(channel: u32, data: u32) -> Result<u32, MailboxError> {
             != 0
         {
             crate::arch::cpu::nop();
+            spin += 1;
+            if spin >= SPIN_LIMIT {
+                return Err(MailboxError::Timeout);
+            }
         }
 
         // Read the message
