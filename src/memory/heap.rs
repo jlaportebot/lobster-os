@@ -72,16 +72,32 @@ pub unsafe fn init() {
 }
 
 /// Expand the heap by mapping additional frames
+/// Optimized to allocate contiguous chunks for large allocations
 unsafe fn expand_heap(min_size: usize) -> bool {
     let pages_needed = (min_size + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize;
 
-    for _ in 0..pages_needed {
+    // For large allocations, try to allocate contiguous frames
+    // This avoids the overhead of mapping pages one by one
+    let chunk_size = pages_needed.min(64); // Allocate up to 64 pages (256KB) at a time
+    let mut pages_done = 0;
+
+    while pages_done < pages_needed {
         if HEAP_CURRENT_TOP >= HEAP_VIRT_END {
             println!("[heap] Out of heap virtual address space!");
             return false;
         }
 
-        let frame = match frame_alloc::allocate_frame() {
+        let remaining = pages_needed - pages_done;
+        let this_chunk = chunk_size.min(remaining);
+
+        // Try to allocate multiple contiguous frames
+        let frames_allocated = if this_chunk > 1 {
+            frame_alloc::allocate_contiguous_frames(this_chunk)
+        } else {
+            frame_alloc::allocate_frame().map(|f| alloc::vec::Vec::from([f]))
+        };
+
+        let frames = match frames_allocated {
             Some(f) => f,
             None => {
                 println!("[heap] Out of physical frames for heap expansion!");
@@ -89,16 +105,20 @@ unsafe fn expand_heap(min_size: usize) -> bool {
             }
         };
 
-        crate::memory::vmem::map_kernel_page(
-            HEAP_CURRENT_TOP as u64,
-            frame.0,
-            crate::memory::vmem::PTE_KERNEL_DATA,
-        );
+        // Map all frames contiguously
+        for (i, frame) in frames.iter().enumerate() {
+            crate::memory::vmem::map_kernel_page(
+                HEAP_CURRENT_TOP as u64 + (i * PAGE_SIZE as usize) as u64,
+                frame.0,
+                crate::memory::vmem::PTE_KERNEL_DATA,
+            );
+        }
 
-        // Create a new free block at the expanded region
+        // Create a single large free block for the contiguous region
+        let total_size = frames.len() * PAGE_SIZE as usize;
         let new_block = HEAP_CURRENT_TOP as *mut HeapHeader;
         (*new_block) = HeapHeader {
-            size: PAGE_SIZE as usize,
+            size: total_size,
             is_free: true,
             next: core::ptr::null_mut(),
         };
@@ -116,7 +136,8 @@ unsafe fn expand_heap(min_size: usize) -> bool {
             (*current).next = (*new_block).next;
         }
 
-        HEAP_CURRENT_TOP += PAGE_SIZE as usize;
+        HEAP_CURRENT_TOP += total_size;
+        pages_done += frames.len();
     }
 
     true

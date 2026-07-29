@@ -14,6 +14,7 @@
 
 use crate::display::fb::FramebufferInfo;
 use crate::display::graphics;
+use crate::sync::spinlock::Spinlock;
 use crate::wm::theme;
 
 // ─── Widget Types ──────────────────────────────────────────────────────
@@ -500,12 +501,20 @@ pub struct WidgetEntry {
     pub active: bool,
 }
 
+/// Global widget table (shared across all windows)
+/// Protected by Spinlock for thread-safe access
+pub static WIDGET_TABLE: Spinlock<WidgetTable> = Spinlock::new(WidgetTable::new());
+
 /// Per-window widget table
 pub struct WidgetTable {
     entries: [WidgetEntry; MAX_WIDGETS],
     count: usize,
     next_id: WidgetId,
 }
+
+// WidgetTable is Send/Sync safe because all internal types are primitive or Copy
+unsafe impl Send for WidgetTable {}
+unsafe impl Sync for WidgetTable {}
 
 impl Default for WidgetTable {
     fn default() -> Self {

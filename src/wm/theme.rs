@@ -104,7 +104,7 @@ pub struct Theme {
 /// LobsterOS Dark — the default theme (deep ocean colors)
 const THEME_DARK: Theme = Theme {
     // Desktop
-    desktop_bg: 0xFF0D1B2A, // deep navy
+    desktop_bg: 0xFF1A2A3A, // deep navy (lighter for visibility)
 
     // Window chrome
     title_bar: 0xFF1B2838,

@@ -11,7 +11,7 @@ pub fn draw_pixel(fb: &FramebufferInfo, x: u32, y: u32, color: u32) {
     }
     let offset = (y * (fb.pitch / 4) + x) as usize;
     unsafe {
-        let ptr = (fb.base_addr as *mut u32).add(offset);
+        let ptr = (fb.virt_addr as *mut u32).add(offset);
         core::ptr::write_volatile(ptr, color);
     }
 }
@@ -110,7 +110,7 @@ pub fn draw_circle(fb: &FramebufferInfo, cx: u32, cy: u32, r: u32, color: u32) {
 pub fn fill_region(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
     let pitch_words = fb.pitch / 4;
     unsafe {
-        let base = fb.base_addr as *mut u32;
+        let base = fb.virt_addr as *mut u32;
         for dy in 0..h {
             let py = y + dy;
             if py >= fb.height {

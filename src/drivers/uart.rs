@@ -217,6 +217,10 @@ mod aarch64_uart {
             while mmio_read32(reg_addr(UART_FR_OFF)) & FR_TXFF != 0 {}
             mmio_write32(reg_addr(UART_DR_OFF), c as u32);
         }
+        // On QEMU, mirror serial output to the graphical terminal screen buffer
+        // so the framebuffer terminal displays live shell interaction.
+        #[cfg(feature = "qemu")]
+        crate::apps::terminal::mirror_serial_byte(c);
     }
 
     #[inline]

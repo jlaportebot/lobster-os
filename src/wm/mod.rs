@@ -31,11 +31,21 @@ pub fn init() {
         println!("[wm] No framebuffer — window manager disabled");
         return;
     }
+    println!(
+        "[wm] FB info: {}x{} @ {}bpp, virt={:#018x}",
+        fb.width, fb.height, fb.bpp, fb.virt_addr
+    );
+    println!("[wm] Step 1: compositor::init...");
     compositor::init(fb);
+    println!("[wm] Step 2: window::init...");
     window::init();
+    println!("[wm] Step 3: theme::init...");
     theme::init();
+    println!("[wm] Step 4: workspace::init...");
     workspace::init();
+    println!("[wm] Step 5: input::init...");
     input::init();
+    println!("[wm] Step 6: panel::init...");
     panel::init(&fb);
     println!(
         "[wm] Window manager initialized ({}x{})",
@@ -47,8 +57,18 @@ pub fn init() {
 pub fn tick() {
     // Poll HID events and dispatch through the input bridge
     input::pump_events();
-    // Composite all windows
+    // Composite all windows (draws frames, wallper, blits content buffers)
     compositor::composite();
+
+    // Render terminal content directly to framebuffer in window client areas
+    #[cfg(feature = "qemu")]
+    {
+        let fb = get_info();
+        if fb.width > 0 {
+            crate::apps::terminal::render_to_windows(&fb);
+        }
+    }
+
     // Draw panel on top
     let fb = get_info();
     if fb.width > 0 {

@@ -517,7 +517,27 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     );
 
     // 7. Initialize framebuffer display
-    // On QEMU, the mailbox is not emulated — skip fb::init and go UART-only.
+    // On QEMU raspi5b, the property mailbox IS emulated — initialize fb.
+    #[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
+    let info = {
+        crate::println!("[display] QEMU mode (raspi4b): no framebuffer (UART only)");
+        crate::display::logo::draw_ascii_logo();
+        crate::display::fb::get_info()
+    };
+    #[cfg(feature = "qemu_raspi5b")]
+    let info = {
+        crate::println!("[display] QEMU mode (raspi5b): initializing framebuffer...");
+        match crate::display::fb::init(1920, 1080, 32) {
+            Ok(info) => info,
+            Err(e) => {
+                crate::println!(
+                    "[display] Framebuffer init failed: {:?}, falling back to UART only",
+                    e
+                );
+                crate::display::fb::get_info()
+            }
+        }
+    };
     #[cfg(not(feature = "qemu"))]
     let info = {
         crate::println!("[display] Initializing framebuffer...");
@@ -528,12 +548,6 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
                 Err(_) => crate::display::fb::get_info(),
             },
         }
-    };
-    #[cfg(feature = "qemu")]
-    let info = {
-        crate::println!("[display] QEMU mode: no framebuffer (UART only)");
-        crate::display::logo::draw_ascii_logo();
-        crate::display::fb::get_info()
     };
     if info.width > 0 {
         crate::display::console::init(info);
@@ -696,6 +710,46 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::apps::init();
     crate::display::splash::update_progress(7, "Apps initialized");
 
+    // Auto-create desktop app windows on QEMU for immediate desktop experience
+    #[cfg(feature = "qemu")]
+    {
+        crate::println!("[apps] Creating desktop windows...");
+        let fb = crate::display::fb::get_info();
+        if fb.width > 0 {
+            // Layout: terminal on left, app windows on right
+            let term_w = 720;
+            let term_h = 500;
+            // Terminal window (primary)
+            let win_id = crate::apps::terminal::create_terminal_window(
+                &mut crate::wm::widget::WIDGET_TABLE.lock(),
+                50,
+                50,
+                term_w,
+                term_h,
+            );
+            let _ = win_id;
+            crate::println!("[apps] Terminal window created (id={:?})", win_id);
+
+            // System Monitor window
+            let _sysmon_id = crate::wm::window::create(800, 50, 420, 280, "System Monitor");
+            crate::println!("[apps] System Monitor window created");
+
+            // Calculator window
+            let _calc_id = crate::wm::window::create(800, 350, 300, 400, "Calculator");
+            crate::println!("[apps] Calculator window created");
+
+            // File Manager window
+            let _fm_id = crate::wm::window::create(1120, 50, 440, 350, "File Manager");
+            crate::println!("[apps] File Manager window created");
+
+            // Process Manager window
+            let _pm_id = crate::wm::window::create(1120, 420, 440, 280, "Process Manager");
+            crate::println!("[apps] Process Manager window created");
+
+            crate::println!("[apps] Desktop: 5 windows created (Terminal, SysMon, Calculator, FileManager, ProcessMgr)");
+        }
+    }
+
     // 15a. Hardware-dependent subsystems — skip on QEMU (no PMU, audio, GPIO, BT, GPU)
     #[cfg(not(feature = "qemu"))]
     {
@@ -723,18 +777,30 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     }
 
     // 15b. Initialize system config and OS release
-    crate::println!("[config] Loading system configuration...");
-    let _sys_config = crate::config::SystemConfig::load_from_file();
-    crate::config::write_os_release();
-    crate::println!("[config] System configuration loaded");
+    #[cfg(feature = "qemu")]
+    {
+        crate::println!("[config] QEMU mode: skipping config load (using defaults)");
+        let _sys_config = crate::config::SystemConfig::defaults();
+        crate::config::write_os_release();
+        crate::println!("[config] System configuration loaded (defaults)");
+    }
+    #[cfg(not(feature = "qemu"))]
+    {
+        crate::println!("[config] Loading system configuration...");
+        let _sys_config = crate::config::SystemConfig::load_from_file();
+        crate::config::write_os_release();
+        crate::println!("[config] System configuration loaded");
+    }
 
     // 15c. Start syslog daemon as kernel task
     crate::println!("[syslog] Starting syslog daemon...");
     crate::sched::create_kernel_task(crate::syslog::start, crate::sched::Priority::Low);
+    crate::println!("[syslog] create_kernel_task done");
 
     // 15d. Initialize panic recovery (auto-reboot on crash)
     crate::println!("[panic] Enabling panic recovery...");
     crate::panic_recovery::init(true);
+    crate::println!("[panic] panic_recovery::init done");
 
     // 16. Spawn shell on UART for serial console
     // On QEMU, preemptive context switching isn't fully working because the
@@ -743,9 +809,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::println!("[boot] Initializing UART shell (cooperative)...");
     unsafe { crate::drivers::serial_input::init() };
     crate::shell::print_banner();
+    crate::println!("[boot] Shell banner printed");
 
     // Enable preemptive scheduling (used for timer-driven tasks on real hardware)
     crate::sched::enable();
+    crate::println!("[boot] Scheduler enabled");
 
     // 17. Run kernel main loop — drive WM and scheduler
     crate::println!("[boot] LobsterOS v0.2.0 initialization complete!");

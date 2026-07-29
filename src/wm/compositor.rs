@@ -32,7 +32,7 @@ pub enum BufferingMode {
 }
 
 /// Default buffering mode
-const DEFAULT_BUFFERING: BufferingMode = BufferingMode::Triple;
+const DEFAULT_BUFFERING: BufferingMode = BufferingMode::Double;
 
 // ─── Frame Timing Metrics ──────────────────────────────────────────────
 
@@ -272,52 +272,70 @@ fn create_default_cursor() -> alloc::vec::Vec<u32> {
 
 /// Initialize the hardware cursor
 fn init_hardware_cursor(fb: FramebufferInfo) {
-    unsafe {
-        // Create cursor image in heap memory
-        let cursor_data = create_default_cursor();
-        let layout =
-            core::alloc::Layout::from_size_align((cursor_data.len() * 4) as usize, 16).unwrap();
-
-        let ptr = crate::memory::heap::heap_alloc(layout);
-        if ptr.is_null() {
-            println!("[compositor] Failed to allocate cursor memory");
-            return;
-        }
-
-        // Copy cursor data to allocated memory
-        core::ptr::copy_nonoverlapping(cursor_data.as_ptr(), ptr as *mut u32, cursor_data.len());
-
-        // Configure hardware cursor via GPU driver
-        let cursor_info = crate::drivers::gpu::CursorInfo {
-            width: CURSOR_WIDTH,
-            height: CURSOR_HEIGHT,
-            format: 0,    // 32-bit RGBA
-            hotspot_x: 1, // Arrow tip at (1, 1)
-            hotspot_y: 1,
-            data_ptr: ptr as u64,
-        };
-
-        if crate::drivers::gpu::set_cursor_info(&cursor_info) {
-            HW_CURSOR.enabled = true;
-            HW_CURSOR.image_ptr = ptr as *mut u32;
-            HW_CURSOR.width = CURSOR_WIDTH;
-            HW_CURSOR.height = CURSOR_HEIGHT;
-            HW_CURSOR.hotspot_x = 1;
-            HW_CURSOR.hotspot_y = 1;
+    // Skip hardware cursor on QEMU — GPU mailbox not emulated
+    #[cfg(feature = "qemu")]
+    {
+        println!("[compositor] Hardware cursor skipped (QEMU mode)");
+        // Set up software cursor at center
+        unsafe {
             HW_CURSOR.x = fb.width / 2;
             HW_CURSOR.y = fb.height / 2;
+        }
+    }
 
-            // Show cursor at center
-            let _ = crate::drivers::gpu::set_cursor_state(
-                crate::drivers::gpu::CursorState::Visible,
-                HW_CURSOR.x,
-                HW_CURSOR.y,
+    #[cfg(not(feature = "qemu"))]
+    {
+        unsafe {
+            // Create cursor image in heap memory
+            let cursor_data = create_default_cursor();
+            let layout =
+                core::alloc::Layout::from_size_align((cursor_data.len() * 4) as usize, 16).unwrap();
+
+            let ptr = crate::memory::heap::heap_alloc(layout);
+            if ptr.is_null() {
+                println!("[compositor] Failed to allocate cursor memory");
+                return;
+            }
+
+            // Copy cursor data to allocated memory
+            core::ptr::copy_nonoverlapping(
+                cursor_data.as_ptr(),
+                ptr as *mut u32,
+                cursor_data.len(),
             );
 
-            println!("[compositor] Hardware cursor enabled (32x32)");
-        } else {
-            println!("[compositor] Failed to enable hardware cursor");
-            // Note: heap_dealloc may not exist, so we don't free on failure
+            // Configure hardware cursor via GPU driver
+            let cursor_info = crate::drivers::gpu::CursorInfo {
+                width: CURSOR_WIDTH,
+                height: CURSOR_HEIGHT,
+                format: 0,    // 32-bit RGBA
+                hotspot_x: 1, // Arrow tip at (1, 1)
+                hotspot_y: 1,
+                data_ptr: ptr as u64,
+            };
+
+            if crate::drivers::gpu::set_cursor_info(&cursor_info) {
+                HW_CURSOR.enabled = true;
+                HW_CURSOR.image_ptr = ptr as *mut u32;
+                HW_CURSOR.width = CURSOR_WIDTH;
+                HW_CURSOR.height = CURSOR_HEIGHT;
+                HW_CURSOR.hotspot_x = 1;
+                HW_CURSOR.hotspot_y = 1;
+                HW_CURSOR.x = fb.width / 2;
+                HW_CURSOR.y = fb.height / 2;
+
+                // Show cursor at center
+                let _ = crate::drivers::gpu::set_cursor_state(
+                    crate::drivers::gpu::CursorState::Visible,
+                    HW_CURSOR.x,
+                    HW_CURSOR.y,
+                );
+
+                println!("[compositor] Hardware cursor enabled (32x32)");
+            } else {
+                println!("[compositor] Failed to enable hardware cursor");
+                // Note: heap_dealloc may not exist, so we don't free on failure
+            }
         }
     }
 }
@@ -424,7 +442,15 @@ pub struct Layer {
     pub visible: bool,
     pub has_alpha: bool,
     pub opacity: u8,
+    /// Pointer to the window's content buffer (pixels)
+    pub content_ptr: *mut u32,
+    /// Size of content buffer in bytes
+    pub content_size: usize,
 }
+
+// Layer is Send/Sync safe - raw pointer is treated as opaque handle
+unsafe impl Send for Layer {}
+unsafe impl Sync for Layer {}
 
 impl Layer {
     pub const fn zero() -> Self {
@@ -438,6 +464,8 @@ impl Layer {
             visible: false,
             has_alpha: false,
             opacity: 255,
+            content_ptr: core::ptr::null_mut(),
+            content_size: 0,
         }
     }
 
@@ -493,71 +521,125 @@ pub fn init(fb: FramebufferInfo) {
     *LAYER_COUNT.lock() = 0;
     *FULL_REDRAW.lock() = true;
 
-    // Allocate buffers (same size as framebuffer)
-    let fb = FB_INFO.lock();
-    let fb = fb.as_ref().expect("FB_INFO not set");
-    let total_pixels = (fb.width * fb.height) as usize;
-    *BACK_BUF_SIZE.lock() = total_pixels * 4;
-    let buf_size = *BACK_BUF_SIZE.lock();
+    // On QEMU, use direct-to-framebuffer mode (no back/front buffer allocation)
+    // The framebuffer is already mapped via phys-map, so we write directly to it
+    #[cfg(feature = "qemu")]
+    {
+        let total_pixels = (fb.width * fb.height) as usize;
+        *BACK_BUF_SIZE.lock() = total_pixels * 4;
+        let buf_size = *BACK_BUF_SIZE.lock();
 
-    let layout = core::alloc::Layout::from_size_align(buf_size, 16).unwrap();
+        // Use the framebuffer itself as both front and back buffer
+        let fb_ptr = fb.virt_addr as *mut u32;
+        *BACK_BUF.lock() = Some(RawPtr(fb_ptr));
+        *FRONT_BUF.lock() = Some(RawPtr(fb_ptr));
 
-    // Allocate back buffer (CPU writes here)
-    let back_ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
-    if back_ptr.is_null() {
         println!(
-            "[compositor] FATAL: cannot allocate back buffer ({} bytes)",
-            buf_size
+            "[compositor] Direct-to-framebuffer mode: fb={:#x} ({} KB, no heap alloc)",
+            fb.virt_addr,
+            buf_size / 1024
         );
+
+        // Initialize hardware cursor
+        init_hardware_cursor(fb);
         return;
     }
-    *BACK_BUF.lock() = Some(RawPtr(back_ptr as *mut u32));
-    unsafe {
-        core::ptr::write_bytes(back_ptr, 0, buf_size);
-    }
 
-    // Allocate middle buffer (triple buffering)
-    let middle_ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
-    if middle_ptr.is_null() {
-        println!(
-            "[compositor] FATAL: cannot allocate middle buffer ({} bytes)",
-            buf_size
-        );
-        return;
-    }
-    *MIDDLE_BUF.lock() = Some(RawPtr(middle_ptr as *mut u32));
-    unsafe {
-        core::ptr::write_bytes(middle_ptr, 0, buf_size);
-    }
+    // Non-QEMU: allocate buffers (same size as framebuffer)
+    #[cfg(not(feature = "qemu"))]
+    {
+        // Determine buffering mode
+        let mode = *BUFFERING_MODE.lock();
+        let num_buffers = if mode == BufferingMode::Double { 2 } else { 3 };
 
-    // Allocate front buffer (initially same as back)
-    let front_ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
-    if front_ptr.is_null() {
-        println!(
-            "[compositor] FATAL: cannot allocate front buffer ({} bytes)",
-            buf_size
-        );
-        return;
-    }
-    *FRONT_BUF.lock() = Some(RawPtr(front_ptr as *mut u32));
-    unsafe {
-        core::ptr::write_bytes(front_ptr, 0, buf_size);
-    }
+        // Allocate buffers (same size as framebuffer)
+        let fb = FB_INFO.lock();
+        let fb = fb.as_ref().expect("FB_INFO not set");
+        let total_pixels = (fb.width * fb.height) as usize;
+        *BACK_BUF_SIZE.lock() = total_pixels * 4;
+        let buf_size = *BACK_BUF_SIZE.lock();
 
-    println!(
-        "[compositor] Triple buffering: front={:#x} middle={:#x} back={:#x} ({} KB each)",
-        front_ptr as u64,
-        middle_ptr as u64,
-        back_ptr as u64,
-        buf_size / 1024
-    );
+        let layout = core::alloc::Layout::from_size_align(buf_size, 16).unwrap();
 
-    // Initialize hardware cursor
-    init_hardware_cursor(*fb);
+        // Allocate back buffer (CPU writes here)
+        let back_ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
+        if back_ptr.is_null() {
+            println!(
+                "[compositor] FATAL: cannot allocate back buffer ({} bytes)",
+                buf_size
+            );
+            return;
+        }
+        *BACK_BUF.lock() = Some(RawPtr(back_ptr as *mut u32));
+        unsafe {
+            core::ptr::write_bytes(back_ptr, 0, buf_size);
+        }
+
+        // Allocate middle buffer (for triple buffering)
+        if num_buffers >= 3 {
+            let middle_ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
+            if middle_ptr.is_null() {
+                println!(
+                    "[compositor] FATAL: cannot allocate middle buffer ({} bytes)",
+                    buf_size
+                );
+                return;
+            }
+            *MIDDLE_BUF.lock() = Some(RawPtr(middle_ptr as *mut u32));
+            unsafe {
+                core::ptr::write_bytes(middle_ptr, 0, buf_size);
+            }
+        }
+
+        // Allocate front buffer
+        let front_ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
+        if front_ptr.is_null() {
+            println!(
+                "[compositor] FATAL: cannot allocate front buffer ({} bytes)",
+                buf_size
+            );
+            return;
+        }
+        *FRONT_BUF.lock() = Some(RawPtr(front_ptr as *mut u32));
+        unsafe {
+            core::ptr::write_bytes(front_ptr, 0, buf_size);
+        }
+
+        if num_buffers >= 3 {
+            let middle_addr = MIDDLE_BUF.lock();
+            let middle_val = middle_addr.as_ref().map(|p| p.0 as u64).unwrap_or(0);
+            println!(
+                "[compositor] Triple buffering: front={:#x} middle={:#x} back={:#x} ({} KB each)",
+                front_ptr as u64,
+                middle_val,
+                back_ptr as u64,
+                buf_size / 1024
+            );
+        } else {
+            println!(
+                "[compositor] Double buffering: front={:#x} back={:#x} ({} KB each)",
+                front_ptr as u64,
+                back_ptr as u64,
+                buf_size / 1024
+            );
+        }
+
+        // Initialize hardware cursor
+        init_hardware_cursor(*fb);
+    }
 }
 
 /// Add a new layer (window) to the compositor
-pub fn add_layer(id: u32, x: u32, y: u32, w: u32, h: u32, z_order: u32) {
+pub fn add_layer(
+    id: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    z_order: u32,
+    content_ptr: *mut u32,
+    content_size: usize,
+) {
     let mut layers = LAYERS.lock();
     let mut layer_count = LAYER_COUNT.lock();
 
@@ -575,6 +657,8 @@ pub fn add_layer(id: u32, x: u32, y: u32, w: u32, h: u32, z_order: u32) {
         visible: true,
         has_alpha: false,
         opacity: 255,
+        content_ptr,
+        content_size,
     };
     *layer_count += 1;
     drop(layers);
@@ -833,58 +917,70 @@ static mut FRAME_COUNTER: u64 = 0;
 /// Rotate triple buffers and present the front buffer to the display
 /// Rotation: back -> middle -> front -> back (for next frame)
 fn rotate_and_present(fb: FramebufferInfo, back_buffer: *mut u32) {
-    // Wait for VSYNC before presenting to avoid tearing
-    let _ = crate::drivers::gpu::wait_for_vsync();
+    // On QEMU with direct-to-framebuffer mode, the back buffer IS the framebuffer
+    // No swap needed - data is already visible
+    #[cfg(feature = "qemu")]
+    {
+        let _ = fb;
+        let _ = back_buffer;
+        return;
+    }
+    // Non-QEMU: wait for VSYNC and swap buffers
+    #[cfg(not(feature = "qemu"))]
+    {
+        // Wait for VSYNC before presenting to avoid tearing
+        let _ = crate::drivers::gpu::wait_for_vsync();
 
-    let mode = *BUFFERING_MODE.lock();
-    match mode {
-        BufferingMode::Double => {
-            // Double buffering: back -> front
-            let front_buf = {
-                let front_buf_opt = FRONT_BUF.lock();
-                match front_buf_opt.as_ref() {
-                    Some(buf) => buf.0,
-                    None => return,
-                }
-            };
-            blit_full(fb, front_buf, back_buffer);
-            // Swap back and front pointers for next frame
-            let mut back_buf_lock = BACK_BUF.lock();
-            let mut front_buf_lock = FRONT_BUF.lock();
-            core::mem::swap(&mut *back_buf_lock, &mut *front_buf_lock);
-        }
-        BufferingMode::Triple => {
-            // Triple buffering: back -> middle -> front -> display
-            let front_buf = {
-                let front_buf_opt = FRONT_BUF.lock();
-                match front_buf_opt.as_ref() {
-                    Some(buf) => buf.0,
-                    None => return,
-                }
-            };
-            let middle_buf = {
-                let middle_buf_opt = MIDDLE_BUF.lock();
-                match middle_buf_opt.as_ref() {
-                    Some(buf) => buf.0,
-                    None => return,
-                }
-            };
+        let mode = *BUFFERING_MODE.lock();
+        match mode {
+            BufferingMode::Double => {
+                // Double buffering: back -> front
+                let front_buf = {
+                    let front_buf_opt = FRONT_BUF.lock();
+                    match front_buf_opt.as_ref() {
+                        Some(buf) => buf.0,
+                        None => return,
+                    }
+                };
+                blit_full(fb, front_buf, back_buffer);
+                // Swap back and front pointers for next frame
+                let mut back_buf_lock = BACK_BUF.lock();
+                let mut front_buf_lock = FRONT_BUF.lock();
+                core::mem::swap(&mut *back_buf_lock, &mut *front_buf_lock);
+            }
+            BufferingMode::Triple => {
+                // Triple buffering: back -> middle -> front -> display
+                let front_buf = {
+                    let front_buf_opt = FRONT_BUF.lock();
+                    match front_buf_opt.as_ref() {
+                        Some(buf) => buf.0,
+                        None => return,
+                    }
+                };
+                let middle_buf = {
+                    let middle_buf_opt = MIDDLE_BUF.lock();
+                    match middle_buf_opt.as_ref() {
+                        Some(buf) => buf.0,
+                        None => return,
+                    }
+                };
 
-            // Blit middle to front (middle has the completed frame from last rotation)
-            blit_full(fb, front_buf, middle_buf);
+                // Blit middle to front (middle has the completed frame from last rotation)
+                blit_full(fb, front_buf, middle_buf);
 
-            // Rotate pointers: back becomes middle, middle becomes front, front becomes back
-            let mut back_buf_lock = BACK_BUF.lock();
-            let mut middle_buf_lock = MIDDLE_BUF.lock();
-            let mut front_buf_lock = FRONT_BUF.lock();
+                // Rotate pointers: back becomes middle, middle becomes front, front becomes back
+                let mut back_buf_lock = BACK_BUF.lock();
+                let mut middle_buf_lock = MIDDLE_BUF.lock();
+                let mut front_buf_lock = FRONT_BUF.lock();
 
-            let back_ptr = back_buf_lock.take();
-            let middle_ptr = middle_buf_lock.take();
-            let front_ptr = front_buf_lock.take();
+                let back_ptr = back_buf_lock.take();
+                let middle_ptr = middle_buf_lock.take();
+                let front_ptr = front_buf_lock.take();
 
-            *middle_buf_lock = back_ptr; // back -> middle
-            *front_buf_lock = middle_ptr; // middle -> front
-            *back_buf_lock = front_ptr; // front -> back (will be rendered to next)
+                *middle_buf_lock = back_ptr; // back -> middle
+                *front_buf_lock = middle_ptr; // middle -> front
+                *back_buf_lock = front_ptr; // front -> back (will be rendered to next)
+            }
         }
     }
 }
@@ -1023,7 +1119,15 @@ fn render_layer_opaque(
     back_buf: *mut u32,
     theme: &crate::wm::theme::Theme,
 ) {
-    // Window background
+    let _content_pixels = layer.content_size / 4;
+
+    // Always draw window frame
+    // 1. Window background (client area)
+    let client_x = layer.x + 2; // BORDER_W = 2
+    let client_y = layer.y + 24; // TITLE_BAR_H = 24
+    let client_w = layer.w.saturating_sub(4);
+    let client_h = layer.h.saturating_sub(26);
+
     fill_back_buffer_rect(
         fb,
         back_buf,
@@ -1034,12 +1138,12 @@ fn render_layer_opaque(
         theme.win_bg,
     );
 
-    // Window title bar (24px high)
+    // 2. Window title bar (24px high)
     if layer.h > 24 {
         fill_back_buffer_rect(fb, back_buf, layer.x, layer.y, layer.w, 24, theme.title_bar);
     }
 
-    // Window border
+    // 3. Window border
     draw_back_buffer_rect_outline(
         fb,
         back_buf,
@@ -1050,14 +1154,14 @@ fn render_layer_opaque(
         theme.win_border,
     );
 
-    // Close button (red circle, 16x16 at top-right)
+    // 4. Close button (red circle, 16x16 at top-right)
     if layer.w > 30 && layer.h > 20 {
         let btn_x = layer.x + layer.w - 22;
         let btn_y = layer.y + 4;
         fill_back_buffer_rect(fb, back_buf, btn_x, btn_y, 16, 16, theme.close_btn);
     }
 
-    // Title text — ask the window manager for the title
+    // 5. Title text
     let title = crate::wm::window::get_title(layer.id);
     if !title.is_empty() && layer.w > 40 {
         graphics::draw_text(
@@ -1068,6 +1172,27 @@ fn render_layer_opaque(
             theme.title_text,
             theme.title_bar,
         );
+    }
+
+    // 6. Blit content buffer if available
+    if !layer.content_ptr.is_null() && layer.content_size > 0 && client_w > 0 && client_h > 0 {
+        let src = layer.content_ptr;
+        let dst =
+            unsafe { back_buf.add(client_y as usize * fb.width as usize + client_x as usize) };
+        let src_pitch = client_w;
+        let dst_pitch = fb.width;
+
+        for y in 0..client_h {
+            let src_offset = y as usize * src_pitch as usize;
+            let dst_offset = y as usize * dst_pitch as usize;
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    src.add(src_offset),
+                    dst.add(dst_offset),
+                    client_w as usize,
+                );
+            }
+        }
     }
 }
 

@@ -40,127 +40,169 @@ impl SystemConfig {
 
     /// Load default configuration
     pub fn defaults() -> Self {
-        let mut config = Self::new();
+        #[cfg(feature = "qemu")]
+        {
+            // Minimal config for QEMU to avoid slow BTreeMap allocations
+            let mut config = Self::new();
+            // Only add essential sections
+            let mut boot = ConfigSection {
+                name: "boot".into(),
+                keys: BTreeMap::new(),
+            };
+            boot.keys.insert("splash".into(), ConfigValue::Bool(true));
+            boot.keys
+                .insert("autologin".into(), ConfigValue::Bool(false));
+            boot.keys.insert("timeout".into(), ConfigValue::Int(3));
+            config.entries.insert("boot".into(), boot);
 
-        // [boot]
-        let mut boot = ConfigSection {
-            name: "boot".into(),
-            keys: BTreeMap::new(),
-        };
-        boot.keys.insert("splash".into(), ConfigValue::Bool(true));
-        boot.keys
-            .insert("autologin".into(), ConfigValue::Bool(false));
-        boot.keys.insert("timeout".into(), ConfigValue::Int(3));
-        config.entries.insert("boot".into(), boot);
+            let mut display = ConfigSection {
+                name: "display".into(),
+                keys: BTreeMap::new(),
+            };
+            display.keys.insert("width".into(), ConfigValue::Int(1920));
+            display.keys.insert("height".into(), ConfigValue::Int(1080));
+            display.keys.insert("depth".into(), ConfigValue::Int(32));
+            config.entries.insert("display".into(), display);
 
-        // [display]
-        let mut display = ConfigSection {
-            name: "display".into(),
-            keys: BTreeMap::new(),
-        };
-        display.keys.insert("width".into(), ConfigValue::Int(1920));
-        display.keys.insert("height".into(), ConfigValue::Int(1080));
-        display.keys.insert("depth".into(), ConfigValue::Int(32));
-        display.keys.insert("rotation".into(), ConfigValue::Int(0));
-        display.keys.insert("dpi".into(), ConfigValue::Int(96));
-        config.entries.insert("display".into(), display);
+            let mut desktop = ConfigSection {
+                name: "desktop".into(),
+                keys: BTreeMap::new(),
+            };
+            desktop
+                .keys
+                .insert("theme".into(), ConfigValue::String("dark".into()));
+            desktop
+                .keys
+                .insert("workspaces".into(), ConfigValue::Int(4));
+            config.entries.insert("desktop".into(), desktop);
 
-        // [audio]
-        let mut audio = ConfigSection {
-            name: "audio".into(),
-            keys: BTreeMap::new(),
-        };
-        audio.keys.insert("volume".into(), ConfigValue::Int(75));
-        audio
-            .keys
-            .insert("device".into(), ConfigValue::String("auto".into()));
-        audio
-            .keys
-            .insert("sample_rate".into(), ConfigValue::Int(48000));
-        config.entries.insert("audio".into(), audio);
+            return config;
+        }
 
-        // [network]
-        let mut network = ConfigSection {
-            name: "network".into(),
-            keys: BTreeMap::new(),
-        };
-        network
-            .keys
-            .insert("hostname".into(), ConfigValue::String("lobsteros".into()));
-        network.keys.insert("dhcp".into(), ConfigValue::Bool(true));
-        network
-            .keys
-            .insert("wifi_auto".into(), ConfigValue::Bool(true));
-        config.entries.insert("network".into(), network);
+        #[cfg(not(feature = "qemu"))]
+        {
+            let mut config = Self::new();
 
-        // [power]
-        let mut power = ConfigSection {
-            name: "power".into(),
-            keys: BTreeMap::new(),
-        };
-        power
-            .keys
-            .insert("governor".into(), ConfigValue::String("ondemand".into()));
-        power
-            .keys
-            .insert("suspend_timeout".into(), ConfigValue::Int(0));
-        power
-            .keys
-            .insert("watchdog".into(), ConfigValue::Bool(true));
-        config.entries.insert("power".into(), power);
+            // [boot]
+            let mut boot = ConfigSection {
+                name: "boot".into(),
+                keys: BTreeMap::new(),
+            };
+            boot.keys.insert("splash".into(), ConfigValue::Bool(true));
+            boot.keys
+                .insert("autologin".into(), ConfigValue::Bool(false));
+            boot.keys.insert("timeout".into(), ConfigValue::Int(3));
+            config.entries.insert("boot".into(), boot);
 
-        // [security]
-        let mut security = ConfigSection {
-            name: "security".into(),
-            keys: BTreeMap::new(),
-        };
-        security
-            .keys
-            .insert("firewall".into(), ConfigValue::Bool(false));
-        security
-            .keys
-            .insert("selinux".into(), ConfigValue::Bool(false));
-        config.entries.insert("security".into(), security);
+            // [display]
+            let mut display = ConfigSection {
+                name: "display".into(),
+                keys: BTreeMap::new(),
+            };
+            display.keys.insert("width".into(), ConfigValue::Int(1920));
+            display.keys.insert("height".into(), ConfigValue::Int(1080));
+            display.keys.insert("depth".into(), ConfigValue::Int(32));
+            display.keys.insert("rotation".into(), ConfigValue::Int(0));
+            display.keys.insert("dpi".into(), ConfigValue::Int(96));
+            config.entries.insert("display".into(), display);
 
-        // [desktop]
-        let mut desktop = ConfigSection {
-            name: "desktop".into(),
-            keys: BTreeMap::new(),
-        };
-        desktop
-            .keys
-            .insert("theme".into(), ConfigValue::String("dark".into()));
-        desktop
-            .keys
-            .insert("accent".into(), ConfigValue::String("#FF6B35".into()));
-        desktop
-            .keys
-            .insert("font_size".into(), ConfigValue::Int(14));
-        desktop
-            .keys
-            .insert("workspaces".into(), ConfigValue::Int(4));
-        desktop
-            .keys
-            .insert("snapping".into(), ConfigValue::Bool(true));
-        config.entries.insert("desktop".into(), desktop);
+            // [audio]
+            let mut audio = ConfigSection {
+                name: "audio".into(),
+                keys: BTreeMap::new(),
+            };
+            audio.keys.insert("volume".into(), ConfigValue::Int(75));
+            audio
+                .keys
+                .insert("device".into(), ConfigValue::String("auto".into()));
+            audio
+                .keys
+                .insert("sample_rate".into(), ConfigValue::Int(48000));
+            config.entries.insert("audio".into(), audio);
 
-        // [locale]
-        let mut locale = ConfigSection {
-            name: "locale".into(),
-            keys: BTreeMap::new(),
-        };
-        locale
-            .keys
-            .insert("lang".into(), ConfigValue::String("en_US".into()));
-        locale
-            .keys
-            .insert("timezone".into(), ConfigValue::String("UTC".into()));
-        locale
-            .keys
-            .insert("keyboard".into(), ConfigValue::String("us".into()));
-        config.entries.insert("locale".into(), locale);
+            // [network]
+            let mut network = ConfigSection {
+                name: "network".into(),
+                keys: BTreeMap::new(),
+            };
+            network
+                .keys
+                .insert("hostname".into(), ConfigValue::String("lobsteros".into()));
+            network.keys.insert("dhcp".into(), ConfigValue::Bool(true));
+            network
+                .keys
+                .insert("wifi_auto".into(), ConfigValue::Bool(true));
+            config.entries.insert("network".into(), network);
 
-        config
+            // [power]
+            let mut power = ConfigSection {
+                name: "power".into(),
+                keys: BTreeMap::new(),
+            };
+            power
+                .keys
+                .insert("governor".into(), ConfigValue::String("ondemand".into()));
+            power
+                .keys
+                .insert("suspend_timeout".into(), ConfigValue::Int(0));
+            power
+                .keys
+                .insert("watchdog".into(), ConfigValue::Bool(true));
+            config.entries.insert("power".into(), power);
+
+            // [security]
+            let mut security = ConfigSection {
+                name: "security".into(),
+                keys: BTreeMap::new(),
+            };
+            security
+                .keys
+                .insert("firewall".into(), ConfigValue::Bool(false));
+            security
+                .keys
+                .insert("selinux".into(), ConfigValue::Bool(false));
+            config.entries.insert("security".into(), security);
+
+            // [desktop]
+            let mut desktop = ConfigSection {
+                name: "desktop".into(),
+                keys: BTreeMap::new(),
+            };
+            desktop
+                .keys
+                .insert("theme".into(), ConfigValue::String("dark".into()));
+            desktop
+                .keys
+                .insert("accent".into(), ConfigValue::String("#FF6B35".into()));
+            desktop
+                .keys
+                .insert("font_size".into(), ConfigValue::Int(14));
+            desktop
+                .keys
+                .insert("workspaces".into(), ConfigValue::Int(4));
+            desktop
+                .keys
+                .insert("snapping".into(), ConfigValue::Bool(true));
+            config.entries.insert("desktop".into(), desktop);
+
+            // [locale]
+            let mut locale = ConfigSection {
+                name: "locale".into(),
+                keys: BTreeMap::new(),
+            };
+            locale
+                .keys
+                .insert("lang".into(), ConfigValue::String("en_US".into()));
+            locale
+                .keys
+                .insert("timezone".into(), ConfigValue::String("UTC".into()));
+            locale
+                .keys
+                .insert("keyboard".into(), ConfigValue::String("us".into()));
+            config.entries.insert("locale".into(), locale);
+
+            config
+        }
     }
 
     /// Get a value from a section
@@ -274,11 +316,11 @@ impl SystemConfig {
 
     /// Load from /etc/lobsteros.conf (if it exists)
     pub fn load_from_file() -> Self {
-        // Try to read /etc/lobsteros.conf via VFS
-        // If not available, return defaults
-        // For now, return defaults — VFS integration will be added when
-        // the filesystem is mounted at boot
-        Self::defaults()
+        crate::println!("[config] load_from_file: starting");
+        let result = Self::defaults();
+        crate::println!("[config] load_from_file: defaults created");
+        crate::println!("[config] load_from_file: returning defaults");
+        result
     }
 
     /// Save to /etc/lobsteros.conf

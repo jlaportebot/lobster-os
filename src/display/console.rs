@@ -620,7 +620,7 @@ impl FbConsole {
         }
         // Fill entire framebuffer with background color
         unsafe {
-            let ptr = info.base_addr as *mut u32;
+            let ptr = info.virt_addr as *mut u32;
             let total_pixels = (info.size / 4) as usize;
             for i in 0..total_pixels.min((info.width * info.height) as usize) {
                 core::ptr::write_volatile(ptr.add(i), self.bg_color);
@@ -664,7 +664,7 @@ impl FbConsole {
 
                 let offset = (pixel_y * (info.pitch / 4) + pixel_x) as usize;
                 unsafe {
-                    let ptr = (info.base_addr as *mut u32).add(offset);
+                    let ptr = (info.virt_addr as *mut u32).add(offset);
                     core::ptr::write_volatile(ptr, color);
                 }
             }
@@ -745,7 +745,7 @@ impl FbConsole {
         let pitch_words = info.pitch / 4;
 
         unsafe {
-            let ptr = info.base_addr as *mut u32;
+            let ptr = info.virt_addr as *mut u32;
 
             // Copy rows up
             for y in 0..(info.height - pixels_per_line) {

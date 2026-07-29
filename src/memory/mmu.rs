@@ -423,6 +423,31 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
         );
     }
 
+    // Map GPU bus memory (VC RAM) for QEMU framebuffer display
+    // QEMU gpu_bus_mr has RAM aliased at 0x0, 0x40000000, 0x80000000, 0xC0000000 (each 4GB)
+    // vcram_base = 0xFC000000 (GPU bus), framebuffer at 0xFC100000
+    // This falls in the 4th alias (0xC0000000..0xFFFFFFFF) -> physical 0x3C000000..0x40000000
+    // Map the 4th alias region (0xC0000000..0x1_0000_0000 GPU bus) as DEVICE (uncached)
+    // so CPU writes are immediately visible to QEMU display.
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        const GPU_BUS_4TH_ALIAS: u64 = 0xC000_0000; // 4th RAM alias in GPU bus MR
+        const GPU_BUS_4TH_ALIAS_SIZE: u64 = 0x4000_0000; // 1GB (covers 0xC0000000..0xFFFFFFFF)
+        map_range_blocks(
+            ttbr1_root,
+            DEVICE_MAP_START + 0x300_0000, // VA: 0xFFFF_C000_3000_0000
+            GPU_BUS_4TH_ALIAS,             // PA: GPU bus 4th alias (0xC000_0000)
+            GPU_BUS_4TH_ALIAS_SIZE,
+            PTE_DEVICE_BLOCK,
+        );
+        println!(
+            "[mmu] GPU bus 4th alias mapped: {:#x} -> GPU bus {:#x} ({} MB)",
+            DEVICE_MAP_START + 0x300_0000,
+            GPU_BUS_4TH_ALIAS,
+            GPU_BUS_4TH_ALIAS_SIZE / 1024 / 1024
+        );
+    }
+
     println!("[mmu] After cfg blocks, before TTBR phys");
 
     let ttbr0_phys = pt_phys(ttbr0_root);

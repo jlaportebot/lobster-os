@@ -13,7 +13,11 @@
 
 use crate::ipc::{pty_ioctl, pty_master_read, pty_master_write};
 use crate::println;
-use crate::terminal::{parser::Parser, screen::ScreenBuffer, COLS, ROWS};
+use crate::terminal::{
+    parser::Parser,
+    screen::{Cell, ScreenBuffer},
+    COLS, ROWS,
+};
 use crate::wm::widget::{WidgetId, WidgetTable};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -376,10 +380,18 @@ pub fn create_terminal_window(
     let term = get_terminal();
 
     // Initialize terminal PTY if not already done
+    // On QEMU, PTY may fail (no scheduler task context) — still create the window
     if term.pty_master_fd.is_none() {
         if term.init().is_err() {
-            println!("[terminal] Failed to initialize PTY");
-            return None;
+            #[cfg(feature = "qemu")]
+            {
+                println!("[terminal] PTY unavailable on QEMU — creating window without PTY");
+            }
+            #[cfg(not(feature = "qemu"))]
+            {
+                println!("[terminal] Failed to initialize PTY");
+                return None;
+            }
         }
     }
 
@@ -388,6 +400,38 @@ pub fn create_terminal_window(
 
     // Initialize the terminal widget inside the window
     term.init_widget(registry, x, y, w, h);
+
+    // On QEMU, populate the screen buffer with a welcome message so the terminal
+    // widget shows something useful immediately
+    #[cfg(feature = "qemu")]
+    {
+        term.screen = ScreenBuffer::new();
+        // Write welcome text into the screen buffer lines
+        let lines = [
+            "LobsterOS Terminal [QEMU mode]",
+            "",
+            "Type 'help' for commands.",
+            "Shell output appears here.",
+            "",
+        ];
+        for (row, line) in lines.iter().enumerate() {
+            if row < term.screen.rows {
+                let chars: Vec<char> = line.chars().collect();
+                for (col, ch) in chars.iter().enumerate() {
+                    if col < term.screen.cols {
+                        term.screen.cells[row][col] = Cell {
+                            ch: *ch,
+                            fg: 0x00FFFFFF,
+                            bg: 0x00000000,
+                            bold: false,
+                            underline: false,
+                            blink: false,
+                        };
+                    }
+                }
+            }
+        }
+    }
 
     // Register the widget_id with the window for keyboard routing
     if let Some(widget_id) = term.widget_id {
@@ -405,5 +449,93 @@ pub fn get_terminal() -> &'static mut Terminal {
             TERMINAL_INIT = true;
         }
         TERMINAL.as_mut().expect("Terminal not initialized")
+    }
+}
+
+/// Mirror a byte from serial output to the terminal screen buffer.
+/// Called from Uart10::putc on QEMU so the graphical terminal shows live shell output.
+#[cfg(feature = "qemu")]
+pub fn mirror_serial_byte(byte: u8) {
+    let term = get_terminal();
+    if term.widget_id.is_none() {
+        return;
+    }
+    // Feed through the VT100 parser into the screen buffer
+    term.parser.feed(byte, &mut term.screen);
+}
+
+/// Render terminal screen buffer directly to the framebuffer in each terminal window.
+/// Called from the WM tick on QEMU (direct-to-framebuffer mode).
+#[cfg(feature = "qemu")]
+pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
+    use crate::display::graphics;
+    use crate::wm::window;
+
+    let term = get_terminal();
+    if term.widget_id.is_none() {
+        return;
+    }
+
+    // Find all windows that have a terminal widget id set
+    let win_count = window::count();
+    for id in 1..=win_count as u32 {
+        if !window::exists(id) {
+            continue;
+        }
+        // Check if this window has the terminal widget
+        if window::get_info(id).is_none() {
+            continue;
+        }
+        let (wx, wy, ww, wh) = match window::get_info(id) {
+            Some(info) => info,
+            None => continue,
+        };
+
+        // Client area: inset by border (2px) + title bar (24px)
+        let client_x = wx + 2;
+        let client_y = wy + 24;
+        let client_w = ww.saturating_sub(4);
+        let client_h = wh.saturating_sub(26);
+
+        if client_w < 8 || client_h < 16 {
+            continue;
+        }
+
+        let line_height = 16u32;
+        let char_width = 8u32;
+        let visible_rows = (client_h / line_height) as usize;
+        let visible_cols = (client_w / char_width) as usize;
+
+        let scrollback = term.scrollback_offset;
+
+        // Clear client area with black background
+        crate::wm::widget::fill_rect(fb, client_x, client_y, client_w, client_h, 0x00000000);
+
+        // Draw each visible cell
+        for row_idx in 0..visible_rows.min(term.screen.rows) {
+            let actual_row = scrollback + row_idx;
+            if actual_row >= term.screen.rows {
+                break;
+            }
+            let y = client_y + 4 + (row_idx as u32 * line_height);
+            for col_idx in 0..visible_cols.min(term.screen.cols) {
+                let cell = &term.screen.cells[actual_row][col_idx];
+                let x = client_x + 4 + (col_idx as u32 * char_width);
+                if cell.ch != ' ' && cell.ch != '\0' {
+                    graphics::draw_text(fb, x, y, &cell.ch.to_string(), cell.fg, cell.bg);
+                }
+            }
+        }
+
+        // Draw cursor
+        if scrollback == 0 && term.dec_tcem {
+            let cr = term.screen.cursor_row;
+            let cc = term.screen.cursor_col;
+            if cr < term.screen.rows && cc < term.screen.cols {
+                let cx = client_x + 4 + (cc as u32 * char_width);
+                let cy = client_y + 4 + (cr as u32 * line_height);
+                crate::wm::widget::fill_rect(fb, cx, cy, char_width, line_height, 0x00FFFFFF);
+            }
+        }
     }
 }

@@ -179,6 +179,20 @@ pub fn allocate_contiguous(count: usize) -> Option<PhysAddr> {
     result
 }
 
+/// Allocate contiguous frames returning a Vec - wrapper for heap expansion
+pub fn allocate_contiguous_frames(count: usize) -> Option<alloc::vec::Vec<PhysAddr>> {
+    lock();
+    let result = unsafe { allocate_contiguous_inner(count) };
+    unlock();
+    result.map(|start| {
+        let mut vec = alloc::vec::Vec::new();
+        for i in 0..count {
+            vec.push(PhysAddr::new(start.0 + (i as u64 * PAGE_SIZE as u64)));
+        }
+        vec
+    })
+}
+
 unsafe fn allocate_contiguous_inner(count: usize) -> Option<PhysAddr> {
     if count == 0 {
         return None;

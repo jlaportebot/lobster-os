@@ -175,14 +175,23 @@ pub fn create(x: u32, y: u32, w: u32, h: u32, title: &str) -> Option<u32> {
             // Allocate content buffer for client area
             let content_pixels = (win.client_w * win.client_h) as usize;
             win.content_size = content_pixels * 4;
-            if content_pixels > 0 {
+            let content_ptr = if content_pixels > 0 {
                 let layout = core::alloc::Layout::from_size_align(win.content_size, 16).unwrap();
                 let ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
                 if !ptr.is_null() {
                     unsafe { core::ptr::write_bytes(ptr, 0, win.content_size) };
-                    win.set_content_ptr(ptr as *mut u32);
+                    ptr as *mut u32
+                } else {
+                    core::ptr::null_mut()
                 }
-            }
+            } else {
+                core::ptr::null_mut()
+            };
+            win.set_content_ptr(content_ptr);
+
+            // Save these before move
+            let layer_content_ptr = win.content_ptr();
+            let layer_content_size = win.content_size;
 
             windows[i] = win;
             *win_count += 1;
@@ -191,7 +200,7 @@ pub fn create(x: u32, y: u32, w: u32, h: u32, title: &str) -> Option<u32> {
             drop(windows);
             drop(win_count);
             drop(next_win_id);
-            compositor::add_layer(id, x, y, w, h, id);
+            compositor::add_layer(id, x, y, w, h, id, layer_content_ptr, layer_content_size);
 
             // Focus the new window
             focus(id);

@@ -79,6 +79,12 @@ mod arm64 {
         unsafe { core::arch::asm!("nop") }
     }
 
+    /// Relax/yield for busy-wait loops (same as nop for ARM64)
+    #[inline]
+    pub fn relax() {
+        nop();
+    }
+
     /// Delay for approximately `us` microseconds using a busy-wait loop.
     /// Calibrated for ~1 GHz CPU: each iteration ≈ 10 ns (3–4 instructions).
     #[inline]
@@ -146,6 +152,10 @@ mod stub {
     /// No-op
     #[inline]
     pub fn nop() {}
+
+    /// Relax/yield for busy-wait loops - no-op on non-ARM64
+    #[inline]
+    pub fn relax() {}
 
     /// Delay for approximately `us` microseconds - stub does nothing
     #[inline]
