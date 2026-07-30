@@ -937,7 +937,7 @@ fn cmd_help() {
     Uart10::puts("  cpu             Show CPU info\r\n");
     Uart10::puts("  timer           Show timer info\r\n");
     Uart10::puts(" gpio <pin> Read/set GPIO pin state\r\n");
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     {
         Uart10::puts(" ifconfig Show network interface config\r\n");
         Uart10::puts(" ping <ip> Send ICMP echo request\r\n");
@@ -1403,7 +1403,7 @@ fn parse_u64(s: &str) -> Option<u64> {
 
 // === Network commands ===
 /// Parse an IPv4 address string (e.g. "192.168.1.1")
-#[cfg(not(feature = "qemu"))]
+#[cfg(not(feature = "qemu_raspi5b"))]
 fn parse_ip_addr(s: &str) -> Option<[u8; 4]> {
     let mut octets = [0u8; 4];
     let mut idx = 0;
@@ -1651,7 +1651,7 @@ fn cmd_net(args: [&str; MAX_ARGS], argc: usize) {
     }
 }
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(not(feature = "qemu_raspi5b"))]
 fn cmd_dns(args: [&str; MAX_ARGS], argc: usize) {
     if argc < 2 {
         Uart10::puts("Usage: dns <domain>\r\n");
@@ -1760,7 +1760,7 @@ fn cmd_wm(args: [&str; MAX_ARGS], argc: usize) {
 }
 
 /// Panel shell command
-#[cfg(not(feature = "qemu"))]
+#[cfg(not(feature = "qemu_raspi5b"))]
 fn cmd_panel(args: [&str; MAX_ARGS], argc: usize) {
     if argc < 2 {
         Uart10::puts("Usage: panel <toggle|show|hide>\\r\\n");
@@ -1802,7 +1802,7 @@ fn parse_hex_color(s: &str) -> Option<u32> {
     }
 }
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(not(feature = "qemu_raspi5b"))]
 fn cmd_audio(args: [&str; MAX_ARGS], argc: usize) {
     if argc < 2 {
         Uart10::puts("Usage: audio <beep|tone|stop|vol|status>\r\n");
@@ -1854,7 +1854,7 @@ fn cmd_audio(args: [&str; MAX_ARGS], argc: usize) {
     }
 }
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(not(feature = "qemu_raspi5b"))]
 fn cmd_gpu(args: [&str; MAX_ARGS], argc: usize) {
     if argc < 2 {
         Uart10::puts("Usage: gpu <info|status|clock|blank|mode>\r\n");

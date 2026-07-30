@@ -607,6 +607,17 @@ pub fn get_info(id: u32) -> Option<(u32, u32, u32, u32)> {
     None
 }
 
+/// Get terminal widget ID on a window
+pub fn get_terminal_widget_id(id: u32) -> Option<crate::wm::widget::WidgetId> {
+    let windows = WINDOWS.lock();
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].id == id {
+            return windows[i].terminal_widget_id;
+        }
+    }
+    None
+}
+
 /// Set terminal widget ID on a window
 pub fn set_terminal_widget_id(id: u32, widget_id: crate::wm::widget::WidgetId) {
     let mut windows = WINDOWS.lock();

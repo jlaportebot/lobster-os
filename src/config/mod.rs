@@ -40,7 +40,7 @@ impl SystemConfig {
 
     /// Load default configuration
     pub fn defaults() -> Self {
-        #[cfg(feature = "qemu")]
+        #[cfg(feature = "qemu_raspi5b")]
         {
             // Minimal config for QEMU to avoid slow BTreeMap allocations
             let mut config = Self::new();
@@ -79,7 +79,7 @@ impl SystemConfig {
             return config;
         }
 
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(not(feature = "qemu_raspi5b"))]
         {
             let mut config = Self::new();
 

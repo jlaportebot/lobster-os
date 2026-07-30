@@ -360,6 +360,8 @@ impl ScreenBuffer {
         for c in 0..self.cols {
             self.cells[self.rows - 1][c] = Cell::new();
         }
+        // Keep cursor at bottom row after scroll
+        self.cursor_row = self.rows - 1;
         self.dirty = true;
     }
 

@@ -1,6 +1,6 @@
 //! Text Editor for LobsterOS
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(not(feature = "qemu_raspi5b"))]
 mod editor_impl {
     use crate::println;
     use crate::wm::widget::TextInput;
@@ -365,10 +365,10 @@ mod editor_impl {
     }
 }
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(not(feature = "qemu_raspi5b"))]
 pub use editor_impl::*;
 
-#[cfg(feature = "qemu")]
+#[cfg(feature = "qemu_raspi5b")]
 mod editor_stub {
     use alloc::string::String;
     use alloc::vec::Vec;
@@ -439,5 +439,5 @@ mod editor_stub {
     }
 }
 
-#[cfg(feature = "qemu")]
+#[cfg(feature = "qemu_raspi5b")]
 pub use editor_stub::*;

@@ -57,11 +57,11 @@ pub fn init() {
 pub fn tick() {
     // Poll HID events and dispatch through the input bridge
     input::pump_events();
-    // Composite all windows (draws frames, wallper, blits content buffers)
+    // Composite all windows (draws frames, wallpaper, blits content buffers)
     compositor::composite();
 
-    // Render terminal content directly to framebuffer in window client areas
-    #[cfg(feature = "qemu")]
+    // Render terminal content directly to framebuffer in window client areas (QEMU only)
+    #[cfg(feature = "qemu_raspi5b")]
     {
         let fb = get_info();
         if fb.width > 0 {

@@ -352,7 +352,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     let ram_size = 4 * 1024 * 1024 * 1024u64;
     #[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
     let ram_size = 2 * 1024 * 1024 * 1024u64;
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     let ram_size = {
         // Try DTB-detected memory first (supports 1/2/4/8/16GB variants)
         let dtb_mem = crate::dtb::get_memory_size();
@@ -538,7 +538,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
             }
         }
     };
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     let info = {
         crate::println!("[display] Initializing framebuffer...");
         match crate::display::fb::init(1920, 1080, 32) {
@@ -560,7 +560,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::display::splash::update_progress(1, "Display initialized");
     } else {
         crate::println!("[display] No framebuffer available (UART only)");
-        #[cfg(not(feature = "qemu"))]
+        #[cfg(not(feature = "qemu_raspi5b"))]
         crate::display::logo::draw_ascii_logo();
     }
 
@@ -592,7 +592,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::display::splash::update_progress(4, "SMP initialized");
 
     // 12. Initialize SDIO bus (for WiFi) - skip on QEMU
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     {
         crate::println!("[sdio] Initializing SDIO2 controller...");
         unsafe {
@@ -626,26 +626,26 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         }
     }
 
-    #[cfg(feature = "qemu")]
+    #[cfg(feature = "qemu_raspi5b")]
     {
         crate::println!("[net] QEMU mode: skipping WiFi/SDIO initialization");
     }
 
     // 16. Network stack — no GENET/WiFi emulated in QEMU, skip entirely
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     {
         crate::println!("[iface] Registering network interfaces...");
         unsafe { crate::net::iface::init() };
         crate::println!("[net] Initializing network stack...");
         unsafe { crate::net::init() };
     }
-    #[cfg(feature = "qemu")]
+    #[cfg(feature = "qemu_raspi5b")]
     {
         crate::println!("[net] QEMU mode: skipping network stack (no GENET/WiFi)");
     }
 
     // 17. Initialize eMMC/SD card — no SDHCI emulated in QEMU, skip
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     {
         crate::println!("[emmc] Initializing eMMC2 controller...");
         unsafe {
@@ -661,7 +661,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::println!("[ext2] Probing for persistent /etc filesystem...");
         crate::fs::ext2::probe_and_mount_etc();
     }
-    #[cfg(feature = "qemu")]
+    #[cfg(feature = "qemu_raspi5b")]
     {
         crate::println!("[emmc] QEMU mode: skipping eMMC (no SDHCI)");
     }
@@ -689,13 +689,13 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     }
 
     // 20. Initialize USB — no XHCI emulated in QEMU, skip
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     {
         crate::println!("[usb] Initializing USB stack...");
         crate::usb::init();
         crate::display::splash::update_progress(5, "USB initialized");
     }
-    #[cfg(feature = "qemu")]
+    #[cfg(feature = "qemu_raspi5b")]
     {
         crate::println!("[usb] QEMU mode: skipping USB (no XHCI)");
     }
@@ -711,7 +711,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::display::splash::update_progress(7, "Apps initialized");
 
     // Auto-create desktop app windows on QEMU for immediate desktop experience
-    #[cfg(feature = "qemu")]
+    #[cfg(feature = "qemu_raspi5b")]
     {
         crate::println!("[apps] Creating desktop windows...");
         let fb = crate::display::fb::get_info();
@@ -751,7 +751,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     }
 
     // 15a. Hardware-dependent subsystems — skip on QEMU (no PMU, audio, GPIO, BT, GPU)
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     {
         crate::println!("[power] Initializing power management...");
         crate::drivers::power_mgmt::PowerManager::init();
@@ -771,20 +771,20 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::drivers::gpu::init_multi_display();
         crate::display::splash::update_progress(9, "Display configured");
     }
-    #[cfg(feature = "qemu")]
+    #[cfg(feature = "qemu_raspi5b")]
     {
         crate::println!("[hw] QEMU mode: skipping power/audio/GPIO/BT/GPU");
     }
 
     // 15b. Initialize system config and OS release
-    #[cfg(feature = "qemu")]
+    #[cfg(feature = "qemu_raspi5b")]
     {
         crate::println!("[config] QEMU mode: skipping config load (using defaults)");
         let _sys_config = crate::config::SystemConfig::defaults();
         crate::config::write_os_release();
         crate::println!("[config] System configuration loaded (defaults)");
     }
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     {
         crate::println!("[config] Loading system configuration...");
         let _sys_config = crate::config::SystemConfig::load_from_file();
@@ -823,8 +823,9 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::display::splash::update_progress(10, "Boot complete");
 
     let mut watchdog_counter: u64 = 0;
+    let mut last_timer_tick: u64 = crate::arch::timer::Timer::system_time_us();
     loop {
-        // Drive window manager
+        // Drive window manager (runs every iteration on QEMU)
         crate::wm::tick();
 
         // Drive splash screen (handles transition to desktop)
@@ -833,16 +834,36 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         // Poll shell for input (cooperative scheduling on QEMU)
         crate::shell::poll();
 
+        // Cooperative timer tick for QEMU (timer interrupts may not fire)
+        #[cfg(feature = "qemu_raspi5b")]
+        {
+            let now = crate::arch::timer::Timer::system_time_us();
+            if now.saturating_sub(last_timer_tick) >= 1000 { // 1ms tick
+                last_timer_tick = now;
+                crate::sched::on_timer_tick();
+                // Also drive SMP per-core timer accounting
+                let core_id = crate::smp::current_core_id() as usize;
+                crate::smp::runqueue::on_core_timer_tick(core_id);
+            }
+        }
+
         // Pet the watchdog every ~100 iterations (prevents hangs)
         watchdog_counter += 1;
         if watchdog_counter >= 100 {
-            #[cfg(not(feature = "qemu"))]
+            #[cfg(not(feature = "qemu_raspi5b"))]
             crate::drivers::power_mgmt::PowerManager::pet_watchdog();
             watchdog_counter = 0;
         }
 
         // Wait for interrupt
+        #[cfg(not(feature = "qemu_raspi5b"))]
         crate::arch::cpu::wfe();
+        #[cfg(feature = "qemu_raspi5b")]
+        {
+            // On QEMU, timer interrupts may not fire, so don't wait for interrupt
+            // Just yield to allow other cores/tasks to run
+            crate::arch::cpu::relax();
+        }
     }
 }
 

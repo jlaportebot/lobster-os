@@ -13,7 +13,7 @@ pub mod hub;
 pub mod mass;
 pub mod xhci;
 
-#[cfg(feature = "qemu")]
+#[cfg(feature = "qemu_raspi5b")]
 pub mod tests;
 
 use crate::println;

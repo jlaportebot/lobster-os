@@ -1,6 +1,6 @@
 //! Settings Application for LobsterOS
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(not(feature = "qemu_raspi5b"))]
 mod settings_impl {
     use crate::println;
     use crate::wm::theme::{self, set as set_theme, ThemeId};
@@ -229,10 +229,10 @@ mod settings_impl {
     }
 }
 
-#[cfg(not(feature = "qemu"))]
+#[cfg(not(feature = "qemu_raspi5b"))]
 pub use settings_impl::*;
 
-#[cfg(feature = "qemu")]
+#[cfg(feature = "qemu_raspi5b")]
 mod settings_stub {
     use alloc::string::String;
     use alloc::vec::Vec;
@@ -334,5 +334,5 @@ mod settings_stub {
     }
 }
 
-#[cfg(feature = "qemu")]
+#[cfg(feature = "qemu_raspi5b")]
 pub use settings_stub::*;

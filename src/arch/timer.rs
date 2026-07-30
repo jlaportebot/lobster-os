@@ -8,7 +8,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 /// System timer base (BCM2835-style, 1 MHz)
 /// System timer base address
-#[cfg(not(feature = "qemu"))]
+#[cfg(not(feature = "qemu_raspi5b"))]
 const SYSTEM_TIMER_BASE: u64 = 0x10_7C00_3000; // BCM2712
 #[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
 const SYSTEM_TIMER_BASE: u64 = 0xFE00_3000; // BCM2711 (QEMU raspi4b)

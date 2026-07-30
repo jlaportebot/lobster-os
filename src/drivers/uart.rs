@@ -217,9 +217,9 @@ mod aarch64_uart {
             while mmio_read32(reg_addr(UART_FR_OFF)) & FR_TXFF != 0 {}
             mmio_write32(reg_addr(UART_DR_OFF), c as u32);
         }
-        // On QEMU, mirror serial output to the graphical terminal screen buffer
+        // On QEMU raspi5b, mirror serial output to the graphical terminal screen buffer
         // so the framebuffer terminal displays live shell interaction.
-        #[cfg(feature = "qemu")]
+        #[cfg(feature = "qemu_raspi5b")]
         crate::apps::terminal::mirror_serial_byte(c);
     }
 

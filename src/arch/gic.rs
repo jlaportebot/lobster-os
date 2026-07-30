@@ -4,7 +4,7 @@
 //! QEMU raspi4b:   GICD at 0xFF841000, GICC at 0xFF842000
 
 /// GIC Distributor base address (physical)
-#[cfg(not(feature = "qemu"))]
+#[cfg(not(feature = "qemu_raspi5b"))]
 const GICD_PHYS_BASE: u64 = 0x10_7FFF_9000;
 #[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
 const GICD_PHYS_BASE: u64 = 0xFF84_1000;
@@ -12,7 +12,7 @@ const GICD_PHYS_BASE: u64 = 0xFF84_1000;
 const GICD_PHYS_BASE: u64 = 0x10_7FFF_9000;
 
 /// GIC CPU Interface base address (physical)
-#[cfg(not(feature = "qemu"))]
+#[cfg(not(feature = "qemu_raspi5b"))]
 const GICC_PHYS_BASE: u64 = 0x10_7FFF_A000;
 #[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
 const GICC_PHYS_BASE: u64 = 0xFF84_2000;

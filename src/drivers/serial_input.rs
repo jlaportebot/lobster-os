@@ -52,7 +52,7 @@ pub unsafe fn init() {
     const UART10_BASE: u64 = 0x7D00_1000;
     #[cfg(feature = "qemu_raspi5b")]
     const UART10_BASE: u64 = 0x7D00_1000;
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     const UART10_BASE: u64 = 0x10_7D00_1000;
 
     const UART_IMSC: u64 = UART10_BASE + 0x038;
@@ -80,7 +80,7 @@ pub unsafe fn handle_irq() {
     const UART10_BASE: u64 = 0x7D00_1000;
     #[cfg(feature = "qemu_raspi5b")]
     const UART10_BASE: u64 = 0x7D00_1000;
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     const UART10_BASE: u64 = 0x10_7D00_1000;
     const UART_DR: u64 = UART10_BASE + 0x000;
     const UART_FR: u64 = UART10_BASE + 0x018;

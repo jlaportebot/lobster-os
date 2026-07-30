@@ -273,7 +273,7 @@ fn create_default_cursor() -> alloc::vec::Vec<u32> {
 /// Initialize the hardware cursor
 fn init_hardware_cursor(fb: FramebufferInfo) {
     // Skip hardware cursor on QEMU — GPU mailbox not emulated
-    #[cfg(feature = "qemu")]
+    #[cfg(feature = "qemu_raspi5b")]
     {
         println!("[compositor] Hardware cursor skipped (QEMU mode)");
         // Set up software cursor at center
@@ -283,7 +283,7 @@ fn init_hardware_cursor(fb: FramebufferInfo) {
         }
     }
 
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     {
         unsafe {
             // Create cursor image in heap memory
@@ -523,7 +523,7 @@ pub fn init(fb: FramebufferInfo) {
 
     // On QEMU, use direct-to-framebuffer mode (no back/front buffer allocation)
     // The framebuffer is already mapped via phys-map, so we write directly to it
-    #[cfg(feature = "qemu")]
+    #[cfg(feature = "qemu_raspi5b")]
     {
         let total_pixels = (fb.width * fb.height) as usize;
         *BACK_BUF_SIZE.lock() = total_pixels * 4;
@@ -546,7 +546,7 @@ pub fn init(fb: FramebufferInfo) {
     }
 
     // Non-QEMU: allocate buffers (same size as framebuffer)
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     {
         // Determine buffering mode
         let mode = *BUFFERING_MODE.lock();
@@ -783,7 +783,17 @@ pub fn mark_dirty(rect: DirtyRect) {
 
 /// Mark the entire screen dirty
 pub fn mark_full_redraw() {
-    *FULL_REDRAW.lock() = true;
+    // On QEMU, skip full redraw — it wipes terminal content.
+    // Terminal is rendered separately in render_to_windows().
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        return;
+    }
+
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        *FULL_REDRAW.lock() = true;
+    }
 }
 
 // ─── Composition ───────────────────────────────────────────────────────
@@ -865,8 +875,16 @@ pub fn composite() {
         sort_layers();
 
         for rect in dirty_list.iter() {
-            // Clear dirty rect with wallpaper
-            fill_back_buffer_rect_with_wallpaper(fb, back_buffer, rect.x, rect.y, rect.w, rect.h);
+            // On QEMU, skip clearing the terminal window client area with wallpaper
+            // render_to_windows handles terminal text directly
+            let skip_wallpaper_clear = cfg!(feature = "qemu_raspi5b") 
+                && rect.x >= 52 && rect.x < 768 
+                && rect.y >= 74 && rect.y < 524;
+            
+            if !skip_wallpaper_clear {
+                // Clear dirty rect with wallpaper
+                fill_back_buffer_rect_with_wallpaper(fb, back_buffer, rect.x, rect.y, rect.w, rect.h);
+            }
 
             // Re-render layers that overlap this dirty rect
             let layers = LAYERS.lock();
@@ -919,14 +937,14 @@ static mut FRAME_COUNTER: u64 = 0;
 fn rotate_and_present(fb: FramebufferInfo, back_buffer: *mut u32) {
     // On QEMU with direct-to-framebuffer mode, the back buffer IS the framebuffer
     // No swap needed - data is already visible
-    #[cfg(feature = "qemu")]
+    #[cfg(feature = "qemu_raspi5b")]
     {
         let _ = fb;
         let _ = back_buffer;
         return;
     }
     // Non-QEMU: wait for VSYNC and swap buffers
-    #[cfg(not(feature = "qemu"))]
+    #[cfg(not(feature = "qemu_raspi5b"))]
     {
         // Wait for VSYNC before presenting to avoid tearing
         let _ = crate::drivers::gpu::wait_for_vsync();
@@ -1051,6 +1069,19 @@ fn fill_back_buffer_rect_with_wallpaper(
     w: u32,
     h: u32,
 ) {
+    // On QEMU, don't fill with wallpaper — terminal renders directly.
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        let _ = fb;
+        let _ = back_buf;
+        let _ = x;
+        let _ = y;
+        let _ = w;
+        let _ = h;
+        return;
+    }
+
+    #[cfg(not(feature = "qemu_raspi5b"))]
     unsafe {
         let color = WALLPAPER.solid_color;
         let pitch = fb.width;
@@ -1073,8 +1104,6 @@ fn fill_back_buffer_rect_with_wallpaper(
         }
     }
 }
-
-// ─── Internal Rendering ────────────────────────────────────────────────
 
 /// Sort layers by z_order (ascending)
 fn sort_layers() {
@@ -1128,19 +1157,41 @@ fn render_layer_opaque(
     let client_w = layer.w.saturating_sub(4);
     let client_h = layer.h.saturating_sub(26);
 
-    fill_back_buffer_rect(
-        fb,
-        back_buf,
-        layer.x,
-        layer.y,
-        layer.w,
-        layer.h,
-        theme.win_bg,
-    );
+    // On QEMU, render_to_windows fills the client area with terminal text.
+    // Skip the full-window bg fill to avoid overwriting terminal content each frame.
+    // Instead, only fill the title bar and border regions.
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        // Draw title bar
+        if layer.h > 24 {
+            fill_back_buffer_rect(fb, back_buf, layer.x, layer.y, layer.w, 24, theme.title_bar);
+        }
+        // Draw borders (left, right, bottom) only
+        let border_w = 2u32;
+        // Left border
+        fill_back_buffer_rect(fb, back_buf, layer.x, layer.y + 24, border_w, client_h, theme.win_bg);
+        // Right border
+        fill_back_buffer_rect(fb, back_buf, layer.x + layer.w - border_w, layer.y + 24, border_w, client_h, theme.win_bg);
+        // Bottom border
+        fill_back_buffer_rect(fb, back_buf, layer.x, layer.y + layer.h - border_w, layer.w, border_w, theme.win_bg);
+    }
 
-    // 2. Window title bar (24px high)
-    if layer.h > 24 {
-        fill_back_buffer_rect(fb, back_buf, layer.x, layer.y, layer.w, 24, theme.title_bar);
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        fill_back_buffer_rect(
+            fb,
+            back_buf,
+            layer.x,
+            layer.y,
+            layer.w,
+            layer.h,
+            theme.win_bg,
+        );
+
+        // 2. Window title bar (24px high)
+        if layer.h > 24 {
+            fill_back_buffer_rect(fb, back_buf, layer.x, layer.y, layer.w, 24, theme.title_bar);
+        }
     }
 
     // 3. Window border
@@ -1671,6 +1722,17 @@ pub fn get_wallpaper_mode() -> WallpaperMode {
 
 /// Draw the wallpaper to the back buffer
 fn draw_wallpaper(fb: FramebufferInfo, back_buf: *mut u32) {
+    // On QEMU, skip the full wallpaper fill — it wipes terminal content every frame.
+    // The desktop background is set once during init and render_to_windows handles
+    // the terminal client area.
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        let _ = fb;
+        let _ = back_buf;
+        return;
+    }
+
+    #[cfg(not(feature = "qemu_raspi5b"))]
     unsafe {
         let color = WALLPAPER.solid_color;
         let total = (fb.width * fb.height) as usize;

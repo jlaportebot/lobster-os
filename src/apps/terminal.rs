@@ -454,7 +454,7 @@ pub fn get_terminal() -> &'static mut Terminal {
 
 /// Mirror a byte from serial output to the terminal screen buffer.
 /// Called from Uart10::putc on QEMU so the graphical terminal shows live shell output.
-#[cfg(feature = "qemu")]
+#[cfg(feature = "qemu_raspi5b")]
 pub fn mirror_serial_byte(byte: u8) {
     let term = get_terminal();
     if term.widget_id.is_none() {
@@ -466,24 +466,28 @@ pub fn mirror_serial_byte(byte: u8) {
 
 /// Render terminal screen buffer directly to the framebuffer in each terminal window.
 /// Called from the WM tick on QEMU (direct-to-framebuffer mode).
-#[cfg(feature = "qemu")]
+#[cfg(feature = "qemu_raspi5b")]
 pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
     use crate::display::graphics;
     use crate::wm::window;
 
     let term = get_terminal();
-    if term.widget_id.is_none() {
-        return;
-    }
+    let term_widget_id = match term.widget_id {
+        Some(id) => id,
+        None => return,
+    };
 
-    // Find all windows that have a terminal widget id set
     let win_count = window::count();
     for id in 1..=win_count as u32 {
         if !window::exists(id) {
             continue;
         }
-        // Check if this window has the terminal widget
-        if window::get_info(id).is_none() {
+        // Check if this window has our terminal widget
+        let win_term_widget = match window::get_terminal_widget_id(id) {
+            Some(w) => w,
+            None => continue,
+        };
+        if win_term_widget != term_widget_id {
             continue;
         }
         let (wx, wy, ww, wh) = match window::get_info(id) {
@@ -505,11 +509,10 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
         let char_width = 8u32;
         let visible_rows = (client_h / line_height) as usize;
         let visible_cols = (client_w / char_width) as usize;
-
         let scrollback = term.scrollback_offset;
 
-        // Clear client area with black background
-        crate::wm::widget::fill_rect(fb, client_x, client_y, client_w, client_h, 0x00000000);
+        // Clear client area with terminal background color
+        crate::wm::widget::fill_rect(fb, client_x, client_y, client_w, client_h, 0xFF000000);
 
         // Draw each visible cell
         for row_idx in 0..visible_rows.min(term.screen.rows) {
@@ -534,7 +537,7 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
             if cr < term.screen.rows && cc < term.screen.cols {
                 let cx = client_x + 4 + (cc as u32 * char_width);
                 let cy = client_y + 4 + (cr as u32 * line_height);
-                crate::wm::widget::fill_rect(fb, cx, cy, char_width, line_height, 0x00FFFFFF);
+                crate::wm::widget::fill_rect(fb, cx, cy, char_width, line_height, 0xFFFFFFFF);
             }
         }
     }
