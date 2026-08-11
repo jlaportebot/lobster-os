@@ -37,7 +37,15 @@ pub struct ContentPtr(*mut u32);
 unsafe impl Send for ContentPtr {}
 unsafe impl Sync for ContentPtr {}
 
+impl Clone for ContentPtr {
+    fn clone(&self) -> Self {
+        ContentPtr(self.0)
+    }
+}
+impl Copy for ContentPtr {}
+
 /// Window structure
+#[derive(Clone, Copy)]
 pub struct Window {
     pub id: u32,
     pub x: u32,
@@ -95,6 +103,11 @@ impl Window {
     /// Get the title as a string slice
     pub fn title_str(&self) -> &str {
         core::str::from_utf8(&self.title[..self.title_len]).unwrap_or("")
+    }
+
+    /// Check if title matches exactly
+    pub fn title_matches(&self, s: &str) -> bool {
+        self.title_str() == s
     }
 
     /// Set the title from a string
@@ -173,15 +186,26 @@ pub fn create(x: u32, y: u32, w: u32, h: u32, title: &str) -> Option<u32> {
             win.client_h = h.saturating_sub(TITLE_BAR_H + BORDER_W);
 
             // Allocate content buffer for client area
+            // On QEMU, skip content buffer allocation to avoid O(n²) heap expansion.
+            // Apps will render directly to framebuffer via their render methods in wm::tick().
             let content_pixels = (win.client_w * win.client_h) as usize;
             win.content_size = content_pixels * 4;
             let content_ptr = if content_pixels > 0 {
-                let layout = core::alloc::Layout::from_size_align(win.content_size, 16).unwrap();
-                let ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
-                if !ptr.is_null() {
-                    unsafe { core::ptr::write_bytes(ptr, 0, win.content_size) };
-                    ptr as *mut u32
-                } else {
+                #[cfg(not(feature = "qemu_raspi5b"))]
+                {
+                    let layout =
+                        core::alloc::Layout::from_size_align(win.content_size, 16).unwrap();
+                    let ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
+                    if !ptr.is_null() {
+                        unsafe { core::ptr::write_bytes(ptr, 0, win.content_size) };
+                        ptr as *mut u32
+                    } else {
+                        core::ptr::null_mut()
+                    }
+                }
+                #[cfg(feature = "qemu_raspi5b")]
+                {
+                    // No content buffer - apps render directly
                     core::ptr::null_mut()
                 }
             } else {
@@ -602,6 +626,28 @@ pub fn get_info(id: u32) -> Option<(u32, u32, u32, u32)> {
     for i in 0..MAX_WINDOWS {
         if windows[i].active && windows[i].id == id {
             return Some((windows[i].x, windows[i].y, windows[i].w, windows[i].h));
+        }
+    }
+    None
+}
+
+/// Get window by ID (returns copy of Window struct)
+pub fn get(id: u32) -> Option<Window> {
+    let windows = WINDOWS.lock();
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].id == id {
+            return Some(windows[i]);
+        }
+    }
+    None
+}
+
+/// Find window ID by exact title match
+pub fn find_by_title(title: &str) -> Option<u32> {
+    let windows = WINDOWS.lock();
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].title_matches(title) {
+            return Some(windows[i].id);
         }
     }
     None

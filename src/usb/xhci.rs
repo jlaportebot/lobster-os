@@ -17,7 +17,12 @@ use core::ptr::{read_volatile, write_volatile};
 // ─── BCM2712 xHCI Memory Map ──────────────────────────────────────────
 
 /// xHCI controller base physical address
+/// Real Pi 5: 0x0001_00C5_0000 (48-bit SCB bus)
+/// QEMU raspi5b: 0x7C20_0000 (peri base 0x7C000000 + XHCI offset 0x200000)
+#[cfg(not(feature = "qemu_raspi5b"))]
 const XHCI_BASE_PHYS: u64 = 0x0001_00C5_0000;
+#[cfg(feature = "qemu_raspi5b")]
+const XHCI_BASE_PHYS: u64 = 0x7C20_0000;
 
 /// USB PHY base
 const USB_PHY_BASE_PHYS: u64 = 0x0001_00C5_1000;
@@ -450,9 +455,13 @@ pub fn init() -> Result<(), &'static str> {
 
     // 1. Read capability registers
     let cap_len = reg32_read(base, CAPLENGTH) as u8;
+    println!("[xhci] CAPLENGTH read: {}", cap_len);
     let hcsparams1 = reg32_read(base, HCSPARAMS1);
-    let _hcsparams2 = reg32_read(base, HCSPARAMS2);
-    let _hccparams1 = reg32_read(base, HCCPARAMS1);
+    println!("[xhci] HCSPARAMS1: {:#x}", hcsparams1);
+    let hcsparams2 = reg32_read(base, HCSPARAMS2);
+    println!("[xhci] HCSPARAMS2: {:#x}", hcsparams2);
+    let hccparams1 = reg32_read(base, HCCPARAMS1);
+    println!("[xhci] HCCPARAMS1: {:#x}", hccparams1);
 
     let max_slots = (hcsparams1 & 0xFF) as u8;
     let max_intrs = ((hcsparams1 >> 8) & 0x7FF) as u16;
@@ -471,6 +480,7 @@ pub fn init() -> Result<(), &'static str> {
 
     // 2. Ensure controller is halted
     let sts = reg32_read(base, USBSTS);
+    println!("[xhci] Initial USBSTS: {:#x}", sts);
     if (sts & USBSTS_HCH) == 0 {
         println!("[xhci] Halting controller...");
         reg32_write(base, USBCMD, reg32_read(base, USBCMD) & !USBCMD_RUN);
@@ -486,6 +496,9 @@ pub fn init() -> Result<(), &'static str> {
         if timeout == 0 {
             return Err("xHCI: controller did not halt");
         }
+        println!("[xhci] Controller halted");
+    } else {
+        println!("[xhci] Controller already halted");
     }
 
     // 3. Reset controller
@@ -495,6 +508,7 @@ pub fn init() -> Result<(), &'static str> {
     while timeout > 0 {
         let cmd = reg32_read(base, USBCMD);
         let sts = reg32_read(base, USBSTS);
+        println!("[xhci] Reset wait: USBCMD={:#x} USBSTS={:#x}", cmd, sts);
         if (cmd & USBCMD_HCRST) == 0 && (sts & USBSTS_CNR) == 0 {
             break;
         }

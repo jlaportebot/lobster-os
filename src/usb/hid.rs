@@ -208,6 +208,17 @@ pub fn poll() -> Option<HidEvent> {
             _ => {}
         }
     }
+
+    // Fallback: check QEMU MMIO input device (custom lobster-input device)
+    // On QEMU raspi5b, there are no real USB HID devices, so all input
+    // comes through this MMIO ring buffer.
+    #[cfg(target_arch = "aarch64")]
+    {
+        if let Some(evt) = crate::drivers::qemu_input::poll() {
+            return Some(evt);
+        }
+    }
+
     None
 }
 
@@ -346,6 +357,13 @@ pub fn get_modifiers() -> u8 {
             if dev.active && dev.dev_type == HidType::Keyboard {
                 return dev.report_buf[0];
             }
+        }
+    }
+    // Fallback: QEMU MMIO input modifier state
+    #[cfg(target_arch = "aarch64")]
+    {
+        if crate::drivers::qemu_input::is_present() {
+            return crate::drivers::qemu_input::modifiers();
         }
     }
     0

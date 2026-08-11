@@ -238,3 +238,35 @@ impl Default for Calculator {
 pub fn init() {
     crate::println!("[apps] Calculator initialized");
 }
+
+/// Global Calculator instance
+static mut CALCULATOR: Option<Calculator> = None;
+
+/// Get the global Calculator instance
+fn get_calculator() -> &'static mut Calculator {
+    unsafe {
+        if CALCULATOR.is_none() {
+            CALCULATOR = Some(Calculator::new());
+        }
+        CALCULATOR.as_mut().expect("Calculator not initialized")
+    }
+}
+
+/// Render Calculator to its window (QEMU direct-to-framebuffer mode)
+#[cfg(feature = "qemu_raspi5b")]
+pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
+    // Find the Calculator window by title
+    if let Some(win_id) = crate::wm::window::find_by_title("Calculator") {
+        if let Some(win) = crate::wm::window::get(win_id) {
+            if win.active {
+                let calc = get_calculator();
+                // Client area: x+2, y+24, w-4, h-26
+                let cx = win.x + 2;
+                let cy = win.y + 24;
+                let cw = win.w.saturating_sub(4);
+                let ch = win.h.saturating_sub(26);
+                calc.render(cx, cy, cw, ch);
+            }
+        }
+    }
+}

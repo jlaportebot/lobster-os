@@ -688,14 +688,18 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         }
     }
 
-    // 20. Initialize USB — no XHCI emulated in QEMU, skip
-    #[cfg(not(feature = "qemu_raspi5b"))]
-    {
-        crate::println!("[usb] Initializing USB stack...");
-        crate::usb::init();
-        crate::display::splash::update_progress(5, "USB initialized");
-    }
+    // 20. Initialize USB — XHCI hangs on QEMU raspi5b (register access at wrong base addr).
+    // Instead, rely on the custom lobster-input MMIO device for mouse/keyboard input.
     #[cfg(feature = "qemu_raspi5b")]
+    {
+        crate::println!("[usb] QEMU mode: skipping XHCI (using lobster-input MMIO device)");
+        crate::display::splash::update_progress(5, "Input ready");
+
+        // Initialize QEMU MMIO input device (custom lobster-input device at 0x7d008000)
+        crate::println!("[qemu-input] Initializing MMIO input device...");
+        crate::drivers::qemu_input::init();
+    }
+    #[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
     {
         crate::println!("[usb] QEMU mode: skipping USB (no XHCI)");
     }
@@ -838,7 +842,8 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         #[cfg(feature = "qemu_raspi5b")]
         {
             let now = crate::arch::timer::Timer::system_time_us();
-            if now.saturating_sub(last_timer_tick) >= 1000 { // 1ms tick
+            if now.saturating_sub(last_timer_tick) >= 1000 {
+                // 1ms tick
                 last_timer_tick = now;
                 crate::sched::on_timer_tick();
                 // Also drive SMP per-core timer accounting

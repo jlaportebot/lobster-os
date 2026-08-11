@@ -264,7 +264,7 @@ fn generate_version(buf: &mut [u8]) -> usize {
     write_str(
         buf,
         0,
-        "LobsterOS v0.1.0 (aarch64) #1 SMP PREEMPT\n\
+        "LobsterOS v0.2.0 (aarch64) #1 SMP PREEMPT\n\
          BCM2712 Quad-core Cortex-A76 @ 2.4 GHz\n\
          Rust #![no_std] bare-metal\n",
     )

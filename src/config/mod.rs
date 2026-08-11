@@ -76,7 +76,7 @@ impl SystemConfig {
                 .insert("workspaces".into(), ConfigValue::Int(4));
             config.entries.insert("desktop".into(), desktop);
 
-            return config;
+            config
         }
 
         #[cfg(not(feature = "qemu_raspi5b"))]

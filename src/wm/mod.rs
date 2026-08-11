@@ -66,6 +66,11 @@ pub fn tick() {
         let fb = get_info();
         if fb.width > 0 {
             crate::apps::terminal::render_to_windows(&fb);
+            // Render other apps directly to their window client areas
+            crate::apps::sysmon::render_to_windows(&fb);
+            crate::apps::calculator::render_to_windows(&fb);
+            crate::apps::file_manager::render_to_windows(&fb);
+            crate::apps::process_manager::render_to_windows(&fb);
         }
     }
 

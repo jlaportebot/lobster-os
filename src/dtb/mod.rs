@@ -81,6 +81,11 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
     let mut current_node_name: [&str; 16] = [""; 16];
     let mut in_memory_node = false;
 
+    // Track #address-cells and #size-cells for each depth level
+    // Root defaults: #address-cells = 2, #size-cells = 1 (per DTB spec)
+    let mut addr_cells: [u32; 16] = [2; 16];
+    let mut size_cells: [u32; 16] = [1; 16];
+
     while offset < struct_end {
         let token_ptr = struct_start + offset;
         let token = u32::from_be(unsafe { core::ptr::read_volatile(token_ptr as *const u32) });
@@ -93,6 +98,11 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
                 offset += ((name_len + 3) & !3) as u64;
 
                 current_node_name[depth as usize] = name;
+                // Inherit address/size cells from parent, then check for overrides
+                if depth > 0 {
+                    addr_cells[depth as usize] = addr_cells[(depth - 1) as usize];
+                    size_cells[depth as usize] = size_cells[(depth - 1) as usize];
+                }
                 depth += 1;
 
                 in_memory_node =
@@ -122,9 +132,17 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
 
                 if depth > 0 {
                     let parent = current_node_name[(depth - 1) as usize];
+                    // Get the address/size cells for the current node (at depth-1)
+                    let cur_addr_cells = addr_cells[(depth - 1) as usize];
+                    let cur_size_cells = size_cells[(depth - 1) as usize];
 
                     if in_memory_node && prop_name == "reg" {
-                        let (addr, size) = parse_reg_property(prop_data_ptr, prop_len);
+                        let (addr, size) = parse_reg_property(
+                            prop_data_ptr,
+                            prop_len,
+                            cur_addr_cells,
+                            cur_size_cells,
+                        );
                         unsafe {
                             if size > SYSTEM_MEMORY_SIZE {
                                 SYSTEM_MEMORY_SIZE = size;
@@ -144,7 +162,38 @@ fn parse_structure_block(struct_start: u64, strings_start: u64, struct_end: u64)
                     }
 
                     if parent == "cpus" && prop_name.starts_with("#address-cells") {
-                        // Parse #address-cells
+                        // Parse #address-cells - update for children
+                        if prop_len == 4 {
+                            let val = u32::from_be(unsafe {
+                                core::ptr::read_volatile(prop_data_ptr as *const u32)
+                            });
+                            // Apply to current depth and all children
+                            addr_cells[depth as usize] = val;
+                        }
+                    }
+
+                    if parent == "cpus" && prop_name.starts_with("#size-cells") {
+                        // Parse #size-cells
+                        if prop_len == 4 {
+                            let val = u32::from_be(unsafe {
+                                core::ptr::read_volatile(prop_data_ptr as *const u32)
+                            });
+                            size_cells[depth as usize] = val;
+                        }
+                    }
+
+                    // Also check for #address-cells/#size-cells at any level
+                    if prop_name == "#address-cells" && prop_len == 4 {
+                        let val = u32::from_be(unsafe {
+                            core::ptr::read_volatile(prop_data_ptr as *const u32)
+                        });
+                        addr_cells[depth as usize] = val;
+                    }
+                    if prop_name == "#size-cells" && prop_len == 4 {
+                        let val = u32::from_be(unsafe {
+                            core::ptr::read_volatile(prop_data_ptr as *const u32)
+                        });
+                        size_cells[depth as usize] = val;
                     }
 
                     if prop_name == "serial-number" && prop_len == 8 {
@@ -201,10 +250,32 @@ fn parse_mem_property(ptr: u64, len: u32) -> u64 {
     }
 }
 
-fn parse_reg_property(ptr: u64, _len: u64) -> (u64, u64) {
-    let addr = unsafe { core::ptr::read_volatile(ptr as *const u64) };
-    let size = unsafe { core::ptr::read_volatile((ptr + 8) as *const u64) };
-    (u64::from_be(addr), u64::from_be(size))
+/// Parse a reg property respecting the parent node's #address-cells and #size-cells
+fn parse_reg_property(ptr: u64, len: u64, addr_cells: u32, size_cells: u32) -> (u64, u64) {
+    // Each cell is 4 bytes (u32, big-endian)
+    let addr_bytes = (addr_cells as u64) * 4;
+    let size_bytes = (size_cells as u64) * 4;
+
+    if len < (addr_bytes + size_bytes) {
+        return (0, 0);
+    }
+
+    let mut addr: u64 = 0;
+    for i in 0..addr_cells {
+        let cell =
+            u32::from_be(unsafe { core::ptr::read_volatile((ptr + (i as u64) * 4) as *const u32) });
+        addr = (addr << 32) | (cell as u64);
+    }
+
+    let mut size: u64 = 0;
+    for i in 0..size_cells {
+        let cell = u32::from_be(unsafe {
+            core::ptr::read_volatile((ptr + addr_bytes + (i as u64) * 4) as *const u32)
+        });
+        size = (size << 32) | (cell as u64);
+    }
+
+    (addr, size)
 }
 
 /// Read a null-terminated string from memory

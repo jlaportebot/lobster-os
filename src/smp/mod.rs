@@ -275,6 +275,17 @@ fn boot_secondary_core(core_id: u64) {
         core_id, spin_table_addr
     );
 
+    // On QEMU, secondary cores don't actually start (no PSCI/firmware support).
+    // Skip the wait entirely on QEMU — just mark them as offline and continue.
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        println!(
+            "[smp] Core {} skipped (QEMU mode - no secondary core support)",
+            core_id
+        );
+        return;
+    }
+
     // Wait for the core to come online (with timeout)
     let mut timeout = 1_000_000;
     while !is_core_online(core_id as usize) && timeout > 0 {

@@ -92,7 +92,7 @@ fn draw_logo(info: &fb::FramebufferInfo, w: u32, h: u32) {
         info,
         cx,
         cy + 50,
-        "v0.1.0",
+        "v0.2.0",
         0xFF808080,
         theme::current().desktop_bg,
     );

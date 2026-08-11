@@ -62,7 +62,7 @@ pub fn draw_splash(info: FramebufferInfo) {
     graphics::draw_text(&info, title_x, title_y, title, WHITE, 0);
 
     // Draw version below
-    let ver = "v0.1.0";
+    let ver = "v0.2.0";
     let ver_width = ver.len() as u32 * console::CHAR_WIDTH;
     let ver_x = cx.saturating_sub(ver_width / 2);
     graphics::draw_text(
@@ -131,7 +131,7 @@ pub fn draw_ascii_logo() {
     println!(r"  /_/|_|\___/_/   / , __/ /    ");
     println!(r"                   |_|  /_/     ");
     println!();
-    println!("  === LobsterOS v0.1.0 ===");
+    println!("  === LobsterOS v0.2.0 ===");
     println!("  Bare-metal Rust on Raspberry Pi 5");
     println!();
 }

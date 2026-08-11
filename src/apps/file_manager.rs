@@ -551,3 +551,81 @@ pub fn init() {
 pub fn get_file_manager() -> &'static mut FileManager {
     unsafe { &mut FILE_MANAGER }
 }
+
+/// Render the file manager UI
+#[cfg(feature = "qemu_raspi5b")]
+impl FileManager {
+    pub fn render(&self, x: u32, y: u32, width: u32, height: u32) {
+        let info = crate::display::fb::get_info();
+
+        // Title bar area (already drawn by compositor)
+        // Path display
+        let path_y = y + 4;
+        let path_text = alloc::format!("{}", self.current_path);
+        crate::display::graphics::draw_text(&info, x + 8, path_y, &path_text, 0xCCCCCC, 0x1E1E1E);
+
+        // File list
+        let list_y = y + 24;
+        let row_h = 20;
+        let max_rows = height.saturating_sub(30) / row_h;
+
+        for row_idx in 0..max_rows as usize {
+            let entry_idx = row_idx;
+            if entry_idx >= self.entries.len() {
+                break;
+            }
+            let row_y = list_y + row_idx as u32 * row_h;
+            let entry = &self.entries[entry_idx];
+
+            let is_selected = entry_idx == self.selected_index;
+            let bg = if is_selected { 0x3A4A6A } else if row_idx % 2 == 0 { 0x1E1E2E } else { 0x1A1A2A };
+
+            crate::display::graphics::draw_rect(&info, x, row_y, width, row_h, bg);
+
+            let icon = if entry.is_dir { "[DIR] " } else { "[FILE] " };
+            let name_text = alloc::format!("{}{}", icon, entry.name);
+            crate::display::graphics::draw_text(&info, x + 8, row_y + 4, &name_text, 0xCCCCCC, bg);
+
+            if !entry.is_dir {
+                let size_text = alloc::format!("{} B", entry.size);
+                crate::display::graphics::draw_text(
+                    &info,
+                    x + width - 80,
+                    row_y + 4,
+                    &size_text,
+                    0x8888AA,
+                    bg,
+                );
+            }
+        }
+
+        // Status bar
+        let status_y = y + height.saturating_sub(20);
+        let status = alloc::format!(
+            "{} items | {} selected",
+            self.entries.len(),
+            self.selected_index
+        );
+        crate::display::graphics::draw_rect(&info, x, status_y, width, 20, 0x1A1A2A);
+        crate::display::graphics::draw_text(&info, x + 8, status_y + 4, &status, 0x666688, 0x1A1A2A);
+    }
+}
+
+/// Render File Manager to its window (QEMU direct-to-framebuffer mode)
+#[cfg(feature = "qemu_raspi5b")]
+pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
+    // Find the File Manager window by title
+    if let Some(win_id) = crate::wm::window::find_by_title("File Manager") {
+        if let Some(win) = crate::wm::window::get(win_id) {
+            if win.active {
+                let fm = get_file_manager();
+                // Client area: x+2, y+24, w-4, h-26
+                let cx = win.x + 2;
+                let cy = win.y + 24;
+                let cw = win.w.saturating_sub(4);
+                let ch = win.h.saturating_sub(26);
+                fm.render(cx, cy, cw, ch);
+            }
+        }
+    }
+}

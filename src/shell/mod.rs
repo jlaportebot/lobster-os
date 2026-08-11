@@ -538,7 +538,7 @@ fn read_line_from_pty(fd: usize, buf: &mut [u8]) -> usize {
 pub fn print_banner() {
     Uart10::puts("\r\n");
     Uart10::puts("  +======================================+\r\n");
-    Uart10::puts("  |       Lobster OS v0.5.0              |\r\n");
+    Uart10::puts("  |       LobsterOS v0.2.0               |\r\n");
     Uart10::puts("  |   AArch64 Bare-Metal Operating System |\r\n");
     Uart10::puts("  |        Raspberry Pi 5 / BCM2712       |\r\n");
     Uart10::puts("  +======================================+\r\n");
@@ -1077,7 +1077,7 @@ fn cmd_echo(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 }
 
 fn cmd_version() {
-    Uart10::puts("Lobster OS v0.5.0\r\n");
+    Uart10::puts("LobsterOS v0.2.0\r\n");
     Uart10::puts("Target: AArch64 (BCM2712 / Raspberry Pi 5)\r\n");
     Uart10::puts("Kernel: 0x80000000\r\n");
     Uart10::puts("Scheduler: Round-robin preemptive\r\n");
@@ -2560,12 +2560,14 @@ fn cmd_login(args: [&str; MAX_ARGS], argc: usize) -> i32 {
             crate::println!("[login] Welcome, {}!", user.username);
 
             // Allocate session
-            let tty = "tty1"; // TODO: get actual TTY
+            let tty = "tty1";
+            // PID from scheduler
+            let pid = crate::sched::current_pid();
             match crate::users::session::allocate_session(
                 crate::users::session::SessionType::Login,
                 tty,
                 &user.username,
-                crate::arch::timer::Timer::uptime_ms(), // PID placeholder
+                pid,
             ) {
                 Ok(_) => crate::println!("[login] Session started on {}", tty),
                 Err(e) => crate::println!("[login] Warning: failed to allocate session: {}", e),
@@ -2602,12 +2604,13 @@ fn cmd_su(args: [&str; MAX_ARGS], argc: usize) -> i32 {
             crate::println!("[su] Switched to user: {}", user.username);
 
             // Allocate new session for target user
-            let tty = "tty1"; // TODO: get actual TTY
+            let tty = "tty1";
+            let pid = crate::sched::current_pid();
             match crate::users::session::allocate_session(
                 crate::users::session::SessionType::Login,
                 tty,
                 &user.username,
-                crate::arch::timer::Timer::uptime_ms(),
+                pid,
             ) {
                 Ok(_) => crate::println!("[su] Session started on {}", tty),
                 Err(e) => crate::println!("[su] Warning: failed to allocate session: {}", e),

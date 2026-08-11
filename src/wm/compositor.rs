@@ -521,28 +521,42 @@ pub fn init(fb: FramebufferInfo) {
     *LAYER_COUNT.lock() = 0;
     *FULL_REDRAW.lock() = true;
 
-    // On QEMU, use direct-to-framebuffer mode (no back/front buffer allocation)
-    // The framebuffer is already mapped via phys-map, so we write directly to it
+    // On QEMU, use proper double buffering (allocate back buffer)
+    // The framebuffer is already mapped via phys-map, so we write to back buffer then present
     #[cfg(feature = "qemu_raspi5b")]
     {
         let total_pixels = (fb.width * fb.height) as usize;
         *BACK_BUF_SIZE.lock() = total_pixels * 4;
         let buf_size = *BACK_BUF_SIZE.lock();
 
-        // Use the framebuffer itself as both front and back buffer
+        // Allocate back buffer from heap (8 MB for 1920x1080x32bpp)
+        let layout = core::alloc::Layout::from_size_align(buf_size, 16).unwrap();
+        let back_ptr = unsafe { crate::memory::heap::heap_alloc(layout) };
+        if back_ptr.is_null() {
+            println!(
+                "[compositor] FATAL: cannot allocate back buffer ({} bytes)",
+                buf_size
+            );
+            return;
+        }
+        *BACK_BUF.lock() = Some(RawPtr(back_ptr as *mut u32));
+        unsafe {
+            core::ptr::write_bytes(back_ptr, 0, buf_size);
+        }
+
+        // Front buffer IS the framebuffer itself (no allocation needed)
         let fb_ptr = fb.virt_addr as *mut u32;
-        *BACK_BUF.lock() = Some(RawPtr(fb_ptr));
         *FRONT_BUF.lock() = Some(RawPtr(fb_ptr));
 
         println!(
-            "[compositor] Direct-to-framebuffer mode: fb={:#x} ({} KB, no heap alloc)",
+            "[compositor] Double buffering: front=fb({:#x}) back={:#x} ({} KB each)",
             fb.virt_addr,
+            back_ptr as u64,
             buf_size / 1024
         );
 
-        // Initialize hardware cursor
+        // Initialize hardware cursor (skipped on QEMU)
         init_hardware_cursor(fb);
-        return;
     }
 
     // Non-QEMU: allocate buffers (same size as framebuffer)
@@ -785,11 +799,6 @@ pub fn mark_dirty(rect: DirtyRect) {
 pub fn mark_full_redraw() {
     // On QEMU, skip full redraw — it wipes terminal content.
     // Terminal is rendered separately in render_to_windows().
-    #[cfg(feature = "qemu_raspi5b")]
-    {
-        return;
-    }
-
     #[cfg(not(feature = "qemu_raspi5b"))]
     {
         *FULL_REDRAW.lock() = true;
@@ -877,13 +886,22 @@ pub fn composite() {
         for rect in dirty_list.iter() {
             // On QEMU, skip clearing the terminal window client area with wallpaper
             // render_to_windows handles terminal text directly
-            let skip_wallpaper_clear = cfg!(feature = "qemu_raspi5b") 
-                && rect.x >= 52 && rect.x < 768 
-                && rect.y >= 74 && rect.y < 524;
-            
+            let skip_wallpaper_clear = cfg!(feature = "qemu_raspi5b")
+                && rect.x >= 52
+                && rect.x < 768
+                && rect.y >= 74
+                && rect.y < 524;
+
             if !skip_wallpaper_clear {
                 // Clear dirty rect with wallpaper
-                fill_back_buffer_rect_with_wallpaper(fb, back_buffer, rect.x, rect.y, rect.w, rect.h);
+                fill_back_buffer_rect_with_wallpaper(
+                    fb,
+                    back_buffer,
+                    rect.x,
+                    rect.y,
+                    rect.w,
+                    rect.h,
+                );
             }
 
             // Re-render layers that overlap this dirty rect
@@ -935,15 +953,24 @@ static mut FRAME_COUNTER: u64 = 0;
 /// Rotate triple buffers and present the front buffer to the display
 /// Rotation: back -> middle -> front -> back (for next frame)
 fn rotate_and_present(fb: FramebufferInfo, back_buffer: *mut u32) {
-    // On QEMU with direct-to-framebuffer mode, the back buffer IS the framebuffer
-    // No swap needed - data is already visible
+    // On QEMU with double buffering, blit back buffer to front (framebuffer)
+    // On real hardware, wait for VSYNC and use buffer swapping
     #[cfg(feature = "qemu_raspi5b")]
     {
-        let _ = fb;
-        let _ = back_buffer;
-        return;
+        let front_buf = {
+            let front_buf_opt = FRONT_BUF.lock();
+            match front_buf_opt.as_ref() {
+                Some(buf) => buf.0,
+                None => return,
+            }
+        };
+        blit_full(fb, front_buf, back_buffer);
+        // Swap back and front pointers for next frame
+        let mut back_buf_lock = BACK_BUF.lock();
+        let mut front_buf_lock = FRONT_BUF.lock();
+        core::mem::swap(&mut *back_buf_lock, &mut *front_buf_lock);
     }
-    // Non-QEMU: wait for VSYNC and swap buffers
+
     #[cfg(not(feature = "qemu_raspi5b"))]
     {
         // Wait for VSYNC before presenting to avoid tearing
@@ -1005,57 +1032,77 @@ fn rotate_and_present(fb: FramebufferInfo, back_buffer: *mut u32) {
 
 /// Rotate triple buffers and present only dirty rects
 fn rotate_and_present_dirty(fb: FramebufferInfo, back_buffer: *mut u32, dirty_list: &[DirtyRect]) {
-    // Wait for VSYNC before presenting to avoid tearing
-    let _ = crate::drivers::gpu::wait_for_vsync();
-
-    let mode = *BUFFERING_MODE.lock();
-    match mode {
-        BufferingMode::Double => {
-            let front_buf = {
-                let front_buf_opt = FRONT_BUF.lock();
-                match front_buf_opt.as_ref() {
-                    Some(buf) => buf.0,
-                    None => return,
-                }
-            };
-            for rect in dirty_list {
-                blit_rect(fb, front_buf, back_buffer, rect);
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        let front_buf = {
+            let front_buf_opt = FRONT_BUF.lock();
+            match front_buf_opt.as_ref() {
+                Some(buf) => buf.0,
+                None => return,
             }
-            let mut back_buf_lock = BACK_BUF.lock();
-            let mut front_buf_lock = FRONT_BUF.lock();
-            core::mem::swap(&mut *back_buf_lock, &mut *front_buf_lock);
+        };
+        for rect in dirty_list {
+            blit_rect(fb, front_buf, back_buffer, rect);
         }
-        BufferingMode::Triple => {
-            let front_buf = {
-                let front_buf_opt = FRONT_BUF.lock();
-                match front_buf_opt.as_ref() {
-                    Some(buf) => buf.0,
-                    None => return,
-                }
-            };
-            let middle_buf = {
-                let middle_buf_opt = MIDDLE_BUF.lock();
-                match middle_buf_opt.as_ref() {
-                    Some(buf) => buf.0,
-                    None => return,
-                }
-            };
+        let mut back_buf_lock = BACK_BUF.lock();
+        let mut front_buf_lock = FRONT_BUF.lock();
+        core::mem::swap(&mut *back_buf_lock, &mut *front_buf_lock);
+    }
 
-            for rect in dirty_list {
-                blit_rect(fb, front_buf, middle_buf, rect);
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        // Wait for VSYNC before presenting to avoid tearing
+        let _ = crate::drivers::gpu::wait_for_vsync();
+
+        let mode = *BUFFERING_MODE.lock();
+        match mode {
+            BufferingMode::Double => {
+                let front_buf = {
+                    let front_buf_opt = FRONT_BUF.lock();
+                    match front_buf_opt.as_ref() {
+                        Some(buf) => buf.0,
+                        None => return,
+                    }
+                };
+                for rect in dirty_list {
+                    blit_rect(fb, front_buf, back_buffer, rect);
+                }
+                let mut back_buf_lock = BACK_BUF.lock();
+                let mut front_buf_lock = FRONT_BUF.lock();
+                core::mem::swap(&mut *back_buf_lock, &mut *front_buf_lock);
             }
+            BufferingMode::Triple => {
+                let front_buf = {
+                    let front_buf_opt = FRONT_BUF.lock();
+                    match front_buf_opt.as_ref() {
+                        Some(buf) => buf.0,
+                        None => return,
+                    }
+                };
+                let middle_buf = {
+                    let middle_buf_opt = MIDDLE_BUF.lock();
+                    match middle_buf_opt.as_ref() {
+                        Some(buf) => buf.0,
+                        None => return,
+                    }
+                };
 
-            let mut back_buf_lock = BACK_BUF.lock();
-            let mut middle_buf_lock = MIDDLE_BUF.lock();
-            let mut front_buf_lock = FRONT_BUF.lock();
+                for rect in dirty_list {
+                    blit_rect(fb, front_buf, middle_buf, rect);
+                }
 
-            let back_ptr = back_buf_lock.take();
-            let middle_ptr = middle_buf_lock.take();
-            let front_ptr = front_buf_lock.take();
+                let mut back_buf_lock = BACK_BUF.lock();
+                let mut middle_buf_lock = MIDDLE_BUF.lock();
+                let mut front_buf_lock = FRONT_BUF.lock();
 
-            *middle_buf_lock = back_ptr;
-            *front_buf_lock = middle_ptr;
-            *back_buf_lock = front_ptr;
+                let back_ptr = back_buf_lock.take();
+                let middle_ptr = middle_buf_lock.take();
+                let front_ptr = front_buf_lock.take();
+
+                *middle_buf_lock = back_ptr;
+                *front_buf_lock = middle_ptr;
+                *back_buf_lock = front_ptr;
+            }
         }
     }
 }
@@ -1069,19 +1116,6 @@ fn fill_back_buffer_rect_with_wallpaper(
     w: u32,
     h: u32,
 ) {
-    // On QEMU, don't fill with wallpaper — terminal renders directly.
-    #[cfg(feature = "qemu_raspi5b")]
-    {
-        let _ = fb;
-        let _ = back_buf;
-        let _ = x;
-        let _ = y;
-        let _ = w;
-        let _ = h;
-        return;
-    }
-
-    #[cfg(not(feature = "qemu_raspi5b"))]
     unsafe {
         let color = WALLPAPER.solid_color;
         let pitch = fb.width;
@@ -1169,11 +1203,35 @@ fn render_layer_opaque(
         // Draw borders (left, right, bottom) only
         let border_w = 2u32;
         // Left border
-        fill_back_buffer_rect(fb, back_buf, layer.x, layer.y + 24, border_w, client_h, theme.win_bg);
+        fill_back_buffer_rect(
+            fb,
+            back_buf,
+            layer.x,
+            layer.y + 24,
+            border_w,
+            client_h,
+            theme.win_bg,
+        );
         // Right border
-        fill_back_buffer_rect(fb, back_buf, layer.x + layer.w - border_w, layer.y + 24, border_w, client_h, theme.win_bg);
+        fill_back_buffer_rect(
+            fb,
+            back_buf,
+            layer.x + layer.w - border_w,
+            layer.y + 24,
+            border_w,
+            client_h,
+            theme.win_bg,
+        );
         // Bottom border
-        fill_back_buffer_rect(fb, back_buf, layer.x, layer.y + layer.h - border_w, layer.w, border_w, theme.win_bg);
+        fill_back_buffer_rect(
+            fb,
+            back_buf,
+            layer.x,
+            layer.y + layer.h - border_w,
+            layer.w,
+            border_w,
+            theme.win_bg,
+        );
     }
 
     #[cfg(not(feature = "qemu_raspi5b"))]
@@ -1721,23 +1779,16 @@ pub fn get_wallpaper_mode() -> WallpaperMode {
 }
 
 /// Draw the wallpaper to the back buffer
-fn draw_wallpaper(fb: FramebufferInfo, back_buf: *mut u32) {
+fn draw_wallpaper(_fb: FramebufferInfo, _back_buf: *mut u32) {
     // On QEMU, skip the full wallpaper fill — it wipes terminal content every frame.
     // The desktop background is set once during init and render_to_windows handles
     // the terminal client area.
-    #[cfg(feature = "qemu_raspi5b")]
-    {
-        let _ = fb;
-        let _ = back_buf;
-        return;
-    }
-
     #[cfg(not(feature = "qemu_raspi5b"))]
     unsafe {
         let color = WALLPAPER.solid_color;
-        let total = (fb.width * fb.height) as usize;
+        let total = (_fb.width * _fb.height) as usize;
         for i in 0..total {
-            core::ptr::write_volatile(back_buf.add(i), color);
+            core::ptr::write_volatile(_back_buf.add(i), color);
         }
     }
 }

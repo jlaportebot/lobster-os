@@ -24,6 +24,8 @@ pub mod power;
 #[cfg(target_arch = "aarch64")]
 pub mod power_mgmt;
 #[cfg(target_arch = "aarch64")]
+pub mod qemu_input;
+#[cfg(target_arch = "aarch64")]
 pub mod sdio;
 pub mod serial_input;
 pub mod uart;

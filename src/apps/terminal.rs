@@ -383,7 +383,7 @@ pub fn create_terminal_window(
     // On QEMU, PTY may fail (no scheduler task context) — still create the window
     if term.pty_master_fd.is_none() {
         if term.init().is_err() {
-            #[cfg(feature = "qemu")]
+            #[cfg(feature = "qemu_raspi5b")]
             {
                 println!("[terminal] PTY unavailable on QEMU — creating window without PTY");
             }
@@ -403,7 +403,7 @@ pub fn create_terminal_window(
 
     // On QEMU, populate the screen buffer with a welcome message so the terminal
     // widget shows something useful immediately
-    #[cfg(feature = "qemu")]
+    #[cfg(feature = "qemu_raspi5b")]
     {
         term.screen = ScreenBuffer::new();
         // Write welcome text into the screen buffer lines
