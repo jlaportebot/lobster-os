@@ -122,7 +122,10 @@ pub fn write_group_file(entries: &[GroupEntry]) -> Result<(), crate::fs::vfs::Vf
     let _ = create_dir("/etc");
 
     // Open or create the group file
-    let fd = open("/etc/group", 0x02 | 0x400)?; // O_WRONLY | O_CREAT
+    let fd = open(
+        "/etc/group",
+        crate::fs::vfs::O_WRONLY | crate::fs::vfs::O_CREAT | crate::fs::vfs::O_TRUNC,
+    )?; // O_WRONLY | O_CREAT | O_TRUNC
 
     // Build group content
     let mut content = String::new();

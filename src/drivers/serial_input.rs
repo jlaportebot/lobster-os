@@ -251,6 +251,41 @@ pub fn read_byte() -> u8 {
     }
 }
 
+/// Blocking read of a full line (waits for Enter key).
+/// Echoes characters if echo is enabled. Processes backspace.
+/// Returns the line length (excluding the newline).
+pub fn read_line_blocking(buf: &mut [u8]) -> usize {
+    let mut len = 0;
+    loop {
+        let b = read_byte();
+        match b {
+            b'\r' | b'\n' => {
+                Uart10::puts("\r\n");
+                break;
+            }
+            0x08 | 0x7F => {
+                // Backspace or Delete
+                if len > 0 {
+                    len -= 1;
+                    if unsafe { ECHO_ENABLED } {
+                        Uart10::puts("\x08 \x08");
+                    }
+                }
+            }
+            _ => {
+                if len < buf.len() {
+                    buf[len] = b;
+                    len += 1;
+                    if unsafe { ECHO_ENABLED } {
+                        Uart10::putc(b);
+                    }
+                }
+            }
+        }
+    }
+    len
+}
+
 /// Set echo mode
 pub fn set_echo(enabled: bool) {
     unsafe { ECHO_ENABLED = enabled };
@@ -292,6 +327,10 @@ mod x86_64_stubs {
     }
 
     pub fn read_byte() -> u8 {
+        0
+    }
+
+    pub fn read_line_blocking(_buf: &mut [u8]) -> usize {
         0
     }
 

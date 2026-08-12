@@ -107,7 +107,10 @@ pub fn write_passwd_file(entries: &[PasswdEntry]) -> Result<(), crate::fs::vfs::
     let _ = create_dir("/etc");
 
     // Open or create the passwd file
-    let fd = open("/etc/passwd", 0x02 | 0x400)?; // O_WRONLY | O_CREAT
+    let fd = open(
+        "/etc/passwd",
+        crate::fs::vfs::O_WRONLY | crate::fs::vfs::O_CREAT | crate::fs::vfs::O_TRUNC,
+    )?; // O_WRONLY | O_CREAT | O_TRUNC goes to zero, starts fresh
 
     // Build passwd content
     let mut content = String::new();

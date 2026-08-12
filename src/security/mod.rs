@@ -332,7 +332,13 @@ pub fn check_access(file_uid: u32, file_gid: u32, file_perm: u32, mode: AccessMo
     let pid = sched::current_pid();
     let task_idx = match find_task_index(pid) {
         Some(i) => i,
-        None => return false,
+        None => {
+            // PID 0 = kernel shell task, allow all access
+            if pid == 0 {
+                return true;
+            }
+            return false;
+        }
     };
 
     let (euid, egid, groups, group_count) = unsafe {
@@ -389,7 +395,13 @@ pub fn has_capability(cap: u64) -> bool {
     let pid = sched::current_pid();
     let idx = match find_task_index(pid) {
         Some(i) => i,
-        None => return false,
+        None => {
+            // PID 0 = kernel shell task, grant all capabilities
+            if pid == 0 {
+                return true;
+            }
+            return false;
+        }
     };
 
     // uid 0 implicitly has all capabilities

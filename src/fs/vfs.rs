@@ -127,6 +127,9 @@ impl DirEntry {
 /// Maximum directory entries per node
 pub const MAX_DIR_ENTRIES: usize = 16;
 
+/// Maximum inline file data size (4KB per file)
+pub const MAX_FILE_DATA: usize = 4096;
+
 /// VFS Node — represents a file, directory, device, or symlink
 #[derive(Copy, Clone)]
 pub struct VfsNode {
@@ -139,8 +142,8 @@ pub struct VfsNode {
     /// For directories: list of child entries
     pub dir_entries: [DirEntry; MAX_DIR_ENTRIES],
     pub dir_count: usize,
-    /// For regular files: data offset and length in the backing store
-    pub data_offset: u64,
+    /// For regular files: inline data storage
+    pub data: [u8; MAX_FILE_DATA],
     pub data_len: u64,
 }
 
@@ -163,7 +166,7 @@ impl VfsNode {
             parent_id: 0,
             dir_entries: [DirEntry::empty(); MAX_DIR_ENTRIES],
             dir_count: 0,
-            data_offset: 0,
+            data: [0u8; MAX_FILE_DATA],
             data_len: 0,
         }
     }
@@ -188,9 +191,8 @@ impl VfsNode {
         }
         let remaining = (self.data_len - offset) as usize;
         let to_read = buf.len().min(remaining);
-        // In a real implementation, this would read from the backing store
-        // For now, zero-fill as placeholder
-        buf[..to_read].fill(0);
+        let src_start = offset as usize;
+        buf[..to_read].copy_from_slice(&self.data[src_start..src_start + to_read]);
         Ok(to_read)
     }
 
@@ -198,12 +200,16 @@ impl VfsNode {
         if self.metadata.file_type != FileType::RegularFile {
             return Err(VfsError::NotAFile);
         }
-        // Placeholder — in real implementation, write to backing store
-        let _ = offset;
-        let written = buf.len();
-        self.data_len = self.data_len.max(offset + written as u64);
+        let offset_usize = offset as usize;
+        let available = MAX_FILE_DATA.saturating_sub(offset_usize);
+        let to_write = buf.len().min(available);
+        if to_write == 0 {
+            return Err(VfsError::OutOfMemory);
+        }
+        self.data[offset_usize..offset_usize + to_write].copy_from_slice(&buf[..to_write]);
+        self.data_len = self.data_len.max(offset + to_write as u64);
         self.metadata.size = self.data_len;
-        Ok(written)
+        Ok(to_write)
     }
 
     pub fn add_dir_entry(&mut self, entry: DirEntry) -> Result<(), VfsError> {
@@ -361,8 +367,8 @@ pub fn alloc_node(name: &str, file_type: FileType, parent_id: u64) -> Result<u64
         node.fs_id = 0;
         node.parent_id = parent_id;
         node.dir_count = 0;
-        node.data_offset = 0;
         node.data_len = 0;
+        node.data = [0u8; MAX_FILE_DATA];
         VFS_NODE_COUNT += 1;
 
         // Add to parent directory
@@ -992,11 +998,8 @@ pub fn symlink(target: &str, link_path: &str) -> Result<u64, VfsError> {
         }
         node.data_len = target_bytes.len() as u64;
         node.metadata.size = target_bytes.len() as u64;
-        // Store target in node's data_offset field as inline data
-        // We'll use a simple approach: store target in first bytes of backing store
-        // For now, store directly in a new field or use the data area
-        node.data_offset = 0; // Will be handled by symlink read
-                              // We'll store target in a new field - add symlink_target to Metadata
+        // Store symlink target in inline data buffer
+        node.data[..target_bytes.len()].copy_from_slice(target_bytes);
     }
     Ok(link_id)
 }

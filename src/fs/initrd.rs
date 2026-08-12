@@ -134,7 +134,12 @@ pub unsafe fn load_initrd(base: *const u8, size: usize) -> Result<(), VfsError> 
         let node_id = alloc_node(entry_name, file_type, initrd_inode)?;
         if file_type == FileType::RegularFile && filesize > 0 {
             if let Some(node) = get_node_mut(node_id) {
-                node.data_offset = data_offset as u64;
+                // Copy initrd data into inline buffer (up to MAX_FILE_DATA)
+                let copy_size = filesize.min(crate::fs::vfs::MAX_FILE_DATA);
+                let src = unsafe {
+                    core::slice::from_raw_parts(base.add(data_offset), copy_size)
+                };
+                node.data[..copy_size].copy_from_slice(src);
                 node.data_len = filesize as u64;
                 node.metadata.size = filesize as u64;
             }

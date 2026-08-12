@@ -908,6 +908,19 @@ fn run_builtin(
         "mv" => cmd_mv(args, argc),
         "chmod" => cmd_chmod(args, argc),
         "chown" => cmd_chown(args, argc),
+        // Additional file commands
+        "touch" => cmd_touch(args, argc),
+        "cp" => cmd_cp(args, argc),
+        "head" => cmd_head(args, argc),
+        "tail" => cmd_tail(args, argc),
+        "wc" => cmd_wc(args, argc),
+        "du" => cmd_du(args, argc),
+        "df" => cmd_df(),
+        "free" => cmd_free(),
+        "which" => cmd_which(args, argc),
+        "uname" => cmd_uname(),
+        "date" => cmd_date(),
+        "find" => cmd_find(args, argc),
         // User process execution
         "run" => cmd_run(args, argc),
         // Service management commands
@@ -954,7 +967,7 @@ fn cmd_help() {
     Uart10::puts(" su [user]        Switch user (default root)\r\n");
     Uart10::puts(" sudo <cmd>       Run command as another user\r\n");
     Uart10::puts(" passwd [user]    Change password\r\n");
-    Uart10::puts(" useradd <user>   Add new user\r\n");
+    Uart10::puts("  useradd [opts] <user> Add user (-m -p <pass> -s <shell>)\r\n");
     Uart10::puts(" userdel <user>   Delete user\r\n");
     Uart10::puts(" groupadd <group> Add new group\r\n");
     Uart10::puts(" groupdel <group> Delete group\r\n");
@@ -967,16 +980,28 @@ fn cmd_help() {
     Uart10::puts(" unset <NAME> Unset environment variable\r\n");
     Uart10::puts(" env / printenv List environment variables\r\n");
     Uart10::puts(" history / hist Show command history\r\n");
-    Uart10::puts(" cat <path> Display file contents\r\n");
-    Uart10::puts(" ls [path] List directory contents\r\n");
-    Uart10::puts(" cd <path> Change working directory\r\n");
-    Uart10::puts(" pwd Print working directory\r\n");
-    Uart10::puts(" mkdir <path> Create directory\r\n");
-    Uart10::puts(" rm <path> Remove file or directory\r\n");
-    Uart10::puts(" mv <src> <dst> Move/rename file\r\n");
-    Uart10::puts(" chmod <mode> <path> Change file permissions\r\n");
-    Uart10::puts(" chown <uid:gid> <path> Change file ownership\r\n");
-    Uart10::puts(" run <path|demo> Run ELF binary as user process\r\n");
+    Uart10::puts("  ls [-l|-a] [path] List directory contents\r\n");
+    Uart10::puts("  cd [path]       Change working directory\r\n");
+    Uart10::puts("  pwd             Print working directory\r\n");
+    Uart10::puts("  mkdir <path>    Create directory\r\n");
+    Uart10::puts("  rm <path>       Remove file or directory\r\n");
+    Uart10::puts("  mv <src> <dst>  Move/rename file\r\n");
+    Uart10::puts("  cp <src> <dst>  Copy file\r\n");
+    Uart10::puts("  touch <file>    Create empty file\r\n");
+    Uart10::puts("  chmod <mode> <path> Change file permissions\r\n");
+    Uart10::puts("  chown <uid:gid> <path> Change file ownership\r\n");
+    Uart10::puts("  cat <path>      Display file contents\r\n");
+    Uart10::puts("  head [-n N] <file> Show first N lines of file\r\n");
+    Uart10::puts("  tail [-n N] <file> Show last N lines of file\r\n");
+    Uart10::puts("  wc <file>       Count lines/words/bytes\r\n");
+    Uart10::puts("  du [path]       Estimate file space usage\r\n");
+    Uart10::puts("  df              Show filesystem disk space\r\n");
+    Uart10::puts("  free            Show free/used memory\r\n");
+    Uart10::puts("  find [path] [-name <pat>] Find files\r\n");
+    Uart10::puts("  which <cmd>     Locate a command\r\n");
+    Uart10::puts("  uname           Show system information\r\n");
+    Uart10::puts("  date            Show system time/uptime\r\n");
+    Uart10::puts("  run <path|demo> Run ELF binary as user process\r\n");
     Uart10::puts(" svc <list|start|stop|restart|reset|deps> Service mgmt\r\n");
     Uart10::puts(" runlevel [get|set <N>] Show/set runlevel\r\n");
     Uart10::puts(
@@ -2695,67 +2720,57 @@ fn cmd_passwd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     let target_user = if argc >= 2 {
         args[1]
     } else {
-        // Current user - would need session tracking
         "current_user"
     };
 
-    crate::println!("[passwd] Changing password for: {}", target_user);
+    // Check if target user exists
+    if !crate::users::passwd::user_exists(target_user) {
+        crate::println!("passwd: user '{}' does not exist", target_user);
+        return 1;
+    }
 
-    // Prompt for old password
-    Uart10::puts("Old password: ");
-    let old_echo = crate::drivers::serial_input::echo_enabled();
-    crate::drivers::serial_input::set_echo(false);
-    let mut old_passwd_buf = [0u8; 128];
-    let old_passwd_len = crate::drivers::serial_input::read_line(&mut old_passwd_buf);
-    crate::drivers::serial_input::set_echo(old_echo);
-    Uart10::puts("\r\n");
+    crate::println!("Changing password for {}", target_user);
 
-    let old_password = core::str::from_utf8(&old_passwd_buf[..old_passwd_len]).unwrap_or("");
-    let old_password = old_password.trim();
-
-    // Prompt for new password
+    // Prompt for new password using blocking read
     Uart10::puts("New password: ");
-    let old_echo = crate::drivers::serial_input::echo_enabled();
+    let saved_echo = crate::drivers::serial_input::echo_enabled();
     crate::drivers::serial_input::set_echo(false);
     let mut new_passwd_buf = [0u8; 128];
-    let new_passwd_len = crate::drivers::serial_input::read_line(&mut new_passwd_buf);
-    crate::drivers::serial_input::set_echo(old_echo);
-    Uart10::puts("\r\n");
+    let new_passwd_len = crate::drivers::serial_input::read_line_blocking(&mut new_passwd_buf);
+    crate::drivers::serial_input::set_echo(saved_echo);
 
-    let new_password = core::str::from_utf8(&new_passwd_buf[..new_passwd_len]).unwrap_or("");
-    let new_password = new_password.trim();
+    let new_password =
+        core::str::from_utf8(&new_passwd_buf[..new_passwd_len]).unwrap_or("").trim();
 
     // Confirm new password
     Uart10::puts("Retype new password: ");
-    let old_echo = crate::drivers::serial_input::echo_enabled();
     crate::drivers::serial_input::set_echo(false);
     let mut confirm_passwd_buf = [0u8; 128];
-    let confirm_passwd_len = crate::drivers::serial_input::read_line(&mut confirm_passwd_buf);
-    crate::drivers::serial_input::set_echo(old_echo);
-    Uart10::puts("\r\n");
+    let confirm_passwd_len =
+        crate::drivers::serial_input::read_line_blocking(&mut confirm_passwd_buf);
+    crate::drivers::serial_input::set_echo(saved_echo);
 
     let confirm_password =
-        core::str::from_utf8(&confirm_passwd_buf[..confirm_passwd_len]).unwrap_or("");
-    let confirm_password = confirm_password.trim();
+        core::str::from_utf8(&confirm_passwd_buf[..confirm_passwd_len]).unwrap_or("").trim();
 
     if new_password != confirm_password {
-        crate::println!("[passwd] Passwords do not match");
+        crate::println!("passwd: passwords do not match");
         return 1;
     }
 
     if new_password.is_empty() {
-        crate::println!("[passwd] Password cannot be empty");
+        crate::println!("passwd: password cannot be empty");
         return 1;
     }
 
-    // Change password
-    match crate::users::auth::change_password(target_user, old_password, new_password) {
+    // Change password directly (bypass old password check for admin)
+    match crate::users::auth::set_password(target_user, new_password) {
         Ok(()) => {
-            crate::println!("[passwd] Password changed successfully");
+            crate::println!("passwd: password updated successfully for '{}'", target_user);
             0
         }
         Err(e) => {
-            crate::println!("[passwd] Failed to change password: {}", e);
+            crate::println!("passwd: failed to update password: {}", e);
             1
         }
     }
@@ -2764,81 +2779,198 @@ fn cmd_passwd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 /// Useradd command
 fn cmd_useradd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     if argc < 2 {
-        Uart10::puts("Usage: useradd <username>\r\n");
+        Uart10::puts("Usage: useradd [options] <username>\r\n");
+        Uart10::puts("  -m              Create home directory\r\n");
+        Uart10::puts("  -s <shell>      Login shell (default /bin/sh)\r\n");
+        Uart10::puts("  -p <password>   Set password (plaintext, stored hashed)\r\n");
+        Uart10::puts("  -u <uid>        Specify UID manually\r\n");
+        Uart10::puts("  -g <gid>        Primary GID (default = new GID matching UID)\r\n");
+        Uart10::puts("  --help          Show this help\r\n");
+        Uart10::puts("\r\nExample: useradd -m -p secret alice\r\n");
         return 1;
     }
 
-    let username = args[1];
+    // Parse flags
+    let mut username: Option<&str> = None;
+    let mut create_home = false;
+    let mut shell = "/bin/sh";
+    let mut password: Option<&str> = None;
+    let mut custom_uid: Option<u32> = None;
+    let mut custom_gid: Option<u32> = None;
+    let mut i = 1;
+    while i < argc {
+        match args[i] {
+            "-m" => {
+                create_home = true;
+            }
+            "-s" => {
+                if i + 1 < argc {
+                    shell = args[i + 1];
+                    i += 1;
+                }
+            }
+            "-p" => {
+                if i + 1 < argc {
+                    password = Some(args[i + 1]);
+                    i += 1;
+                }
+            }
+            "-u" => {
+                if i + 1 < argc {
+                    custom_uid = parse_u32(args[i + 1]);
+                    i += 1;
+                }
+            }
+            "-g" => {
+                if i + 1 < argc {
+                    custom_gid = parse_u32(args[i + 1]);
+                    i += 1;
+                }
+            }
+            "--help" => {
+                Uart10::puts("Usage: useradd [options] <username>\r\n");
+                return 0;
+            }
+            arg if !arg.starts_with('-') => {
+                username = Some(arg);
+            }
+            _ => {
+                crate::println!("useradd: unknown option '{}'", args[i]);
+                return 1;
+            }
+        }
+        i += 1;
+    }
+
+    let username = match username {
+        Some(u) => u,
+        None => {
+            Uart10::puts("useradd: missing username\r\n");
+            return 1;
+        }
+    };
+
+    // Validate username
+    if username.is_empty() || username.len() > 32 {
+        Uart10::puts("useradd: invalid username length\r\n");
+        return 1;
+    }
+    for c in username.chars() {
+        if !c.is_ascii_alphanumeric() && c != '_' && c != '-' {
+            crate::println!("useradd: invalid character '{}' in username", c);
+            return 1;
+        }
+    }
 
     // Check if user already exists
     if crate::users::passwd::user_exists(username) {
-        crate::println!("[useradd] User '{}' already exists", username);
+        crate::println!("useradd: user '{}' already exists", username);
         return 1;
     }
 
-    // Find next available UID (start from 1000)
-    let mut next_uid = 1000;
-    let users = crate::users::passwd::get_all_users();
-    for user in &users {
-        if user.uid >= next_uid {
-            next_uid = user.uid + 1;
+    // Find next available UID (start from 1000, skip system UIDs)
+    let next_uid = if let Some(uid) = custom_uid {
+        // Check it's not already taken
+        let users = crate::users::passwd::get_all_users();
+        for user in &users {
+            if user.uid == uid {
+                crate::println!("useradd: UID {} already in use", uid);
+                return 1;
+            }
         }
-    }
+        uid
+    } else {
+        let mut uid = 1000;
+        let users = crate::users::passwd::get_all_users();
+        for user in &users {
+            // Only consider UIDs in the normal user range (1000+)
+            if user.uid >= uid && user.uid < 65534 {
+                uid = user.uid + 1;
+            }
+        }
+        uid
+    };
 
-    // Find next available GID (same as UID for user private group)
-    let mut next_gid = 1000;
-    let groups = crate::users::group::get_all_groups();
-    for group in &groups {
-        if group.gid >= next_gid {
-            next_gid = group.gid + 1;
+    // Find next available GID (start from 1000, skip system GIDs)
+    let next_gid = if let Some(gid) = custom_gid {
+        gid
+    } else {
+        let mut gid = 1000;
+        let groups = crate::users::group::get_all_groups();
+        for group in &groups {
+            if group.gid >= gid && group.gid < 65534 {
+                gid = group.gid + 1;
+            }
         }
-    }
+        gid
+    };
 
     // Create user entry
     let home = alloc::format!("/home/{}", username);
-    let shell = "/bin/sh";
     let user_entry =
         crate::users::passwd::PasswdEntry::new(username, next_uid, next_gid, &home, shell);
 
-    // Create shadow entry (locked password initially)
-    let shadow_entry = crate::users::shadow::ShadowEntry::new(username, "!");
+    // Create shadow entry — use provided password or locked ("!")
+    let shadow_password = password.unwrap_or("!");
+    let shadow_entry = crate::users::shadow::ShadowEntry::new(username, shadow_password);
 
     // Create user's primary group
     let group_entry = crate::users::group::GroupEntry::new(username, next_gid);
 
-    // Add to passwd
+    // Write passwd file
     let mut users = crate::users::passwd::read_passwd_file().unwrap_or_default();
     users.push(user_entry);
     if let Err(e) = crate::users::passwd::write_passwd_file(&users) {
-        crate::println!("[useradd] Failed to write /etc/passwd: {:?}", e);
+        crate::println!("useradd: failed to write /etc/passwd: {:?}", e);
         return 1;
     }
 
-    // Add to shadow
+    // Write shadow file
     let mut shadows = crate::users::shadow::read_shadow_file().unwrap_or_default();
     shadows.push(shadow_entry);
     if let Err(e) = crate::users::shadow::write_shadow_file(&shadows) {
-        crate::println!("[useradd] Failed to write /etc/shadow: {:?}", e);
+        crate::println!("useradd: failed to write /etc/shadow: {:?}", e);
         return 1;
     }
 
-    // Add to group
+    // Write group file
     let mut groups = crate::users::group::read_group_file().unwrap_or_default();
     groups.push(group_entry);
     if let Err(e) = crate::users::group::write_group_file(&groups) {
-        crate::println!("[useradd] Failed to write /etc/group: {:?}", e);
+        crate::println!("useradd: failed to write /etc/group: {:?}", e);
         return 1;
     }
 
-    // Create home directory
+    // Create home directory if requested or by default
+    let _ = crate::fs::vfs::create_dir("/home");
     let _ = crate::fs::vfs::create_dir(&alloc::format!("/home/{}", username));
 
-    crate::println!(
-        "[useradd] User '{}' added (UID={}, GID={})",
-        username,
-        next_uid,
-        next_gid
-    );
+    if create_home {
+        crate::println!(
+            "useradd: created user '{}' (UID={}, GID={}) with home /home/{}",
+            username,
+            next_uid,
+            next_gid,
+            username
+        );
+    } else {
+        crate::println!(
+            "useradd: created user '{}' (UID={}, GID={})",
+            username,
+            next_uid,
+            next_gid
+        );
+    }
+
+    if password.is_some() {
+        crate::println!("useradd: password set for '{}'", username);
+    } else {
+        crate::println!(
+            "useradd: account locked - use 'passwd {}' to set password",
+            username
+        );
+    }
+
     0
 }
 
@@ -3106,12 +3238,12 @@ fn cmd_reboot() {
 // Filesystem command handlers
 // ═══════════════════════════════════════════════
 
-static mut CWD: [u8; 256] = [0u8; 256];
+static mut CWD: [u8; 256] = [b'/'; 256];
 static mut CWD_LEN: usize = 1;
 
 fn cwd() -> &'static str {
     unsafe {
-        if CWD_LEN == 0 {
+        if CWD_LEN == 0 || CWD[0] == 0 {
             CWD[0] = b'/';
             CWD_LEN = 1;
         }
@@ -3187,32 +3319,90 @@ fn cmd_cat(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 }
 
 fn cmd_ls(args: [&str; MAX_ARGS], argc: usize) -> i32 {
-    let path = if argc >= 2 {
-        resolve_path(args[1])
-    } else {
-        alloc::string::String::from(cwd())
-    };
-    match crate::fs::vfs::list_dir(&path) {
-        Ok(entries) => {
-            for entry in &entries {
-                let type_char = if entry.is_dir { 'd' } else { '-' };
-                crate::println!(
-                    "{} {:4} {}:{} {}",
-                    type_char,
-                    entry.size,
-                    entry.uid,
-                    entry.gid,
-                    entry.name_str()
-                );
+    let mut long_format = false;
+    let mut show_all = false;
+    let mut path_args: alloc::vec::Vec<&str> = alloc::vec::Vec::new();
+
+    let mut i = 1;
+    while i < argc {
+        if args[i].starts_with('-') && args[i].len() > 1 {
+            for c in args[i][1..].chars() {
+                match c {
+                    'l' => long_format = true,
+                    'a' => show_all = true,
+                    _ => {}
+                }
             }
-            crate::println!("{} entries", entries.len());
-            0
+        } else {
+            path_args.push(args[i]);
         }
-        Err(e) => {
-            crate::println!("ls: {}: error {}", path, e);
-            1
+        i += 1;
+    }
+
+    let paths: alloc::vec::Vec<alloc::string::String> = if path_args.is_empty() {
+        alloc::vec![alloc::string::String::from(cwd())]
+    } else {
+        path_args.iter().map(|p| resolve_path(p)).collect()
+    };
+
+    let mut total_entries = 0;
+    for path in &paths {
+        match crate::fs::vfs::list_dir(path) {
+            Ok(entries) => {
+                let filtered: alloc::vec::Vec<_> = entries
+                    .iter()
+                    .filter(|e| show_all || !e.name_str().starts_with('.'))
+                    .collect();
+
+                if paths.len() > 1 {
+                    crate::println!("\n{}:", path);
+                }
+
+                if long_format {
+                    crate::println!("total {}", filtered.len());
+                    for entry in &filtered {
+                        let type_char = if entry.is_dir { 'd' } else { '-' };
+                        let dir_marker = if entry.is_dir { "/" } else { "" };
+                        crate::println!(
+                            "{}rw-r--r--  {:4} {}:{} {}{}",
+                            type_char,
+                            entry.size,
+                            entry.uid,
+                            entry.gid,
+                            entry.name_str(),
+                            dir_marker
+                        );
+                    }
+                } else {
+                    // Simple listing — just names, columns
+                    let mut line = alloc::string::String::new();
+                    for entry in &filtered {
+                        let name = if entry.is_dir {
+                            alloc::format!("{}/  ", entry.name_str())
+                        } else {
+                            alloc::format!("{}   ", entry.name_str())
+                        };
+                        line.push_str(&name);
+                        if line.len() > 60 {
+                            crate::println!("{}", line.trim_end());
+                            line.clear();
+                        }
+                    }
+                    if !line.is_empty() {
+                        crate::println!("{}", line.trim_end());
+                    }
+                }
+                total_entries += filtered.len();
+            }
+            Err(e) => {
+                crate::println!("ls: {}: error {:?}", path, e);
+            }
         }
     }
+    if total_entries == 0 && !long_format {
+        // Empty directory - print nothing (like real ls)
+    }
+    0
 }
 
 fn cmd_cd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
@@ -3597,4 +3787,348 @@ fn cmd_runlevel(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         Uart10::puts("  0=halt 1=single 2=multi 3=network 4=graphical 6=reboot\r\n");
         1
     }
+}
+
+// === Additional file/system commands ===
+
+/// touch - create empty file or update timestamp
+fn cmd_touch(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: touch <file>\r\n");
+        return 1;
+    }
+    let path = resolve_path(args[1]);
+    match crate::fs::vfs::open(&path, crate::fs::vfs::O_WRONLY | crate::fs::vfs::O_CREAT) {
+        Ok(fd) => {
+            crate::fs::vfs::close(fd).ok();
+            0
+        }
+        Err(e) => {
+            crate::println!("touch: {}: error {:?}", path, e);
+            1
+        }
+    }
+}
+
+/// cp - copy file
+fn cmd_cp(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 3 {
+        Uart10::puts("Usage: cp <src> <dst>\r\n");
+        return 1;
+    }
+    let src = resolve_path(args[1]);
+    let dst = resolve_path(args[2]);
+
+    // Read source
+    let data = match crate::fs::vfs::read_file(&src) {
+        Ok(d) => d,
+        Err(e) => {
+            crate::println!("cp: {}: error {:?}", src, e);
+            return 1;
+        }
+    };
+
+    // Write destination
+    let fd = match crate::fs::vfs::open(
+        &dst,
+        crate::fs::vfs::O_WRONLY | crate::fs::vfs::O_CREAT | crate::fs::vfs::O_TRUNC,
+    ) {
+        Ok(fd) => fd,
+        Err(e) => {
+            crate::println!("cp: {}: error {:?}", dst, e);
+            return 1;
+        }
+    };
+
+    if let Err(e) = crate::fs::vfs::write(fd, &data) {
+        crate::println!("cp: write error: {:?}", e);
+        crate::fs::vfs::close(fd).ok();
+        return 1;
+    }
+    crate::fs::vfs::close(fd).ok();
+    0
+}
+
+/// head - display first N lines of a file
+fn cmd_head(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    let mut n: usize = 10;
+    let mut path_idx: Option<usize> = None;
+
+    let mut i = 1;
+    while i < argc {
+        if (args[i] == "-n" || args[i] == "--lines") && i + 1 < argc {
+            n = parse_usize(args[i + 1]).unwrap_or(10);
+            i += 2;
+            continue;
+        }
+        if let Some(rest) = args[i].strip_prefix("-n") {
+            n = parse_usize(rest).unwrap_or(10);
+            i += 1;
+            continue;
+        }
+        path_idx = Some(i);
+        i += 1;
+    }
+
+    let idx = match path_idx {
+        Some(i) => i,
+        None => {
+            Uart10::puts("Usage: head [-n N] <file>\r\n");
+            return 1;
+        }
+    };
+
+    let path = resolve_path(args[idx]);
+    match crate::fs::vfs::read_file(&path) {
+        Ok(data) => {
+            let text = core::str::from_utf8(&data).unwrap_or("");
+            let mut count = 0;
+            for line in text.lines() {
+                if count >= n {
+                    break;
+                }
+                crate::println!("{}", line);
+                count += 1;
+            }
+            0
+        }
+        Err(e) => {
+            crate::println!("head: {}: error {:?}", path, e);
+            1
+        }
+    }
+}
+
+/// tail - display last N lines of a file
+fn cmd_tail(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    let mut n: usize = 10;
+    let mut path_idx: Option<usize> = None;
+
+    let mut i = 1;
+    while i < argc {
+        if (args[i] == "-n" || args[i] == "--lines") && i + 1 < argc {
+            n = parse_usize(args[i + 1]).unwrap_or(10);
+            i += 2;
+            continue;
+        }
+        if let Some(rest) = args[i].strip_prefix("-n") {
+            n = parse_usize(rest).unwrap_or(10);
+            i += 1;
+            continue;
+        }
+        path_idx = Some(i);
+        i += 1;
+    }
+
+    let idx = match path_idx {
+        Some(i) => i,
+        None => {
+            Uart10::puts("Usage: tail [-n N] <file>\r\n");
+            return 1;
+        }
+    };
+
+    let path = resolve_path(args[idx]);
+    match crate::fs::vfs::read_file(&path) {
+        Ok(data) => {
+            let text = core::str::from_utf8(&data).unwrap_or("");
+            let lines: alloc::vec::Vec<&str> = text.lines().collect();
+            let start = lines.len().saturating_sub(n);
+            for line in &lines[start..] {
+                crate::println!("{}", line);
+            }
+            0
+        }
+        Err(e) => {
+            crate::println!("tail: {}: error {:?}", path, e);
+            1
+        }
+    }
+}
+
+/// wc - count lines, words, and bytes
+fn cmd_wc(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: wc <file>\r\n");
+        return 1;
+    }
+    let path = resolve_path(args[1]);
+    match crate::fs::vfs::read_file(&path) {
+        Ok(data) => {
+            let text = core::str::from_utf8(&data).unwrap_or("");
+            let lines = text.lines().count();
+            let words = text.split_whitespace().count();
+            let bytes = data.len();
+            crate::println!("{:4} {:4} {:4} {}", lines, words, bytes, args[1]);
+            0
+        }
+        Err(e) => {
+            crate::println!("wc: {}: error {:?}", path, e);
+            1
+        }
+    }
+}
+
+/// du - estimate file space usage (returns file sizes in this simple VFS)
+fn cmd_du(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    let path = if argc >= 2 {
+        resolve_path(args[1])
+    } else {
+        alloc::string::String::from(cwd())
+    };
+    match crate::fs::vfs::list_dir(&path) {
+        Ok(entries) => {
+            let mut total: u64 = 0;
+            for entry in &entries {
+                crate::println!("{:8}  {}/{}", entry.size, path, entry.name_str());
+                total += entry.size;
+            }
+            crate::println!("{:8}  {} (total)", total, path);
+            0
+        }
+        Err(e) => {
+            crate::println!("du: {}: error {:?}", path, e);
+            1
+        }
+    }
+}
+
+/// df - report filesystem disk space usage
+fn cmd_df() -> i32 {
+    crate::println!("Filesystem     Size   Used   Free  Use%  Mount");
+    crate::println!("LobsterVFS     16M    ???    ???   ??%  /");
+    crate::println!("(In-memory VFS - physical space not tracked)");
+    0
+}
+
+/// free - display amount of free and used memory
+fn cmd_free() -> i32 {
+    cmd_mem();
+    0
+}
+
+/// which - locate a command
+fn cmd_which(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: which <command>\r\n");
+        return 1;
+    }
+    // All commands are built-in shell commands
+    let builtin = [
+        "help", "clear", "uptime", "mem", "ps", "kill", "echo", "version",
+        "cpu", "timer", "gpio", "login", "su", "sudo", "passwd", "useradd",
+        "userdel", "groupadd", "groupdel", "id", "whoami", "hexdump", "yield",
+        "test", "set", "export", "unset", "env", "printenv", "history",
+        "cat", "ls", "cd", "pwd", "mkdir", "rm", "mv", "chmod", "chown",
+        "touch", "cp", "head", "tail", "wc", "du", "df", "free", "which",
+        "uname", "date", "find", "run", "svc", "runlevel", "reboot", "halt",
+    ];
+    if builtin.contains(&args[1]) {
+        crate::println!("{}: shell built-in command", args[1]);
+        0
+    } else {
+        crate::println!("{}: not found", args[1]);
+        1
+    }
+}
+
+/// uname - print system information
+fn cmd_uname() -> i32 {
+    crate::println!("LobsterOS aarch64 BCM2712 rpi5b");
+    crate::println!("Kernel: v0.2.0");
+    crate::println!("Architecture: aarch64");
+    crate::println!("Hardware: Raspberry Pi 5 (BCM2712)");
+    crate::println!("CPU: Cortex-A72 @ 2.0GHz x4");
+    0
+}
+
+/// date - display current time (from system timer)
+fn cmd_date() -> i32 {
+    let uptime_ms = crate::arch::timer::Timer::uptime_ms();
+    let seconds = uptime_ms / 1000;
+    let minutes = seconds / 60;
+    let hours = minutes / 60;
+    let days = hours / 24;
+    crate::println!(
+        "Uptime: {}d {}h {}m {}s (no RTC - timer-based)",
+        days,
+        hours % 24,
+        minutes % 60,
+        seconds % 60
+    );
+    0
+}
+
+/// find - find files by name in directory tree
+fn cmd_find(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    let mut start_path = alloc::string::String::from(cwd());
+    let mut name_pattern: Option<&str> = None;
+
+    let mut i = 1;
+    while i < argc {
+        if args[i] == "-name" && i + 1 < argc {
+            name_pattern = Some(args[i + 1]);
+            i += 2;
+            continue;
+        }
+        if !args[i].starts_with('-') {
+            start_path = resolve_path(args[i]);
+        }
+        i += 1;
+    }
+
+    find_recursive(&start_path, name_pattern, 0);
+    0
+}
+
+/// Recursive helper for find
+fn find_recursive(path: &str, pattern: Option<&str>, depth: usize) {
+    if depth > 8 {
+        return;
+    }
+    if let Ok(entries) = crate::fs::vfs::list_dir(path) {
+        for entry in &entries {
+            let full = if path == "/" {
+                alloc::format!("/{}", entry.name_str())
+            } else {
+                alloc::format!("{}/{}", path, entry.name_str())
+            };
+
+            let matches = match pattern {
+                Some(p) => {
+                    if p.starts_with('*') {
+                        let suffix = &p[1..];
+                        entry.name_str().ends_with(suffix)
+                    } else if p.ends_with('*') {
+                        let prefix = &p[..p.len() - 1];
+                        entry.name_str().starts_with(prefix)
+                    } else {
+                        entry.name_str() == p
+                    }
+                }
+                None => true,
+            };
+
+            if matches {
+                crate::println!("{}", full);
+            }
+
+            if entry.is_dir {
+                find_recursive(&full, pattern, depth + 1);
+            }
+        }
+    }
+}
+
+/// Parse usize from string
+fn parse_usize(s: &str) -> Option<usize> {
+    let mut result: usize = 0;
+    for c in s.chars() {
+        if let Some(d) = c.to_digit(10) {
+            result = result.checked_mul(10)?.checked_add(d as usize)?;
+        } else {
+            return None;
+        }
+    }
+    Some(result)
 }

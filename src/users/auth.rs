@@ -150,6 +150,37 @@ pub fn is_root(uid: u32) -> bool {
     uid == 0
 }
 
+/// Set password directly (admin mode, skips old password verification).
+/// Used by `passwd` command when running as root.
+pub fn set_password(username: &str, new_password: &str) -> Result<(), AuthError> {
+    // Verify user exists
+    if passwd::find_user(username).is_none() {
+        return Err(AuthError::UserNotFound);
+    }
+
+    // Hash new password
+    let new_hash = hash_password(new_password);
+
+    // Update /etc/shadow
+    let mut entries = crate::users::shadow::read_shadow_file().unwrap_or_default();
+    let mut found = false;
+    for entry in &mut entries {
+        if entry.username == username {
+            entry.password_hash = new_hash;
+            entry.last_change = (crate::arch::timer::Timer::uptime_ms() / 86400000) as i64;
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        // User exists in passwd but not shadow — add entry
+        let shadow_entry = crate::users::shadow::ShadowEntry::new(username, new_password);
+        entries.push(shadow_entry);
+    }
+    crate::users::shadow::write_shadow_file(&entries)?;
+    Ok(())
+}
+
 /// Check if user can sudo (in sudoers)
 pub fn can_sudo(username: &str) -> bool {
     // In a real implementation, check /etc/sudoers

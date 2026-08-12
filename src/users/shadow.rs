@@ -129,7 +129,10 @@ pub fn write_shadow_file(entries: &[ShadowEntry]) -> Result<(), crate::fs::vfs::
     let _ = crate::fs::vfs::create_dir("/etc");
 
     // Open or create the shadow file
-    let fd = crate::fs::vfs::open("/etc/shadow", 0x02 | 0x400)?; // O_WRONLY | O_CREAT
+    let fd = crate::fs::vfs::open(
+        "/etc/shadow",
+        crate::fs::vfs::O_WRONLY | crate::fs::vfs::O_CREAT | crate::fs::vfs::O_TRUNC,
+    )?; // O_WRONLY | O_CREAT | O_TRUNC
 
     // Write content
     crate::fs::vfs::write(fd, content.as_bytes())?;
