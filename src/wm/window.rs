@@ -129,17 +129,27 @@ static FOCUSED_ID: Spinlock<u32> = Spinlock::new(0);
 
 /// Drag state for window moving
 static DRAG_WIN_ID: Spinlock<u32> = Spinlock::new(0);
-static DRAG_START_X: Spinlock<u32> = Spinlock::new(0);
-static DRAG_START_Y: Spinlock<u32> = Spinlock::new(0);
+static DRAG_START_CURSOR_X: Spinlock<i32> = Spinlock::new(0);
+static DRAG_START_CURSOR_Y: Spinlock<i32> = Spinlock::new(0);
 static DRAG_WIN_START_X: Spinlock<u32> = Spinlock::new(0);
 static DRAG_WIN_START_Y: Spinlock<u32> = Spinlock::new(0);
 static DRAGGING: Spinlock<bool> = Spinlock::new(false);
 
 /// Resize state
 static RESIZE_WIN_ID: Spinlock<u32> = Spinlock::new(0);
+static RESIZE_START_CURSOR_X: Spinlock<i32> = Spinlock::new(0);
+static RESIZE_START_CURSOR_Y: Spinlock<i32> = Spinlock::new(0);
 static RESIZE_START_W: Spinlock<u32> = Spinlock::new(0);
 static RESIZE_START_H: Spinlock<u32> = Spinlock::new(0);
 static RESIZING: Spinlock<bool> = Spinlock::new(false);
+static RESIZE_EDGE: Spinlock<u8> = Spinlock::new(0); // 0=right, 1=bottom, 2=corner
+
+/// Close button area: top-right, 14x14, 4px margin
+const CLOSE_BTN_OFFSET_X: u32 = CLOSE_BTN_SIZE + 6;
+const CLOSE_BTN_Y: u32 = 5;
+
+/// Resize handle thickness (pixels from border edge)
+const RESIZE_HANDLE: u32 = 6;
 
 // ─── Initialization ────────────────────────────────────────────────────
 
@@ -469,46 +479,103 @@ pub fn get_title(id: u32) -> &'static str {
 /// Handle an HID event from the USB subsystem
 pub fn handle_event(evt: crate::usb::hid::HidEvent) {
     match evt {
-        crate::usb::hid::HidEvent::KeyPress {
-            scancode,
-            extended: _,
-        } => {
+        crate::usb::hid::HidEvent::KeyPress { scancode, extended: _ } => {
             handle_keypress(scancode);
         }
-        crate::usb::hid::HidEvent::KeyRelease {
-            scancode: _,
-            extended: _,
-        } => {}
+        crate::usb::hid::HidEvent::KeyRelease { scancode: _, extended: _ } => {}
         crate::usb::hid::HidEvent::MouseMove { dx, dy } => {
             handle_mouse_move(dx, dy);
         }
-        crate::usb::hid::HidEvent::MouseButton {
-            left,
-            right,
-            middle,
-        } => {
+        crate::usb::hid::HidEvent::MouseButton { left, right, middle } => {
             handle_mouse_button(left, right, middle);
         }
     }
 }
 
+/// Hit test: find the topmost window at cursor position (cx, cy)
+fn window_at(cx: u32, cy: u32) -> Option<(u32, u32, u32, u32, u32)> {
+    // Returns (id, x, y, w, h) of topmost non-minimized window containing point
+    let windows = WINDOWS.lock();
+    let mut best: Option<(u32, u32, u32, u32, u32)> = None;
+    let mut best_id = 0u32;
+
+    // Iterate in reverse to find topmost (last drawn = top)
+    for i in 0..MAX_WINDOWS {
+        if !windows[i].active || windows[i].state == WinState::Minimized {
+            continue;
+        }
+        let win = &windows[i];
+        if cx >= win.x && cx < win.x + win.w && cy >= win.y && cy < win.y + win.h {
+            // Track the highest z-order window (later windows are on top)
+            best = Some((win.id, win.x, win.y, win.w, win.h));
+            best_id = win.id;
+        }
+    }
+    let _ = best_id;
+    best
+}
+
+/// Check if point is on the close button of a window
+fn is_on_close_button(cx: u32, cy: u32, win_x: u32, win_y: u32, win_w: u32) -> bool {
+    let btn_x = win_x + win_w - CLOSE_BTN_OFFSET_X;
+    let btn_y = win_y + CLOSE_BTN_Y;
+    cx >= btn_x && cx < btn_x + CLOSE_BTN_SIZE && cy >= btn_y && cy < btn_y + CLOSE_BTN_SIZE
+}
+
+/// Check if point is on the maximize button (green, left of close)
+fn is_on_maximize_button(cx: u32, cy: u32, win_x: u32, win_y: u32, win_w: u32) -> bool {
+    let btn_x = win_x + win_w - CLOSE_BTN_OFFSET_X - 20;
+    let btn_y = win_y + CLOSE_BTN_Y;
+    cx >= btn_x && cx < btn_x + CLOSE_BTN_SIZE && cy >= btn_y && cy < btn_y + CLOSE_BTN_SIZE
+}
+
+/// Check if point is on the minimize button (yellow, left of maximize)
+fn is_on_minimize_button(cx: u32, cy: u32, win_x: u32, win_y: u32, win_w: u32) -> bool {
+    let btn_x = win_x + win_w - CLOSE_BTN_OFFSET_X - 40;
+    let btn_y = win_y + CLOSE_BTN_Y;
+    cx >= btn_x && cx < btn_x + CLOSE_BTN_SIZE && cy >= btn_y && cy < btn_y + CLOSE_BTN_SIZE
+}
+
+/// Check if point is on the title bar (for dragging)
+fn is_on_title_bar(cy: u32, win_y: u32) -> bool {
+    cy >= win_y && cy < win_y + TITLE_BAR_H
+}
+
+/// Check if point is on a resize edge
+/// Returns: Some(edge) where 0=right, 1=bottom, 2=bottom-right corner
+fn resize_edge_at(cx: u32, cy: u32, x: u32, y: u32, w: u32, h: u32) -> Option<u8> {
+    let on_right = cx >= x + w - RESIZE_HANDLE && cx < x + w;
+    let on_bottom = cy >= y + h - RESIZE_HANDLE && cy < y + h;
+    let in_window = cx >= x && cx < x + w && cy >= y && cy < y + h;
+
+    if !in_window {
+        return None;
+    }
+
+    if on_right && on_bottom {
+        return Some(2); // corner
+    }
+    if on_right {
+        return Some(0); // right edge
+    }
+    if on_bottom {
+        return Some(1); // bottom edge
+    }
+    None
+}
+
 /// Handle a keyboard press
 fn handle_keypress(scancode: u8) {
-    // Alt+Tab: cycle focus
     if crate::usb::hid::alt_held() && scancode == 0x2B {
-        // Tab scancode in USB HID = 0x2B
         cycle_focus();
         return;
     }
-
-    // Check if focused window has a terminal widget
     let focused_id = *FOCUSED_ID.lock();
     if focused_id != 0 {
         let windows = WINDOWS.lock();
         for i in 0..MAX_WINDOWS {
             if windows[i].active && windows[i].id == focused_id {
                 if windows[i].terminal_widget_id.is_some() {
-                    // Route to terminal app
                     let shift = crate::usb::hid::shift_held();
                     let ctrl = crate::usb::hid::ctrl_held();
                     let alt = crate::usb::hid::alt_held();
@@ -520,54 +587,119 @@ fn handle_keypress(scancode: u8) {
             }
         }
     }
-
-    // Forward to focused window (future: keyboard input routing)
     let _ = scancode;
 }
 
-/// Handle mouse movement
+/// Handle mouse movement — process drag and resize operations
 fn handle_mouse_move(dx: i16, dy: i16) {
     let dragging = *DRAGGING.lock();
-    let drag_win_id = *DRAG_WIN_ID.lock();
+    let resizing = *RESIZING.lock();
 
-    if dragging && drag_win_id != 0 {
-        let drag_start_x = *DRAG_START_X.lock();
-        let drag_start_y = *DRAG_START_Y.lock();
-        let drag_win_start_x = *DRAG_WIN_START_X.lock();
-        let drag_win_start_y = *DRAG_WIN_START_Y.lock();
+    if dragging {
+        let drag_win_id = *DRAG_WIN_ID.lock();
+        if drag_win_id != 0 {
+            let (cx, cy) = crate::wm::input::cursor_pos();
+            let start_cx = *DRAG_START_CURSOR_X.lock();
+            let start_cy = *DRAG_START_CURSOR_Y.lock();
+            let win_start_x = *DRAG_WIN_START_X.lock();
+            let win_start_y = *DRAG_WIN_START_Y.lock();
 
-        let new_x = (drag_win_start_x as i32 + dx as i32 - drag_start_x as i32).max(0) as u32;
-        let new_y = (drag_win_start_y as i32 + dy as i32 - drag_start_y as i32).max(0) as u32;
-        move_window(drag_win_id, new_x, new_y);
+            let new_x = (win_start_x as i32 + cx as i32 - start_cx).max(0) as u32;
+            let new_y = (win_start_y as i32 + cy as i32 - start_cy).max(0) as u32;
+            move_window(drag_win_id, new_x, new_y);
+        }
+        return;
     }
+
+    if resizing {
+        let resize_id = *RESIZE_WIN_ID.lock();
+        if resize_id != 0 {
+            let (cx, cy) = crate::wm::input::cursor_pos();
+            let start_cx = *RESIZE_START_CURSOR_X.lock();
+            let start_cy = *RESIZE_START_CURSOR_Y.lock();
+            let start_w = *RESIZE_START_W.lock();
+            let start_h = *RESIZE_START_H.lock();
+            let edge = *RESIZE_EDGE.lock();
+
+            let dx_total = cx as i32 - start_cx;
+            let dy_total = cy as i32 - start_cy;
+
+            let new_w = match edge {
+                0 | 2 => (start_w as i32 + dx_total).max(80) as u32, // right or corner
+                _ => start_w,
+            };
+            let new_h = match edge {
+                1 | 2 => (start_h as i32 + dy_total).max(60) as u32, // bottom or corner
+                _ => start_h,
+            };
+            resize(resize_id, new_w, new_h);
+        }
+        return;
+    }
+
+    let _ = (dx, dy);
 }
 
-/// Handle mouse button changes
+/// Handle mouse button changes — proper hit testing with focus, drag, close, resize
 fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
-    // This is called on button state *change*
-    // For a full implementation we'd track previous button state
     if left {
-        // Button pressed — start drag or focus window under cursor
-        // For now, just focus the topmost window
-        let focused_id = *FOCUSED_ID.lock();
-        if focused_id != 0 {
-            // Begin drag of focused window
-            *DRAG_WIN_ID.lock() = focused_id;
-            // DRAG_START_X/Y would be set from cursor position
-            *DRAGGING.lock() = true;
-            let windows = WINDOWS.lock();
-            for i in 0..MAX_WINDOWS {
-                if windows[i].active && windows[i].id == focused_id {
-                    *DRAG_WIN_START_X.lock() = windows[i].x;
-                    *DRAG_WIN_START_Y.lock() = windows[i].y;
-                    break;
-                }
+        // Left button pressed — hit test and determine action
+        let (cx, cy) = crate::wm::input::cursor_pos();
+
+        if let Some((win_id, win_x, win_y, win_w, win_h)) = window_at(cx, cy) {
+            // Check resize edge first (border area)
+            if let Some(edge) = resize_edge_at(cx, cy, win_x, win_y, win_w, win_h) {
+                // Start resizing
+                *RESIZE_WIN_ID.lock() = win_id;
+                *RESIZE_START_CURSOR_X.lock() = cx as i32;
+                *RESIZE_START_CURSOR_Y.lock() = cy as i32;
+                *RESIZE_START_W.lock() = win_w;
+                *RESIZE_START_H.lock() = win_h;
+                *RESIZE_EDGE.lock() = edge;
+                *RESIZING.lock() = true;
+                focus(win_id);
+                return;
             }
+
+            // Check close button
+            if is_on_close_button(cx, cy, win_x, win_y, win_w) {
+                destroy(win_id);
+                return;
+            }
+
+            // Check maximize button
+            if is_on_maximize_button(cx, cy, win_x, win_y, win_w) {
+                maximize(win_id);
+                return;
+            }
+
+            // Check minimize button
+            if is_on_minimize_button(cx, cy, win_x, win_y, win_w) {
+                minimize(win_id);
+                return;
+            }
+
+            // Check title bar for dragging
+            if is_on_title_bar(cy, win_y) {
+                focus(win_id);
+                *DRAG_WIN_ID.lock() = win_id;
+                *DRAG_START_CURSOR_X.lock() = cx as i32;
+                *DRAG_START_CURSOR_Y.lock() = cy as i32;
+                *DRAG_WIN_START_X.lock() = win_x;
+                *DRAG_WIN_START_Y.lock() = win_y;
+                *DRAGGING.lock() = true;
+                return;
+            }
+
+            // Click inside client area — just focus
+            focus(win_id);
         }
     } else {
-        // Button released — stop drag
+        // Left button released — stop all drag/resize
         *DRAGGING.lock() = false;
         *DRAG_WIN_ID.lock() = 0;
+        *RESIZING.lock() = false;
+        *RESIZE_WIN_ID.lock() = 0;
     }
 }
 

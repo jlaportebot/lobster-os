@@ -13,6 +13,7 @@
 
 pub mod compositor;
 pub mod context_menu;
+pub mod desktop_icons;
 pub mod input;
 pub mod launcher;
 pub mod panel;
@@ -47,6 +48,8 @@ pub fn init() {
     input::init();
     println!("[wm] Step 6: panel::init...");
     panel::init(&fb);
+    println!("[wm] Step 6b: desktop_icons::init...");
+    desktop_icons::init();
     println!(
         "[wm] Window manager initialized ({}x{})",
         fb.width, fb.height
@@ -72,6 +75,12 @@ pub fn tick() {
             crate::apps::file_manager::render_to_windows(&fb);
             crate::apps::process_manager::render_to_windows(&fb);
         }
+    }
+
+    // Draw desktop icons (after windows, before panel)
+    let fb = get_info();
+    if fb.width > 0 {
+        desktop_icons::draw(&fb);
     }
 
     // Draw panel on top

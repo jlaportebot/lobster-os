@@ -197,7 +197,7 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
         return;
     }
 
-    // On left press: check panel clicks first, then window focus
+    // On left press: check panel clicks first, then desktop icons, then window focus
     if left && !prev_left {
         let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
 
@@ -207,7 +207,13 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
             return;
         }
 
-        // Not on panel - check which window the cursor is over and focus it
+        // Check if click is on a desktop icon
+        if let Some(icon_idx) = crate::wm::desktop_icons::hit_test(cx, cy) {
+            crate::wm::desktop_icons::handle_click(icon_idx);
+            return;
+        }
+
+        // Not on panel or icon - check which window the cursor is over and focus it
         crate::wm::window::handle_event(HidEvent::MouseButton {
             left,
             right,

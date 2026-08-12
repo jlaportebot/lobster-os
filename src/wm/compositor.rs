@@ -854,6 +854,7 @@ pub fn composite() {
 
         // Triple buffering: rotate buffers and present
         let present_start = crate::arch::timer::Timer::system_time_us();
+        draw_software_cursor(fb, back_buffer);
         rotate_and_present(fb, back_buffer);
         let present_end = crate::arch::timer::Timer::system_time_us();
 
@@ -1263,11 +1264,16 @@ fn render_layer_opaque(
         theme.win_border,
     );
 
-    // 4. Close button (red circle, 16x16 at top-right)
+    // 4. Close button (red circle, 14x14 at top-right)
     if layer.w > 30 && layer.h > 20 {
         let btn_x = layer.x + layer.w - 22;
-        let btn_y = layer.y + 4;
-        fill_back_buffer_rect(fb, back_buf, btn_x, btn_y, 16, 16, theme.close_btn);
+        let btn_y = layer.y + 5;
+        // Close (red)
+        fill_back_buffer_rect(fb, back_buf, btn_x, btn_y, 14, 14, 0xFFE74C3C);
+        // Maximize (green) — left of close
+        fill_back_buffer_rect(fb, back_buf, btn_x - 20, btn_y, 14, 14, 0xFF2ECC71);
+        // Minimize (yellow) — left of maximize
+        fill_back_buffer_rect(fb, back_buf, btn_x - 40, btn_y, 14, 14, 0xFFF39C12);
     }
 
     // 5. Title text
@@ -1778,17 +1784,67 @@ pub fn get_wallpaper_mode() -> WallpaperMode {
     unsafe { WALLPAPER.mode }
 }
 
+/// Draw a software mouse cursor on the back buffer
+fn draw_software_cursor(fb: FramebufferInfo, back_buf: *mut u32) {
+    let (cx, cy) = crate::wm::input::cursor_pos();
+    if cx >= fb.width || cy >= fb.height {
+        return;
+    }
+
+    // Simple arrow cursor: 13x13 pixels
+    // White body with black outline
+    let cursor_pixels: [(i32, i32); 13] = [
+        (0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7),
+        (8, 8), (9, 9), (10, 10), (11, 11), (12, 12),
+    ];
+
+    let black: u32 = 0xFF000000;
+    let white: u32 = 0xFFFFFFFF;
+
+    // Draw outline (black) first, then body (white)
+    for &(dx, dy) in &cursor_pixels {
+        let px = cx as i32 + dx;
+        let py = cy as i32 + dy;
+        if px >= 0 && (px as u32) < fb.width && py >= 0 && (py as u32) < fb.height {
+            let idx = py as usize * fb.width as usize + px as usize;
+            unsafe { core::ptr::write_volatile(back_buf.add(idx), black); }
+        }
+    }
+    // White body (offset by 1 for outline effect)
+    for &(dx, dy) in &cursor_pixels {
+        let px = cx as i32 + dx + 1;
+        let py = cy as i32 + dy + 1;
+        if px >= 0 && (px as u32) < fb.width && py >= 0 && (py as u32) < fb.height {
+            let idx = py as usize * fb.width as usize + px as usize;
+            unsafe { core::ptr::write_volatile(back_buf.add(idx), white); }
+        }
+    }
+}
+
 /// Draw the wallpaper to the back buffer
-fn draw_wallpaper(_fb: FramebufferInfo, _back_buf: *mut u32) {
-    // On QEMU, skip the full wallpaper fill — it wipes terminal content every frame.
-    // The desktop background is set once during init and render_to_windows handles
-    // the terminal client area.
-    #[cfg(not(feature = "qemu_raspi5b"))]
-    unsafe {
-        let color = WALLPAPER.solid_color;
-        let total = (_fb.width * _fb.height) as usize;
-        for i in 0..total {
-            core::ptr::write_volatile(_back_buf.add(i), color);
+fn draw_wallpaper(fb: FramebufferInfo, back_buf: *mut u32) {
+    // Draw desktop background with a subtle vertical gradient
+    let theme = crate::wm::theme::current();
+    let base_color = theme.desktop_bg;
+    
+    // Extract RGB components for gradient
+    let base_r = (base_color >> 16) & 0xFF;
+    let base_g = (base_color >> 8) & 0xFF;
+    let base_b = base_color & 0xFF;
+    
+    let _total = (fb.width * fb.height) as usize;
+    for y in 0..fb.height as usize {
+        // Slight gradient: top is slightly lighter, bottom slightly darker
+        let factor = y as f32 / fb.height as f32;
+        let r = (base_r as f32 * (1.0 - factor * 0.15)) as u32;
+        let g = (base_g as f32 * (1.0 - factor * 0.15)) as u32;
+        let b = (base_b as f32 * (1.0 - factor * 0.10)) as u32;
+        let color = 0xFF000000 | (r << 16) | (g << 8) | b;
+        
+        for x in 0..fb.width as usize {
+            unsafe {
+                core::ptr::write_volatile(back_buf.add(y * fb.width as usize + x), color);
+            }
         }
     }
 }
