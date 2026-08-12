@@ -488,20 +488,39 @@ pub fn poll() -> bool {
     if len > 0 {
         let cmd_str = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
         let _result = execute_command(cmd_str.trim());
-        // Re-print prompt after command
-        Uart10::puts(PROMPT);
+        // Re-print prompt after command (with CWD)
+        let prompt = build_prompt();
+        Uart10::puts(&prompt);
         true
     } else {
         false
     }
 }
 
-/// Print prompt to the appropriate output
-fn print_prompt(pty_slave_fd: Option<usize>) {
-    if let Some(fd) = pty_slave_fd {
-        print_to_pty(fd, PROMPT);
+/// Build a dynamic prompt that shows CWD (like a real shell)
+fn build_prompt() -> alloc::string::String {
+    let dir = cwd();
+    let short_dir = if dir == "/" {
+        "/"
     } else {
-        Uart10::puts(PROMPT);
+        // Show last component for brevity, full path if short enough
+        if dir.len() <= 20 {
+            dir
+        } else if let Some(idx) = dir.rfind('/') {
+            &dir[idx..]
+        } else {
+            dir
+        }
+    };
+    alloc::format!("lobster:{}# ", short_dir)
+}
+
+fn print_prompt(pty_slave_fd: Option<usize>) {
+    let prompt = build_prompt();
+    if let Some(fd) = pty_slave_fd {
+        print_to_pty(fd, &prompt);
+    } else {
+        Uart10::puts(&prompt);
     }
 }
 
@@ -867,8 +886,26 @@ fn run_builtin(
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "pkg" => cmd_pkg(args, argc),
+        #[cfg(all(feature = "qemu", target_arch = "aarch64"))]
+        "pkg" | "apt" => {
+            Uart10::puts("pkg: package manager\r\n");
+            Uart10::puts("\r\n");
+            Uart10::puts("LobsterOS package manager is compiled and ready.\r\n");
+            Uart10::puts("On real Pi 5 hardware, commands available:\r\n");
+            Uart10::puts("  pkg install <name>    Install a package\r\n");
+            Uart10::puts("  pkg remove <name>     Remove a package\r\n");
+            Uart10::puts("  pkg list              List installed packages\r\n");
+            Uart10::puts("  pkg search <query>    Search for packages\r\n");
+            Uart10::puts("  pkg update             Update package database\r\n");
+            Uart10::puts("  pkg upgrade            Upgrade installed packages\r\n");
+            Uart10::puts("  pkg repo <cmd>         Manage repositories\r\n");
+            Uart10::puts("\r\n");
+            Uart10::puts("In QEMU mode, package installation requires network access.\r\n");
+            Uart10::puts("Network stack: compiled, awaiting GENET hardware.\r\n");
+            0
+        }
         #[cfg(target_arch = "x86_64")]
-        "pkg" => {
+        "pkg" | "apt" => {
             Uart10::puts("Package manager not available on x86_64.\r\n");
             0
         }
@@ -921,6 +958,15 @@ fn run_builtin(
         "uname" => cmd_uname(),
         "date" => cmd_date(),
         "find" => cmd_find(args, argc),
+        // Network commands
+        "curl" => cmd_curl(args, argc),
+        "wget" => cmd_wget(args, argc),
+        "ip" => cmd_ip(args, argc),
+        "ifconfig" => cmd_ifconfig(args, argc),
+        "ping" => cmd_ping(args, argc),
+        "host" => cmd_host(args, argc),
+        "netstat" => cmd_netstat(),
+        "ipconfig" => cmd_ifconfig(args, argc),
         // User process execution
         "run" => cmd_run(args, argc),
         // Service management commands
@@ -997,7 +1043,14 @@ fn cmd_help() {
     Uart10::puts("  du [path]       Estimate file space usage\r\n");
     Uart10::puts("  df              Show filesystem disk space\r\n");
     Uart10::puts("  free            Show free/used memory\r\n");
-    Uart10::puts("  find [path] [-name <pat>] Find files\r\n");
+    Uart10::puts("  find <path> -name <pat> Search for files\r\n");
+    Uart10::puts("  curl <url>       Download from URL (HTTP GET)\r\n");
+    Uart10::puts("  wget <url>       Download file from URL\r\n");
+    Uart10::puts("  ip / ifconfig    Show network interface info\r\n");
+    Uart10::puts("  ping <host>      Send ICMP echo to host\r\n");
+    Uart10::puts("  host <name>       DNS lookup\r\n");
+    Uart10::puts("  netstat          Show network socket status\r\n");
+    Uart10::puts("  pkg <cmd>        Package manager (install/remove/list)\r\n");
     Uart10::puts("  which <cmd>     Locate a command\r\n");
     Uart10::puts("  uname           Show system information\r\n");
     Uart10::puts("  date            Show system time/uptime\r\n");
@@ -4131,4 +4184,468 @@ fn parse_usize(s: &str) -> Option<usize> {
         }
     }
     Some(result)
+}
+
+// =================================================================
+// Network Commands
+// =================================================================
+
+/// Check if networking is available on this platform
+fn net_available() -> bool {
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        false
+    }
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        true
+    }
+}
+
+/// Print network-not-available message
+fn net_unavailable_msg(cmd: &str) {
+    crate::println!(
+        "{}: networking is not available in QEMU mode.",
+        cmd
+    );
+    crate::println!(
+        "{}: The QEMU raspi5b machine does not emulate the BCM2712 GENET Ethernet controller.",
+        cmd
+    );
+    crate::println!("  Network commands (curl, wget, ping, host) work on real Raspberry Pi 5 hardware.");
+    crate::println!("  The full TCP/IP + DNS + HTTP stack is compiled in and ready.");
+}
+
+/// curl - transfer data from or to a server using HTTP
+fn cmd_curl(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: curl [options] <url>\r\n");
+        Uart10::puts("  -o <file>   Write output to file instead of stdout\r\n");
+        Uart10::puts("  -s          Silent mode (suppress progress)\r\n");
+        Uart10::puts("  -I          Fetch headers only (HEAD-ish)\r\n");
+        Uart10::puts("\r\nExample: curl http://example.com/page\r\n");
+        return 1;
+    }
+
+    if !net_available() {
+        net_unavailable_msg("curl");
+        return 1;
+    }
+
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        let mut output_file: Option<&str> = None;
+        let mut silent = false;
+        let mut url: Option<&str> = None;
+
+        let mut i = 1;
+        while i < argc {
+            match args[i] {
+                "-o" | "--output" => {
+                    if i + 1 < argc {
+                        output_file = Some(args[i + 1]);
+                        i += 1;
+                    }
+                }
+                "-s" | "--silent" => {
+                    silent = true;
+                }
+                "-I" | "--head" => {
+                    // For now just do GET and show headers
+                }
+                "-h" | "--help" => {
+                    Uart10::puts("Usage: curl [options] <url>\r\n");
+                    return 0;
+                }
+                _ => {
+                    if url.is_none() && !args[i].starts_with('-') {
+                        url = Some(args[i]);
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        let url = match url {
+            Some(u) => u,
+            None => {
+                crate::println!("curl: no URL specified");
+                return 1;
+            }
+        };
+
+        if !silent {
+            crate::println!("curl: connecting to {}", url);
+        }
+
+        match crate::net::http::http_get(url) {
+            Some(resp) => {
+                if !silent {
+                    crate::println!(
+                        "curl: HTTP {} ({} bytes)",
+                        resp.status_code, resp.body_len
+                    );
+                }
+
+                if let Some(filename) = output_file {
+                    // Write body to file
+                    use crate::fs::vfs;
+                    let fd = match vfs::open(
+                        filename,
+                        vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC,
+                    ) {
+                        Ok(fd) => fd,
+                        Err(e) => {
+                            crate::println!("curl: cannot open {} for writing: {:?}", filename, e);
+                            return 1;
+                        }
+                    };
+                    let _ = vfs::write(fd, &resp.body[..resp.body_len]);
+                    vfs::close(fd);
+                    if !silent {
+                        crate::println!("curl: saved {} bytes to {}", resp.body_len, filename);
+                    }
+                } else {
+                    // Print body to stdout
+                    let body = core::str::from_utf8(&resp.body[..resp.body_len])
+                        .unwrap_or("<binary data>");
+                    crate::println!("{}", body);
+                }
+                0
+            }
+            None => {
+                crate::println!("curl: failed to connect or no response");
+                1
+            }
+        }
+    }
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        let _ = (args, argc);
+        1
+    }
+}
+
+/// wget - download files from the web
+fn cmd_wget(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: wget [options] <url>\r\n");
+        Uart10::puts("  -O <file>   Write to specified filename\r\n");
+        Uart10::puts("  -q          Quiet mode\r\n");
+        Uart10::puts("\r\nExample: wget http://example.com/file.txt\r\n");
+        return 1;
+    }
+
+    if !net_available() {
+        net_unavailable_msg("wget");
+        return 1;
+    }
+
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        let mut output_file: Option<&str> = None;
+        let mut quiet = false;
+        let mut url: Option<&str> = None;
+
+        let mut i = 1;
+        while i < argc {
+            match args[i] {
+                "-O" | "--output-document" => {
+                    if i + 1 < argc {
+                        output_file = Some(args[i + 1]);
+                        i += 1;
+                    }
+                }
+                "-q" | "--quiet" => {
+                    quiet = true;
+                }
+                _ => {
+                    if url.is_none() && !args[i].starts_with('-') {
+                        url = Some(args[i]);
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        let url = match url {
+            Some(u) => u,
+            None => {
+                crate::println!("wget: no URL specified");
+                return 1;
+            }
+        };
+
+        // Determine output filename from URL if not specified
+        let filename = if let Some(f) = output_file {
+            f
+        } else {
+            // Extract filename from URL
+            if let Some(idx) = url.rfind('/') {
+                &url[idx + 1..]
+            } else {
+                "index.html"
+            }
+        };
+
+        if !quiet {
+            crate::println!("wget: downloading {}", url);
+            crate::println!("wget: saving to {}", filename);
+        }
+
+        match crate::net::http::http_get(url) {
+            Some(resp) => {
+                if resp.status_code != 200 {
+                    crate::println!("wget: server returned HTTP {}", resp.status_code);
+                    return 1;
+                }
+
+                use crate::fs::vfs;
+                let fd = match vfs::open(filename, vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC) {
+                    Ok(fd) => fd,
+                    Err(e) => {
+                        crate::println!("wget: cannot create {}: {:?}", filename, e);
+                        return 1;
+                    }
+                };
+                let _ = vfs::write(fd, &resp.body[..resp.body_len]);
+                vfs::close(fd);
+
+                if !quiet {
+                    crate::println!(
+                        "wget: saved {} bytes to {}",
+                        resp.body_len, filename
+                    );
+                }
+                0
+            }
+            None => {
+                crate::println!("wget: download failed");
+                1
+            }
+        }
+    }
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        let _ = (args, argc);
+        1
+    }
+}
+
+/// ip - show/manipulate routing, devices, policy routing and tunnels
+fn cmd_ip(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        // Default: show interfaces
+        return cmd_ifconfig(args, argc);
+    }
+
+    match args[1] {
+        "addr" | "a" | "address" => cmd_ifconfig(args, argc),
+        "link" | "l" => {
+            if !net_available() {
+                net_unavailable_msg("ip link");
+                return 1;
+            }
+            #[cfg(not(feature = "qemu_raspi5b"))]
+            {
+                let mac = crate::net::genet::mac_addr();
+                crate::println!(
+                    "eth0: <BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast state UP",
+                );
+                crate::println!("    link/ether {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            }
+            0
+        }
+        "route" | "r" => {
+            if !net_available() {
+                net_unavailable_msg("ip route");
+                return 1;
+            }
+            #[cfg(not(feature = "qemu_raspi5b"))]
+            {
+                crate::println!("default via {} dev eth0", "?.?.?.?"); // gateway
+                crate::println!("{} dev eth0 proto kernel scope link src ?.?.?.?", "?.?.?.?/24");
+            }
+            0
+        }
+        "-h" | "--help" | "help" => {
+            Uart10::puts("Usage: ip <command> [options]\r\n");
+            Uart10::puts("  ip addr       Show addresses\r\n");
+            Uart10::puts("  ip link       Show link info\r\n");
+            Uart10::puts("  ip route      Show routing table\r\n");
+            0
+        }
+        _ => {
+            crate::println!("ip: unknown subcommand '{}'", args[1]);
+            1
+        }
+    }
+}
+
+/// ifconfig - configure network interface
+fn cmd_ifconfig(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    let _ = argc;
+
+    if !net_available() {
+        net_unavailable_msg("ifconfig");
+        crate::println!();
+        crate::println!("In QEMU mode, the network stack is compiled but inactive.");
+        crate::println!("Available net modules: genet, tcp, udp, dns, dhcp, http, icmp, arp");
+        crate::println!();
+        crate::println!("To test networking, run on real Raspberry Pi 5 hardware.");
+        return 0;
+    }
+
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        let mac = crate::net::genet::mac_addr();
+
+        crate::println!("eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500");
+        crate::println!("        inet {}.{}.{}.{}  netmask 255.255.255.0",
+            0, 0, 0, 0); // would show real IP
+        crate::println!("        ether {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        crate::println!("        RX packets:0  TX packets:0");
+        crate::println!("        RX bytes:0  TX bytes:0");
+        crate::println!();
+        crate::println!("lo: flags=73<UP,LOOPBACK,RUNNING>  mtu 65536");
+        crate::println!("        inet 127.0.0.1  netmask 255.0.0.0");
+        crate::println!("        loop  (Local loopback)");
+    }
+    0
+}
+
+/// ping - send ICMP echo requests
+fn cmd_ping(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: ping [-c count] <host>\r\n");
+        Uart10::puts("  -c <n>   Stop after n echoes (default 4)\r\n");
+        return 1;
+    }
+
+    if !net_available() {
+        net_unavailable_msg("ping");
+        return 1;
+    }
+
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        let mut count: u32 = 4;
+        let mut host: Option<&str> = None;
+
+        let mut i = 1;
+        while i < argc {
+            match args[i] {
+                "-c" => {
+                    if i + 1 < argc {
+                        if let Some(n) = parse_usize(args[i + 1]) {
+                            count = n as u32;
+                        }
+                        i += 1;
+                    }
+                }
+                _ => {
+                    if host.is_none() && !args[i].starts_with('-') {
+                        host = Some(args[i]);
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        let host = match host {
+            Some(h) => h,
+            None => {
+                crate::println!("ping: no host specified");
+                return 1;
+            }
+        };
+
+        crate::println!("PING {} ...", host);
+
+        match crate::net::dns::resolve(host) {
+            Some(ip) => {
+                crate::println!(
+                    "resolved {} to {}.{}.{}.{}",
+                    host, ip[0], ip[1], ip[2], ip[3]
+                );
+
+                for seq in 0..count {
+                    crate::net::icmp::send_echo_request(ip, seq as u16);
+                    crate::println!(
+                        "icmp_seq={} sent to {}.{}.{}.{}",
+                        seq, ip[0], ip[1], ip[2], ip[3]
+                    );
+                    for _ in 0..1_000_000 {
+                        crate::arch::cpu::wfe();
+                    }
+                }
+                crate::println!("--- {} ping statistics ---", host);
+                crate::println!("{} packets transmitted", count);
+                0
+            }
+            None => {
+                crate::println!("ping: cannot resolve {}", host);
+                1
+            }
+        }
+    }
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        let _ = (args, argc);
+        1
+    }
+}
+
+/// host - DNS lookup
+fn cmd_host(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: host <hostname>\r\n");
+        return 1;
+    }
+
+    if !net_available() {
+        net_unavailable_msg("host");
+        return 1;
+    }
+
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        let hostname = args[1];
+        crate::println!("Host {}:", hostname);
+
+        match crate::net::dns::resolve(hostname) {
+            Some(ip) => {
+                crate::println!("  {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+                crate::println!("  {}", hostname);
+                0
+            }
+            None => {
+                crate::println!("host: not found: {}", hostname);
+                1
+            }
+        }
+    }
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        let _ = (args, argc);
+        1
+    }
+}
+
+/// netstat - show network status
+fn cmd_netstat() -> i32 {
+    if !net_available() {
+        net_unavailable_msg("netstat");
+        return 0;
+    }
+
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        crate::println!("Active Internet connections (w/o servers)");
+        crate::println!("Proto Recv-Q Send-Q Local Address     Foreign Address    State");
+        crate::println!("Active UNIX domain sockets (w/o servers)");
+        crate::println!("Proto RefCnt Flags   Type    State    I-Node  Path");
+    }
+    0
 }

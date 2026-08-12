@@ -257,33 +257,40 @@ pub fn read_byte() -> u8 {
 pub fn read_line_blocking(buf: &mut [u8]) -> usize {
     let mut len = 0;
     loop {
-        let b = read_byte();
-        match b {
-            b'\r' | b'\n' => {
-                Uart10::puts("\r\n");
-                break;
-            }
-            0x08 | 0x7F => {
-                // Backspace or Delete
-                if len > 0 {
-                    len -= 1;
-                    if unsafe { ECHO_ENABLED } {
-                        Uart10::puts("\x08 \x08");
+        // Poll UART directly (same path as shell::poll uses)
+        // This is necessary because poll() consumes bytes via feed_byte()
+        // which fills LINE_BUF, not RX_RING.
+        if crate::drivers::uart::Uart10::has_data() {
+            while let Some(b) = crate::drivers::uart::Uart10::read_byte_nb() {
+                match b {
+                    b'\r' | b'\n' => {
+                        Uart10::puts("\r\n");
+                        return len;
                     }
-                }
-            }
-            _ => {
-                if len < buf.len() {
-                    buf[len] = b;
-                    len += 1;
-                    if unsafe { ECHO_ENABLED } {
-                        Uart10::putc(b);
+                    0x08 | 0x7F => {
+                        // Backspace or Delete
+                        if len > 0 {
+                            len -= 1;
+                            if unsafe { ECHO_ENABLED } {
+                                Uart10::puts("\x08 \x08");
+                            }
+                        }
+                    }
+                    _ => {
+                        if len < buf.len() {
+                            buf[len] = b;
+                            len += 1;
+                            if unsafe { ECHO_ENABLED } {
+                                Uart10::putc(b);
+                            }
+                        }
                     }
                 }
             }
         }
+        // Wait for more input
+        crate::arch::cpu::wfe();
     }
-    len
 }
 
 /// Set echo mode
