@@ -565,6 +565,12 @@ pub fn print_banner() {
     Uart10::puts("Type 'help' for a list of commands.\r\n\r\n");
 }
 
+/// Print the initial shell prompt (called once after banner)
+pub fn print_initial_prompt() {
+    let prompt = build_prompt();
+    Uart10::puts(&prompt);
+}
+
 /// Parse and execute a command string (advanced: pipes, redirects, env vars)
 fn execute_command(line: &str) -> CmdResult {
     if line.is_empty() {
@@ -2620,12 +2626,12 @@ fn cmd_login(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
     let username = args[1];
 
-    // Prompt for password with echo disabled
+    // Prompt for password with echo disabled using blocking read
     Uart10::puts("Password: ");
     let old_echo = crate::drivers::serial_input::echo_enabled();
     crate::drivers::serial_input::set_echo(false);
     let mut passwd_buf = [0u8; 128];
-    let passwd_len = crate::drivers::serial_input::read_line(&mut passwd_buf);
+    let passwd_len = crate::drivers::serial_input::read_line_blocking(&mut passwd_buf);
     crate::drivers::serial_input::set_echo(old_echo);
     Uart10::puts("\r\n");
 
@@ -2663,13 +2669,13 @@ fn cmd_login(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 fn cmd_su(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     let target_user = if argc >= 2 { args[1] } else { "root" };
 
-    // Prompt for target user's password with echo disabled
+    // Prompt for target user's password with echo disabled using blocking read
     crate::println!("[su] Switching to user: {}", target_user);
     Uart10::puts("Password: ");
     let old_echo = crate::drivers::serial_input::echo_enabled();
     crate::drivers::serial_input::set_echo(false);
     let mut passwd_buf = [0u8; 128];
-    let passwd_len = crate::drivers::serial_input::read_line(&mut passwd_buf);
+    let passwd_len = crate::drivers::serial_input::read_line_blocking(&mut passwd_buf);
     crate::drivers::serial_input::set_echo(old_echo);
     Uart10::puts("\r\n");
 
@@ -2768,17 +2774,15 @@ fn cmd_sudo(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     0
 }
 
-/// Passwd command
+/// Passwd command — set or change a user's password
 fn cmd_passwd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
-    let target_user = if argc >= 2 {
-        args[1]
-    } else {
-        "current_user"
-    };
+    // Default to root if no user specified (initial setup scenario)
+    let target_user = if argc >= 2 { args[1] } else { "root" };
 
     // Check if target user exists
     if !crate::users::passwd::user_exists(target_user) {
         crate::println!("passwd: user '{}' does not exist", target_user);
+        crate::println!("passwd: use 'useradd -m <username>' to create a new user first");
         return 1;
     }
 
@@ -2804,7 +2808,9 @@ fn cmd_passwd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     crate::drivers::serial_input::set_echo(saved_echo);
 
     let confirm_password =
-        core::str::from_utf8(&confirm_passwd_buf[..confirm_passwd_len]).unwrap_or("").trim();
+        core::str::from_utf8(&confirm_passwd_buf[..confirm_passwd_len])
+            .unwrap_or("")
+            .trim();
 
     if new_password != confirm_password {
         crate::println!("passwd: passwords do not match");
@@ -2819,7 +2825,10 @@ fn cmd_passwd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     // Change password directly (bypass old password check for admin)
     match crate::users::auth::set_password(target_user, new_password) {
         Ok(()) => {
-            crate::println!("passwd: password updated successfully for '{}'", target_user);
+            crate::println!(
+                "passwd: password updated successfully for '{}'",
+                target_user
+            );
             0
         }
         Err(e) => {
@@ -4194,7 +4203,7 @@ fn parse_usize(s: &str) -> Option<usize> {
 fn net_available() -> bool {
     #[cfg(feature = "qemu_raspi5b")]
     {
-        false
+        crate::drivers::lobster_net::is_available()
     }
     #[cfg(not(feature = "qemu_raspi5b"))]
     {
@@ -4232,97 +4241,104 @@ fn cmd_curl(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         return 1;
     }
 
-    #[cfg(not(feature = "qemu_raspi5b"))]
-    {
-        let mut output_file: Option<&str> = None;
-        let mut silent = false;
-        let mut url: Option<&str> = None;
+    // Parse common args
+    let mut output_file: Option<&str> = None;
+    let mut silent = false;
+    let mut url: Option<&str> = None;
 
-        let mut i = 1;
-        while i < argc {
-            match args[i] {
-                "-o" | "--output" => {
-                    if i + 1 < argc {
-                        output_file = Some(args[i + 1]);
-                        i += 1;
-                    }
-                }
-                "-s" | "--silent" => {
-                    silent = true;
-                }
-                "-I" | "--head" => {
-                    // For now just do GET and show headers
-                }
-                "-h" | "--help" => {
-                    Uart10::puts("Usage: curl [options] <url>\r\n");
-                    return 0;
-                }
-                _ => {
-                    if url.is_none() && !args[i].starts_with('-') {
-                        url = Some(args[i]);
-                    }
+    let mut i = 1;
+    while i < argc {
+        match args[i] {
+            "-o" | "--output" => {
+                if i + 1 < argc {
+                    output_file = Some(args[i + 1]);
+                    i += 1;
                 }
             }
-            i += 1;
-        }
-
-        let url = match url {
-            Some(u) => u,
-            None => {
-                crate::println!("curl: no URL specified");
-                return 1;
+            "-s" | "--silent" => {
+                silent = true;
             }
-        };
-
-        if !silent {
-            crate::println!("curl: connecting to {}", url);
-        }
-
-        match crate::net::http::http_get(url) {
-            Some(resp) => {
-                if !silent {
-                    crate::println!(
-                        "curl: HTTP {} ({} bytes)",
-                        resp.status_code, resp.body_len
-                    );
-                }
-
-                if let Some(filename) = output_file {
-                    // Write body to file
-                    use crate::fs::vfs;
-                    let fd = match vfs::open(
-                        filename,
-                        vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC,
-                    ) {
-                        Ok(fd) => fd,
-                        Err(e) => {
-                            crate::println!("curl: cannot open {} for writing: {:?}", filename, e);
-                            return 1;
-                        }
-                    };
-                    let _ = vfs::write(fd, &resp.body[..resp.body_len]);
-                    vfs::close(fd);
-                    if !silent {
-                        crate::println!("curl: saved {} bytes to {}", resp.body_len, filename);
-                    }
-                } else {
-                    // Print body to stdout
-                    let body = core::str::from_utf8(&resp.body[..resp.body_len])
-                        .unwrap_or("<binary data>");
-                    crate::println!("{}", body);
-                }
-                0
+            "-I" | "--head" => {
+                // For now just do GET and show headers
             }
-            None => {
-                crate::println!("curl: failed to connect or no response");
-                1
+            "-h" | "--help" => {
+                Uart10::puts("Usage: curl [options] <url>\r\n");
+                return 0;
+            }
+            _ => {
+                if url.is_none() && !args[i].starts_with('-') {
+                    url = Some(args[i]);
+                }
             }
         }
+        i += 1;
     }
+
+    let url = match url {
+        Some(u) => u,
+        None => {
+            crate::println!("curl: no URL specified");
+            return 1;
+        }
+    };
+
+    if !silent {
+        crate::println!("curl: connecting to {}", url);
+    }
+
+    // Fetch via appropriate backend
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    let body_opt = crate::net::http::http_get(url).map(|resp| {
+        if !silent {
+            crate::println!(
+                "curl: HTTP {} ({} bytes)",
+                resp.status_code, resp.body_len
+            );
+        }
+        (resp.status_code, alloc::vec::Vec::from(&resp.body[..resp.body_len]))
+    });
+
     #[cfg(feature = "qemu_raspi5b")]
-    {
-        let _ = (args, argc);
-        1
+    let body_opt = crate::drivers::lobster_net::http_fetch_string(url).map(|body| {
+        let len = body.len();
+        if !silent {
+            crate::println!("curl: HTTP 200 ({} bytes)", len);
+        }
+        (200, body.into_bytes())
+    });
+
+    match body_opt {
+        Some((status_code, body)) => {
+            if let Some(filename) = output_file {
+                // Write body to file
+                use crate::fs::vfs;
+                let fd = match vfs::open(
+                    filename,
+                    vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC,
+                ) {
+                    Ok(fd) => fd,
+                    Err(e) => {
+                        crate::println!("curl: cannot open {} for writing: {:?}", filename, e);
+                        return 1;
+                    }
+                };
+                let _ = vfs::write(fd, &body);
+                vfs::close(fd);
+                if !silent {
+                    crate::println!("curl: saved {} bytes to {}", body.len(), filename);
+                }
+            } else {
+                // Print body to stdout
+                let body_str = core::str::from_utf8(&body)
+                    .unwrap_or("<binary data>");
+                crate::println!("{}", body_str);
+            }
+            0
+        }
+        None => {
+            crate::println!("curl: failed to connect or no response");
+            1
+        }
     }
 }
 
@@ -4341,94 +4357,98 @@ fn cmd_wget(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         return 1;
     }
 
-    #[cfg(not(feature = "qemu_raspi5b"))]
-    {
-        let mut output_file: Option<&str> = None;
-        let mut quiet = false;
-        let mut url: Option<&str> = None;
+    // Parse common args
+    let mut output_file: Option<&str> = None;
+    let mut quiet = false;
+    let mut url: Option<&str> = None;
 
-        let mut i = 1;
-        while i < argc {
-            match args[i] {
-                "-O" | "--output-document" => {
-                    if i + 1 < argc {
-                        output_file = Some(args[i + 1]);
-                        i += 1;
-                    }
-                }
-                "-q" | "--quiet" => {
-                    quiet = true;
-                }
-                _ => {
-                    if url.is_none() && !args[i].starts_with('-') {
-                        url = Some(args[i]);
-                    }
+    let mut i = 1;
+    while i < argc {
+        match args[i] {
+            "-O" | "--output-document" => {
+                if i + 1 < argc {
+                    output_file = Some(args[i + 1]);
+                    i += 1;
                 }
             }
-            i += 1;
+            "-q" | "--quiet" => {
+                quiet = true;
+            }
+            _ => {
+                if url.is_none() && !args[i].starts_with('-') {
+                    url = Some(args[i]);
+                }
+            }
         }
+        i += 1;
+    }
 
-        let url = match url {
-            Some(u) => u,
-            None => {
-                crate::println!("wget: no URL specified");
+    let url = match url {
+        Some(u) => u,
+        None => {
+            crate::println!("wget: no URL specified");
+            return 1;
+        }
+    };
+
+    // Determine output filename from URL if not specified
+    let filename = if let Some(f) = output_file {
+        f
+    } else {
+        // Extract filename from URL
+        if let Some(idx) = url.rfind('/') {
+            &url[idx + 1..]
+        } else {
+            "index.html"
+        }
+    };
+
+    if !quiet {
+        crate::println!("wget: downloading {}", url);
+        crate::println!("wget: saving to {}", filename);
+    }
+
+    // Fetch via appropriate backend
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    let body_opt = crate::net::http::http_get(url).map(|resp| {
+        (resp.status_code, alloc::vec::Vec::from(&resp.body[..resp.body_len]))
+    });
+
+    #[cfg(feature = "qemu_raspi5b")]
+    let body_opt = crate::drivers::lobster_net::http_fetch_string(url).map(|body| {
+        (200, body.into_bytes())
+    });
+
+    match body_opt {
+        Some((status_code, body)) => {
+            if status_code != 200 {
+                crate::println!("wget: server returned HTTP {}", status_code);
                 return 1;
             }
-        };
 
-        // Determine output filename from URL if not specified
-        let filename = if let Some(f) = output_file {
-            f
-        } else {
-            // Extract filename from URL
-            if let Some(idx) = url.rfind('/') {
-                &url[idx + 1..]
-            } else {
-                "index.html"
-            }
-        };
-
-        if !quiet {
-            crate::println!("wget: downloading {}", url);
-            crate::println!("wget: saving to {}", filename);
-        }
-
-        match crate::net::http::http_get(url) {
-            Some(resp) => {
-                if resp.status_code != 200 {
-                    crate::println!("wget: server returned HTTP {}", resp.status_code);
+            use crate::fs::vfs;
+            let fd = match vfs::open(filename, vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC) {
+                Ok(fd) => fd,
+                Err(e) => {
+                    crate::println!("wget: cannot create {}: {:?}", filename, e);
                     return 1;
                 }
+            };
+            let _ = vfs::write(fd, &body);
+            vfs::close(fd);
 
-                use crate::fs::vfs;
-                let fd = match vfs::open(filename, vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC) {
-                    Ok(fd) => fd,
-                    Err(e) => {
-                        crate::println!("wget: cannot create {}: {:?}", filename, e);
-                        return 1;
-                    }
-                };
-                let _ = vfs::write(fd, &resp.body[..resp.body_len]);
-                vfs::close(fd);
-
-                if !quiet {
-                    crate::println!(
-                        "wget: saved {} bytes to {}",
-                        resp.body_len, filename
-                    );
-                }
-                0
+            if !quiet {
+                crate::println!(
+                    "wget: saved {} bytes to {}",
+                    body.len(), filename
+                );
             }
-            None => {
-                crate::println!("wget: download failed");
-                1
-            }
+            0
         }
-    }
-    #[cfg(feature = "qemu_raspi5b")]
-    {
-        let _ = (args, argc);
-        1
+        None => {
+            crate::println!("wget: download failed");
+            1
+        }
     }
 }
 

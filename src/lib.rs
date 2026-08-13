@@ -698,6 +698,10 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         // Initialize QEMU MMIO input device (custom lobster-input device at 0x7d008000)
         crate::println!("[qemu-input] Initializing MMIO input device...");
         crate::drivers::qemu_input::init();
+
+        // Initialize LobsterOS network device (custom lobster-net device at 0x7d009000)
+        crate::println!("[lobster-net] Initializing MMIO network device...");
+        unsafe { crate::drivers::lobster_net::init() };
     }
     #[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
     {
@@ -814,6 +818,9 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     unsafe { crate::drivers::serial_input::init() };
     crate::shell::print_banner();
     crate::println!("[boot] Shell banner printed");
+
+    // Print initial shell prompt so the user sees it immediately
+    crate::shell::print_initial_prompt();
 
     // Enable preemptive scheduling (used for timer-driven tasks on real hardware)
     crate::sched::enable();

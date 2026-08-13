@@ -60,6 +60,7 @@ pub fn init() {
 pub fn tick() {
     // Poll HID events and dispatch through the input bridge
     input::pump_events();
+
     // Composite all windows (draws frames, wallpaper, blits content buffers)
     compositor::composite();
 
