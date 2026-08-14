@@ -192,19 +192,19 @@ impl RepositoryManager {
         let index_url = format!("{}/index.json", repo.url);
         crate::println!("[pkg] Updating repository index from {}", index_url);
 
-        let response = crate::net::http::http_get(&index_url).ok_or(RepoError::NetworkError)?;
+        // Unified fetch — uses lobster-net MMIO in QEMU, TCP/IP on real hardware
+        let (status_code, body) =
+            crate::net::fetch_url(&index_url).ok_or(RepoError::NetworkError)?;
 
-        if response.status_code != 200 {
-            crate::println!("[pkg] HTTP error: {}", response.status_code);
-            return Err(RepoError::HttpError(response.status_code));
+        if status_code != 200 {
+            crate::println!("[pkg] HTTP error: {}", status_code);
+            return Err(RepoError::HttpError(status_code));
         }
-
-        let body = &response.body[..response.body_len];
 
         // Verify signature if public key is configured
         if repo.verify_signatures {
             if let Some(pubkey) = repo.public_key {
-                let json_str = core::str::from_utf8(body).map_err(|_| RepoError::ParseError)?;
+                let json_str = core::str::from_utf8(&body).map_err(|_| RepoError::ParseError)?;
                 verify_repository_signature(json_str, &pubkey)?;
                 crate::println!("[pkg] Repository signature verified");
             } else {
@@ -215,7 +215,7 @@ impl RepositoryManager {
         }
 
         // Parse JSON index
-        let json_data = core::str::from_utf8(body).map_err(|_| RepoError::ParseError)?;
+        let json_data = core::str::from_utf8(&body).map_err(|_| RepoError::ParseError)?;
 
         // Parse JSON - simple manual parsing for no_std
         let mut index =
@@ -580,16 +580,15 @@ fn find_matching_brace(s: &str) -> Option<usize> {
 pub fn download_package(url: &str, buffer: &mut [u8]) -> Result<usize, RepoError> {
     crate::println!("[pkg] Downloading package from {}", url);
 
-    let response = crate::net::http::http_get(url).ok_or(RepoError::NetworkError)?;
+    let (status_code, body) = crate::net::fetch_url(url).ok_or(RepoError::NetworkError)?;
 
-    if response.status_code != 200 {
-        crate::println!("[pkg] HTTP error: {}", response.status_code);
-        return Err(RepoError::HttpError(response.status_code));
+    if status_code != 200 {
+        crate::println!("[pkg] HTTP error: {}", status_code);
+        return Err(RepoError::HttpError(status_code));
     }
 
-    let data = &response.body[..response.body_len];
-    let len = data.len().min(buffer.len());
-    buffer[..len].copy_from_slice(&data[..len]);
+    let len = body.len().min(buffer.len());
+    buffer[..len].copy_from_slice(&body[..len]);
 
     Ok(len)
 }

@@ -228,6 +228,42 @@ pub fn handle_irq() {
     genet::handle_irq();
 }
 
+/// Unified URL fetch — picks the right backend for the platform.
+///
+/// On QEMU (qemu_raspi5b feature with lobster-net MMIO device detected),
+/// uses the lobster-net HTTP proxy via the host's curl.
+/// On real hardware, uses the full TCP/IP stack via net::http::http_get.
+///
+/// Returns Some((status_code, body_bytes)) on success, None on failure.
+pub fn fetch_url(url: &str) -> Option<(u16, alloc::vec::Vec<u8>)> {
+    // QEMU path: use lobster-net MMIO device if available
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        if crate::drivers::lobster_net::is_available() {
+            return crate::drivers::lobster_net::http_fetch(url)
+                .map(|body| (200u16, body));
+        }
+    }
+
+    // Real hardware path: full TCP/IP stack
+    #[cfg(target_arch = "aarch64")]
+    {
+        crate::net::http::http_get(url).map(|resp| {
+            (
+                resp.status_code,
+                alloc::vec::Vec::from(&resp.body[..resp.body_len]),
+            )
+        })
+    }
+
+    // x86_64 testing stub
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let _ = url;
+        None
+    }
+}
+
 // x86_64 stub modules for cross-compilation testing
 #[cfg(target_arch = "x86_64")]
 pub mod genet {

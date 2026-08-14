@@ -1,6 +1,5 @@
 //! Package installation logic for LobsterOS
 
-use crate::net::http::http_get;
 use crate::pkg::package::{
     InstalledPackage, Package, PackageArch, PackageFile, PackageMetadata, LOBPKG_MAGIC,
     LOBPKG_VERSION,
@@ -271,14 +270,15 @@ impl Installer {
 
         // Download package
         crate::println!("[pkg] Downloading {} from {}...", name, download_url);
-        let response = http_get(&download_url).ok_or(InstallError::DownloadFailed)?;
+        let (status_code, body) =
+            crate::net::fetch_url(&download_url).ok_or(InstallError::DownloadFailed)?;
 
-        if response.status_code != 200 {
-            crate::println!("[pkg] HTTP error: {}", response.status_code);
-            return Err(InstallError::HttpError(response.status_code));
+        if status_code != 200 {
+            crate::println!("[pkg] HTTP error: {}", status_code);
+            return Err(InstallError::HttpError(status_code));
         }
 
-        let buffer = response.body[..response.body_len].to_vec();
+        let buffer = body;
 
         // Verify checksum
         if !verify_checksum(&buffer, &repo_checksum) {
@@ -1123,17 +1123,18 @@ pub fn install_transaction(
 
         // Download and verify
         crate::println!("[pkg] Downloading {} from {}...", name, pkg.download_url);
-        let response = http_get(&pkg.download_url).ok_or(InstallError::DownloadFailed)?;
+        let (status_code, body) =
+            crate::net::fetch_url(&pkg.download_url).ok_or(InstallError::DownloadFailed)?;
 
-        if response.status_code != 200 {
+        if status_code != 200 {
             // Rollback
             for rolled_back in installed_in_transaction.iter().rev() {
                 let _ = installer.remove(rolled_back);
             }
-            return Err(InstallError::HttpError(response.status_code));
+            return Err(InstallError::HttpError(status_code));
         }
 
-        let buffer = response.body[..response.body_len].to_vec();
+        let buffer = body;
 
         if !verify_checksum(&buffer, &pkg.checksum) {
             // Rollback

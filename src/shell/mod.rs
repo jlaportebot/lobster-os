@@ -893,23 +893,7 @@ fn run_builtin(
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "pkg" => cmd_pkg(args, argc),
         #[cfg(all(feature = "qemu", target_arch = "aarch64"))]
-        "pkg" | "apt" => {
-            Uart10::puts("pkg: package manager\r\n");
-            Uart10::puts("\r\n");
-            Uart10::puts("LobsterOS package manager is compiled and ready.\r\n");
-            Uart10::puts("On real Pi 5 hardware, commands available:\r\n");
-            Uart10::puts("  pkg install <name>    Install a package\r\n");
-            Uart10::puts("  pkg remove <name>     Remove a package\r\n");
-            Uart10::puts("  pkg list              List installed packages\r\n");
-            Uart10::puts("  pkg search <query>    Search for packages\r\n");
-            Uart10::puts("  pkg update             Update package database\r\n");
-            Uart10::puts("  pkg upgrade            Upgrade installed packages\r\n");
-            Uart10::puts("  pkg repo <cmd>         Manage repositories\r\n");
-            Uart10::puts("\r\n");
-            Uart10::puts("In QEMU mode, package installation requires network access.\r\n");
-            Uart10::puts("Network stack: compiled, awaiting GENET hardware.\r\n");
-            0
-        }
+        "pkg" | "apt" => cmd_pkg(args, argc),
         #[cfg(target_arch = "x86_64")]
         "pkg" | "apt" => {
             Uart10::puts("Package manager not available on x86_64.\r\n");
@@ -4612,8 +4596,83 @@ fn cmd_ping(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
     #[cfg(feature = "qemu_raspi5b")]
     {
-        let _ = (args, argc);
-        1
+        // In QEMU mode, use lobster-net HTTP fetch as a connectivity check
+        if argc < 2 {
+            Uart10::puts("Usage: ping [-c count] <host>\r\n");
+            return 1;
+        }
+
+        let mut host: Option<&str> = None;
+        let mut count: u32 = 4;
+        let mut i = 1;
+        while i < argc {
+            match args[i] {
+                "-c" => {
+                    if i + 1 < argc {
+                        if let Some(n) = parse_usize(args[i + 1]) {
+                            count = n as u32;
+                        }
+                        i += 1;
+                    }
+                }
+                _ => {
+                    if host.is_none() && !args[i].starts_with('-') {
+                        host = Some(args[i]);
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        let host = match host {
+            Some(h) => h,
+            None => {
+                crate::println!("ping: no host specified");
+                return 1;
+            }
+        };
+
+        let url = if host.starts_with("http://") || host.starts_with("https://") {
+            alloc::string::String::from(host)
+        } else {
+            alloc::format!("http://{}/", host)
+        };
+
+        crate::println!("PING {} (via lobster-net HTTP fetch)", host);
+
+        let mut transmitted = 0u32;
+        let mut received = 0u32;
+
+        for seq in 0..count {
+            transmitted += 1;
+            match crate::net::fetch_url(&url) {
+                Some((status, body)) => {
+                    received += 1;
+                    crate::println!(
+                        "64 bytes from {}: icmp_seq={} HTTP {} ({} bytes)",
+                        host, seq, status, body.len()
+                    );
+                }
+                None => {
+                    crate::println!("no response from {}: icmp_seq={}", host, seq);
+                }
+            }
+            for _ in 0..5_000_000 {
+                crate::arch::cpu::wfe();
+            }
+        }
+
+        crate::println!("--- {} ping statistics ---", host);
+        let loss_pct = if transmitted > 0 {
+            ((transmitted - received) as f64 / transmitted as f64) * 100.0
+        } else {
+            100.0
+        };
+        crate::println!(
+            "{} packets transmitted, {} received, {:.0}% packet loss",
+            transmitted, received, loss_pct
+        );
+        0
     }
 }
 
@@ -4648,8 +4707,27 @@ fn cmd_host(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
     #[cfg(feature = "qemu_raspi5b")]
     {
-        let _ = (args, argc);
-        1
+        // In QEMU mode, do a simple HTTP connectivity check
+        let hostname = args[1];
+        crate::println!("Host {}:", hostname);
+
+        let url = if hostname.starts_with("http://") || hostname.starts_with("https://") {
+            alloc::string::String::from(hostname)
+        } else {
+            alloc::format!("http://{}/", hostname)
+        };
+
+        match crate::net::fetch_url(&url) {
+            Some((status, body)) => {
+                crate::println!("  {} is reachable (HTTP {}, {} bytes)", hostname, status, body.len());
+                crate::println!("  (resolved via lobster-net MMIO proxy)");
+                0
+            }
+            None => {
+                crate::println!("host: cannot reach {}", hostname);
+                1
+            }
+        }
     }
 }
 
@@ -4664,6 +4742,17 @@ fn cmd_netstat() -> i32 {
     {
         crate::println!("Active Internet connections (w/o servers)");
         crate::println!("Proto Recv-Q Send-Q Local Address     Foreign Address    State");
+        crate::println!("Active UNIX domain sockets (w/o servers)");
+        crate::println!("Proto RefCnt Flags   Type    State    I-Node  Path");
+    }
+
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        crate::println!("Active Internet connections (w/o servers)");
+        crate::println!("Proto Recv-Q Send-Q Local Address     Foreign Address    State");
+        crate::println!("  lobster-net MMIO proxy at 0x7D009000  http://*          ESTABLISHED");
+        crate::println!("  (all HTTP traffic proxied via host curl)");
+        crate::println!();
         crate::println!("Active UNIX domain sockets (w/o servers)");
         crate::println!("Proto RefCnt Flags   Type    State    I-Node  Path");
     }
