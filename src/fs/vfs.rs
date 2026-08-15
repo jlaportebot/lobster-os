@@ -699,6 +699,47 @@ pub fn read_file(path: &str) -> Result<alloc::vec::Vec<u8>, VfsError> {
     Ok(buf)
 }
 
+/// Write data to a VFS file, creating it if it doesn't exist.
+/// Truncates existing content. Bypasses permission checks (kernel use).
+pub fn write_file(path: &str, data: &[u8]) -> Result<usize, VfsError> {
+    if data.len() > MAX_FILE_DATA {
+        return Err(VfsError::OutOfMemory);
+    }
+    let inode_id = match resolve_path(path) {
+        Ok(id) => id,
+        Err(VfsError::NotFound) => {
+            // Create the file
+            let parent_path = parent_dir(path);
+            let parent_id = resolve_path(&parent_path)?;
+            let name = file_name(path);
+            alloc_node(name, FileType::RegularFile, parent_id)?
+        }
+        Err(e) => return Err(e),
+    };
+    let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
+    node.data_len = 0;
+    let written = node.write(0, data)?;
+    node.metadata.size = written as u64;
+    Ok(written)
+}
+
+/// Extract parent directory from a path
+fn parent_dir(path: &str) -> alloc::string::String {
+    match path.rfind('/') {
+        Some(0) => "/".into(),
+        Some(i) => alloc::string::String::from(&path[..i]),
+        None => "/".into(),
+    }
+}
+
+/// Extract file name from a path
+fn file_name(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(i) if i < path.len() - 1 => &path[i + 1..],
+        _ => path,
+    }
+}
+
 /// Create a directory (wrapper with shell-friendly name)
 pub fn create_dir(path: &str) -> Result<u64, VfsError> {
     mkdir(path)

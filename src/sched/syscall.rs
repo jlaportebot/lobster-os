@@ -159,7 +159,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
     match syscall_num {
         SYS_EXIT => {
             let code = args[0] as i64;
-            sys_exit(code);
+            sys_exit(code)
         }
         SYS_WRITE => sys_write(args[0] as i32, args[1], args[2] as usize),
         SYS_READ => sys_read(args[0] as i32, args[1], args[2] as usize),
@@ -353,9 +353,27 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
 // ═══════════════════════════════════════════════
 
 /// sys_exit(code) — terminate the current process
-fn sys_exit(code: i64) -> ! {
+/// In cooperative (QEMU) mode: marks task as zombie and requests cooperative exit
+/// In preemptive mode: marks task as zombie and loops forever
+fn sys_exit(code: i64) -> u64 {
     println!("[syscall] exit({}) from PID {}", code, sched::current_pid());
-    sched::exit_current(code)
+
+    let pid = sched::current_pid();
+    if let Some(idx) = sched::find_task_index(pid) {
+        unsafe {
+            if let Some(ref mut task) = crate::sched::TASK_TABLE[idx] {
+                task.state = crate::sched::TaskState::Zombie;
+                task.exit_code = code;
+                println!("[sched] PID {} exited with code {}", pid, code);
+            }
+        }
+    }
+
+    // Request cooperative exit — the exception handler will set SPSR to EL1h
+    // so eret returns to kernel mode instead of EL0
+    crate::sched::request_cooperative_exit();
+
+    0 // exit doesn't really return, but we return 0 to satisfy the type
 }
 
 /// sys_write(fd, buf_ptr, len) — write to file descriptor

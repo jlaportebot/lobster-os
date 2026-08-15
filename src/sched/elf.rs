@@ -175,26 +175,30 @@ pub fn verify_header(ehdr: &Elf64Ehdr) -> bool {
 }
 
 /// User-space page table entry flags
+/// AP[1]=1 (bit 6) is REQUIRED for EL0 access — without it, only EL1 can access
 const PTE_USER_CODE: u64 = crate::memory::vmem::PTE_VALID
     | crate::memory::vmem::PTE_PAGE
     | crate::memory::vmem::PTE_ACCESS
     | crate::memory::vmem::PTE_NG    // non-Global (process-specific)
     | crate::memory::vmem::PTE_ISH
-    | crate::memory::mmu::MT_NORMAL;
+    | crate::memory::mmu::MT_NORMAL
+    | crate::memory::mmu::PTE_AP_EL0_RW; // EL0 read/write access
 
 const PTE_USER_DATA: u64 = crate::memory::vmem::PTE_VALID
     | crate::memory::vmem::PTE_PAGE
     | crate::memory::vmem::PTE_ACCESS
     | crate::memory::vmem::PTE_NG
     | crate::memory::vmem::PTE_ISH
-    | crate::memory::mmu::MT_NORMAL;
+    | crate::memory::mmu::MT_NORMAL
+    | crate::memory::mmu::PTE_AP_EL0_RW; // EL0 read/write access
 
 const PTE_USER_RO: u64 = crate::memory::vmem::PTE_VALID
     | crate::memory::vmem::PTE_PAGE
     | crate::memory::vmem::PTE_ACCESS
     | crate::memory::vmem::PTE_NG
     | crate::memory::vmem::PTE_ISH
-    | crate::memory::mmu::MT_NORMAL;
+    | crate::memory::mmu::MT_NORMAL
+    | crate::memory::mmu::PTE_AP_EL0_RW; // EL0 read/write access
 
 /// Allocate a user-space page table root
 fn alloc_user_page_table() -> Option<PhysAddr> {
@@ -251,9 +255,60 @@ pub unsafe fn map_user_page(ttbr0_phys: u64, va: u64, pa: u64, flags: u64) {
             let next_phys = entry & !(PAGE_SIZE - 1);
             table = (phys_map + next_phys) as *mut [u64; 512];
         } else {
-            // Block entry at L0/L1/L2 — we can't split for now
-            println!("[elf] Block entry at L{} for VA {:#018x}", level, va);
-            return;
+            // Block entry at L0/L1/L2 — split it into L(n+1) pages
+            // This preserves the existing mapping while allowing finer granularity
+            let block_size = 1u64 << (30 - level * 9); // L0=1GB, L1=2MB, L2=2MB wait...
+            // Actually: L0 table→L1, L1 table→L2, L2 table→L3
+            // Block sizes: L1 block = 1GB, L2 block = 2MB
+            let block_size_shift = 30 - level * 9; // L0→1GB(30), L1→2MB(21), L2→4KB(12)?? No.
+            // For 4KB granule: L0→L1(512GB table), L1→L2(1GB block/table), L2→L3(2MB block/table)
+            // Block sizes: L1 block = 1GB (bits 30..), L2 block = 2MB (bits 21..)
+            let bs = if level == 0 { 1u64 << 30 } else { 1u64 << 21 }; // L0 children are 1GB blocks, L1 children are 2MB blocks
+
+            // Get the physical base and flags from the block entry
+            let block_phys = entry & !0xFFF;
+            let block_flags = entry & 0x3FF;
+
+            // Allocate a new L(n+1) table
+            let next_frame = match frame_alloc::allocate_frame() {
+                Some(f) => f,
+                None => {
+                    println!("[elf] Out of frames for block split!");
+                    return;
+                }
+            };
+            let next_virt = (phys_map + next_frame.0) as *mut u64;
+            // Fill the new table with entries that replicate the block mapping.
+            // CRITICAL: L3 page descriptors need PTE_PAGE (bit 1) = 1,
+            // but block descriptors have bit 1 = 0. Force it on.
+            let child_flags = if level == 2 {
+                block_flags | crate::memory::vmem::PTE_PAGE // L3 needs page descriptor
+            } else {
+                block_flags // L1/L2 children are blocks, keep bit 1 = 0
+            };
+            for i in 0..512 {
+                let child_pa = block_phys + (i as u64) * (bs / 512);
+                core::ptr::write_volatile(next_virt.add(i), child_pa | child_flags);
+            }
+            crate::arch::cpu::dsb();
+
+            // Replace the block entry with a table entry
+            (*table)[idx] =
+                next_frame.0 | crate::memory::vmem::PTE_VALID | crate::memory::vmem::PTE_PAGE;
+            table = (phys_map + next_frame.0) as *mut [u64; 512];
+
+            // CRITICAL: Invalidate TLB for the VA range we just changed.
+            // Without this, stale TLB entries for the old block mapping
+            // cause permission faults on the new page entries.
+            let tlb_va = va & !((1u64 << (30 - level * 9)) - 1);
+            unsafe {
+                core::arch::asm!(
+                    "tlbi vaae1is, {}",
+                    in(reg) tlb_va >> 12,
+                );
+            }
+            crate::arch::cpu::dsb();
+            crate::arch::cpu::isb();
         }
     }
 
@@ -261,6 +316,13 @@ pub unsafe fn map_user_page(ttbr0_phys: u64, va: u64, pa: u64, flags: u64) {
     let idx = ((va >> 12) & 0x1FF) as usize;
     (*table)[idx] = pa | flags;
     crate::arch::cpu::dsb();
+
+    // Invalidate TLB for this VA so the new page entry takes effect
+    unsafe {
+        core::arch::asm!("tlbi vaae1is, {}", in(reg) va >> 12);
+    }
+    crate::arch::cpu::dsb();
+    crate::arch::cpu::isb();
 }
 
 /// Load an ELF binary from a byte slice into a new address space
@@ -288,6 +350,11 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
     // Allocate a user page table
     let ttbr0 = alloc_user_page_table().ok_or("Failed to allocate user page table")?;
     println!("[elf] User TTBR0: {:#010x}", ttbr0.0);
+
+    // Also read the kernel's TTBR0 so we can dual-map user pages
+    let kernel_ttbr0: u64;
+    unsafe { core::arch::asm!("mrs {}, TTBR0_EL1", out(reg) kernel_ttbr0); }
+    println!("[elf] Kernel TTBR0: {:#010x}", kernel_ttbr0);
 
     let mut highest_addr: u64 = 0;
 
@@ -339,6 +406,11 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
             // Map the page in user space
             unsafe {
                 map_user_page(ttbr0.0, va, frame.0, flags);
+                // Also map into kernel TTBR0 so eret into EL0 works.
+                // Clear nG bit for kernel mapping: the kernel runs with ASID 0
+                // and nG=1 entries are ASID-tagged, so they'd be invisible to ASID 0.
+                let kernel_flags = flags & !crate::memory::vmem::PTE_NG;
+                map_user_page(kernel_ttbr0, va, frame.0, kernel_flags);
             }
 
             // Copy data from ELF file into the page
@@ -391,6 +463,9 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
         let frame = frame_alloc::allocate_frame().ok_or("Out of frames for user stack")?;
         unsafe {
             map_user_page(ttbr0.0, va, frame.0, PTE_USER_DATA);
+            // Also map stack into kernel TTBR0 with nG cleared for kernel ASID 0
+            let kernel_flags = PTE_USER_DATA & !crate::memory::vmem::PTE_NG;
+            map_user_page(kernel_ttbr0, va, frame.0, kernel_flags);
         }
     }
     println!(
@@ -465,7 +540,7 @@ pub fn build_hello_elf() -> &'static [u8] {
         // === Code (32 bytes = 8 instructions) ===
         0x28, 0x00, 0x80, 0xD2, // mov x8, #1
         0x20, 0x00, 0x80, 0xD2, // mov x0, #1
-        0xA1, 0x00, 0x00, 0x58, // ldr x1, +8 (PC-relative to msg)
+        0xC1, 0x00, 0x00, 0x10, // adr x1, +24 (address of msg at 0x10000020)
         0x02, 0x02, 0x80, 0xD2, // mov x2, #16
         0x01, 0x00, 0x00, 0xD4, // svc #0
         0x08, 0x00, 0x80, 0xD2, // mov x8, #0
@@ -487,7 +562,7 @@ pub fn build_hello_elf_into(buf: &mut [u8]) -> usize {
     let code: [u32; 8] = [
         0xD2800028, // mov x8, #1       (SYS_WRITE)
         0xD2800020, // mov x0, #1       (stdout fd)
-        0x580000A1, // ldr x1, msg      (PC-relative load)
+        0x100000C1, // adr x1, msg     (PC+24 → address of string at 0x10000020)
         0xD2800202, // mov x2, #16      (length)
         0xD4000001, // svc #0
         0xD2800008, // mov x8, #0       (SYS_EXIT)
@@ -566,4 +641,79 @@ pub fn build_hello_elf_into(buf: &mut [u8]) -> usize {
     buf[load_offset + code_size..total].copy_from_slice(msg);
 
     total
+}
+
+
+/// Mirror user page mappings into the kernel's TTBR0.
+///
+/// Walks the user page table (3 levels: L0→L1→L2) and copies leaf entries
+/// (L2 block or L3 page mappings) into the kernel's TTBR0 at the same VAs.
+/// This allows eret into EL0 to access user code/stack without switching TTBR0.
+pub fn mirror_user_mappings(kernel_ttbr0: u64, user_ttbr0: u64) {
+    crate::drivers::uart::Uart10::puts("[elf] mirror: start\r\n");
+    let phys_map = crate::memory::PHYS_MAP_OFFSET;
+    let pte_user_ro = PTE_USER_RO;
+    let pte_user_code = PTE_USER_CODE;
+    let pte_user_data = PTE_USER_DATA;
+
+    // Walk L0 (512 entries)
+    let l0_user = unsafe { &*((phys_map + user_ttbr0) as *const [u64; 512]) };
+    for i in 0..512 {
+        let l0e = l0_user[i];
+        if l0e & crate::memory::vmem::PTE_VALID == 0 {
+            continue;
+        }
+        // L0 entry points to L1 table
+        let l1_phys = l0e & !0xFFF;
+        let l1_user = unsafe { &*((phys_map + l1_phys) as *const [u64; 512]) };
+        for j in 0..512 {
+            let l1e = l1_user[j];
+            if l1e & crate::memory::vmem::PTE_VALID == 0 {
+                continue;
+            }
+            // Check if L1 is a block (1GB block)
+            if l1e & 0x2 != 0 {
+                // L1 block — copy directly (unlikely for user pages)
+                unsafe {
+                    map_user_page(kernel_ttbr0,
+                        (i as u64) << 39 | (j as u64) << 30,
+                        l1e & !0xFFF,
+                        l1e & 0x3FF);
+                }
+                continue;
+            }
+            // L1 entry points to L2 table
+            let l2_phys = l1e & !0xFFF;
+            let l2_user = unsafe { &*((phys_map + l2_phys) as *const [u64; 512]) };
+            for k in 0..512 {
+                let l2e = l2_user[k];
+                if l2e & crate::memory::vmem::PTE_VALID == 0 {
+                    continue;
+                }
+                let va = (i as u64) << 39 | (j as u64) << 30 | (k as u64) << 21;
+                if l2e & 0x2 != 0 {
+                    // L2 block (2MB) — copy as block
+                    let flags = l2e & 0x3FF;
+                    unsafe {
+                        map_user_page(kernel_ttbr0, va, l2e & !0xFFF, flags);
+                    }
+                } else {
+                    // L2 entry points to L3 table — walk L3
+                    let l3_phys = l2e & !0xFFF;
+                    let l3_user = unsafe { &*((phys_map + l3_phys) as *const [u64; 512]) };
+                    for m in 0..512 {
+                        let l3e = l3_user[m];
+                        if l3e & crate::memory::vmem::PTE_VALID == 0 {
+                            continue;
+                        }
+                        let page_va = va | (m as u64) << 12;
+                        let page_flags = l3e & 0x3FF;
+                        unsafe {
+                            map_user_page(kernel_ttbr0, page_va, l3e & !0xFFF, page_flags);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

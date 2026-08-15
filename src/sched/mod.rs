@@ -275,6 +275,11 @@ pub fn current_pid() -> Pid {
     unsafe { CURRENT_PID }
 }
 
+/// Set the current PID (used by cooperative exit to reset to 0)
+pub fn set_current_pid(pid: Pid) {
+    unsafe { CURRENT_PID = pid; }
+}
+
 /// Get and increment next PID (for fork)
 pub fn get_next_pid() -> Pid {
     unsafe {
@@ -309,24 +314,15 @@ fn alloc_kernel_stack() -> Option<(u64, u64)> {
     Some((sp, base_virt))
 }
 
-/// Allocate a user stack
+/// Allocate a user stack.
+///
+/// The ELF loader already maps a 1 MB user stack at 0x7ef00000..0x7f000000
+/// in the user's page table. We just need to return the top of that range
+/// as the initial stack pointer.
 fn alloc_user_stack() -> Option<(u64, u64)> {
-    let base_phys = frame_alloc::allocate_contiguous(USER_STACK_PAGES)?;
-    // For user stacks, we'll map them into the user's address space later
-    // For now, use direct physical map
-    let base_virt = phys_to_virt(PhysAddr::new(base_phys.0)).0;
-    for i in 0..USER_STACK_PAGES {
-        let offset = (i as u64) * PAGE_SIZE;
-        unsafe {
-            crate::memory::vmem::map_kernel_page(
-                base_virt + offset,
-                base_phys.0 + offset,
-                crate::memory::vmem::PTE_KERNEL_DATA,
-            );
-        }
-    }
-    let sp = base_virt + USER_STACK_SIZE as u64;
-    Some((sp, base_virt))
+    const USER_STACK_TOP: u64 = 0x7f000000;      // exclusive top
+    const USER_STACK_BASE: u64 = 0x7ef00000;      // inclusive base
+    Some((USER_STACK_TOP, USER_STACK_BASE))
 }
 
 /// Initialize the scheduler
@@ -518,6 +514,9 @@ pub fn create_user_process(entry: u64, ttbr0: u64, priority: Priority) -> Option
                 TASK_TABLE[i] = Some(task);
                 // Initialize credentials for this user process
                 crate::security::init_credentials(i, false);
+                // Add to SMP runqueue so pick_next_task can find it
+                let core_id = crate::smp::current_core_id() as usize;
+                crate::smp::runqueue::enqueue_task(core_id, pid);
                 println!(
                     "[sched] User process PID {} created (entry={:#018x}, ttbr0={:#010x})",
                     pid, entry, ttbr0
@@ -636,7 +635,7 @@ pub fn spawn_init() -> Option<Pid> {
 /// Returns the new PID on success, or None on failure.
 pub fn spawn_demo() -> Option<Pid> {
     let elf_data = elf::build_hello_elf();
-    let pid = spawn_user_process(elf_data, Priority::Normal)?;
+    let pid = spawn_user_process(elf_data, Priority::High)?;
 
     println!("[sched] spawn_demo: hello-EL0 → PID {}", pid);
     Some(pid)
@@ -796,31 +795,79 @@ unsafe fn save_current_context(frame: &mut TrapFrame) {
 }
 
 /// Restore execution context from a TrapFrame
-/// Actually loads registers and does eret
+/// Loads all registers from memory and does eret.
+/// Saves ptr to stack first to avoid it being clobbered by ldr.
 pub unsafe fn restore_context(frame: &TrapFrame) {
+    let ptr = frame as *const TrapFrame as *const u8;
+    // Debug: print key values before eret (suppressed to reduce serial spam)
+    // crate::println!(
+    //     "[sched] restore_context: entry={:#018x} sp={:#018x} spsr={:#018x}",
+    //     frame.elr, frame.sp, frame.spsr
+    // );
     asm!(
-        "mov x19, {0}", "mov x20, {1}", "mov x21, {2}", "mov x22, {3}",
-        "mov x23, {4}", "mov x24, {5}", "mov x25, {6}", "mov x26, {7}",
-        "mov x27, {8}", "mov x28, {9}", "mov x29, {10}", "mov x30, {11}",
-        in(reg) frame.x19, in(reg) frame.x20,
-        in(reg) frame.x21, in(reg) frame.x22,
-        in(reg) frame.x23, in(reg) frame.x24,
-        in(reg) frame.x25, in(reg) frame.x26,
-        in(reg) frame.x27, in(reg) frame.x28,
-        in(reg) frame.x29, in(reg) frame.x30,
+        "sub sp, sp, #16",
+        "str {p}, [sp]",
+        // Load x0-x15
+        "ldr x0, [{p}, #0]",
+        "ldr x1, [{p}, #8]",
+        "ldr x2, [{p}, #16]",
+        "ldr x3, [{p}, #24]",
+        "ldr x4, [{p}, #32]",
+        "ldr x5, [{p}, #40]",
+        "ldr x6, [{p}, #48]",
+        "ldr x7, [{p}, #56]",
+        "ldr x8, [{p}, #64]",
+        "ldr x9, [{p}, #72]",
+        "ldr x10, [{p}, #80]",
+        "ldr x11, [{p}, #88]",
+        "ldr x12, [{p}, #96]",
+        "ldr x13, [{p}, #104]",
+        "ldr x14, [{p}, #112]",
+        "ldr x15, [{p}, #120]",
+        // Load x16-x30
+        "ldr x16, [{p}, #128]",
+        "ldr x17, [{p}, #136]",
+        "ldr x18, [{p}, #144]",
+        "ldr x19, [{p}, #152]",
+        "ldr x20, [{p}, #160]",
+        "ldr x21, [{p}, #168]",
+        "ldr x22, [{p}, #176]",
+        "ldr x23, [{p}, #184]",
+        "ldr x24, [{p}, #192]",
+        "ldr x25, [{p}, #200]",
+        "ldr x26, [{p}, #208]",
+        "ldr x27, [{p}, #216]",
+        "ldr x28, [{p}, #224]",
+        "ldr x29, [{p}, #232]",
+        "ldr x30, [{p}, #240]",
+        // Now reload ptr from stack to a scratch reg for SP/ELR/SPSR
+        "ldr x16, [sp]",            // x16 = saved ptr
+        "ldr x17, [x16, #248]",     // sp (user stack)
+        // Workaround: QEMU doesn't implement direct msr SP_EL0 at EL1.
+        // Switch SP bank to SP_EL0, write SP, switch back to SP_EL1.
+        // SPSel controls which SP bank is active.
+        "mov x18, #0",              // x18 = 0 (select SP_EL0)
+        "msr SPSel, x18",           // SP = SP_EL0 bank
+        "mov sp, x17",              // Write user SP to SP_EL0
+        "mov x18, #1",              // x18 = 1 (select SP_EL1)
+        "msr SPSel, x18",           // SP = SP_EL1 bank (restore kernel SP)
+        "ldr x17, [x16, #256]",     // elr
+        "msr ELR_EL1, x17",
+        "ldr x17, [x16, #264]",     // spsr
+        "msr SPSR_EL1, x17",
+        "add sp, sp, #16",
+        "eret",
+        p = in(reg) ptr,
+        options(noreturn),
     );
-    asm!("msr ELR_EL1, {}", in(reg) frame.elr);
-    asm!("msr SPSR_EL1, {}", in(reg) frame.spsr);
-    asm!("mov sp, {}", in(reg) frame.sp);
-    asm!("eret");
 }
 
 /// Switch to a user process address space
 unsafe fn switch_address_space(ttbr0_phys: u64) {
     // Set TTBR0_EL1 to the process's page table root
     asm!("msr TTBR0_EL1, {}", in(reg) ttbr0_phys);
-    asm!("tlbi vmalle1is");
-    crate::arch::cpu::dsb();
+    // Barrier only — no TLB invalidation needed for first context switch
+    // since the kernel uses TTBR1 for its own pages
     crate::arch::cpu::isb();
 }
 
@@ -846,17 +893,28 @@ pub fn on_timer_tick() {
             }
         }
     }
-
-    // Check if time slice expired
+    // Check if time slice expired OR if current PID has no task table entry
+    // (e.g. CURRENT_PID=0 before idle task runs) but ready tasks exist
     let should_switch = unsafe {
         if let Some(idx) = find_task_index(current_pid()) {
+            // Current task exists in table — check timeslice
             if let Some(ref task) = TASK_TABLE[idx] {
                 task.time_slice == 0
             } else {
                 false
             }
         } else {
-            false
+            // Current PID not in task table — switch if any ready task exists
+            let mut found_ready = false;
+            for i in 0..MAX_TASKS {
+                if let Some(ref task) = TASK_TABLE[i] {
+                    if task.state == TaskState::Ready {
+                        found_ready = true;
+                        break;
+                    }
+                }
+            }
+            found_ready
         }
     };
 
@@ -865,6 +923,8 @@ pub fn on_timer_tick() {
 
     if should_switch {
         // Request a context switch (will happen on exception return)
+        // In QEMU cooperative mode, schedule() is never called from IRQ handler,
+        // so this just sets the flag. Don't spam serial with debug output.
         request_schedule();
     }
 }
@@ -974,6 +1034,95 @@ pub fn exit_current(code: i64) -> ! {
     }
 }
 
+/// Set when a user process exits and we want to return to cooperative mode
+/// instead of looping forever in exit_current.
+static mut COOPERATIVE_EXIT_REQUESTED: bool = false;
+
+/// Saved kernel return address — when a user process exits in cooperative mode,
+/// the exception handler sets ELR_EL1 to this and SPSR_EL1 to EL1h so eret
+/// returns to the kernel code that called run_user_process().
+static mut KERNEL_RETURN_ADDR: u64 = 0;
+
+/// Run a user process synchronously in cooperative mode.
+///
+/// This function:
+/// 1. Saves its own return address (so we can come back after the process exits)
+/// 2. Sets CURRENT_PID to the spawned process
+/// 3. Restores the process's trap frame and does eret into EL0
+/// 4. The user process runs, calls syscalls, eventually calls sys_exit
+/// 5. The exception handler sees cooperative_exit_pending, sets SPSR=EL1h
+/// 6. eret returns to the saved kernel return address — this function returns
+///
+/// Returns the exit code of the user process.
+pub fn run_and_wait(pid: Pid) -> i64 {
+    let idx = match find_task_index(pid) {
+        Some(i) => i,
+        None => return -1,
+    };
+
+    // Debug: confirm we got here
+    println!("[sched] run_and_wait: entered for PID {}", pid);
+
+    // Save kernel return address (link register for after eret)
+    let kernel_lr: u64;
+    unsafe {
+        core::arch::asm!("mov {}, lr", out(reg) kernel_lr);
+        KERNEL_RETURN_ADDR = kernel_lr;
+    }
+    println!("[sched] run_and_wait: saved kernel_lr={:#018x}", kernel_lr);
+
+    // Set current PID to the user process
+    unsafe {
+        CURRENT_PID = pid;
+    }
+
+    // Print before entering the if-let block
+    // (debug prints suppressed for cleaner output)
+
+    // Mark as running
+    unsafe {
+        if let Some(ref mut task) = TASK_TABLE[idx] {
+            // (debug prints suppressed)
+            task.state = TaskState::Running;
+            task.time_slice = time_slice_for(task.priority);
+
+            // User pages are dual-mapped into kernel TTBR0 at ELF load time,
+            // so no TTBR0 switch is needed. eret into EL0 will work with the
+            // kernel's page table still active.
+            let frame = task.regs;
+
+            // Restore context — this eret's into EL0 and never returns
+            // When the process exits, the exception handler returns to KERNEL_RETURN_ADDR
+            restore_context(&frame);
+        }
+    }
+
+    // We should never reach here — restore_context does eret (noreturn)
+    // But if we do (e.g. no valid task), return error
+    -1
+}
+
+/// Get the saved kernel return address (called from exception handler)
+pub fn kernel_return_address() -> u64 {
+    unsafe { KERNEL_RETURN_ADDR }
+}
+
+/// Check if a cooperative exit was requested (called from exception return path)
+pub fn cooperative_exit_pending() -> bool {
+    unsafe { COOPERATIVE_EXIT_REQUESTED }
+}
+
+/// Clear the cooperative exit flag
+pub fn clear_cooperative_exit() {
+    unsafe { COOPERATIVE_EXIT_REQUESTED = false; }
+}
+
+/// Mark that we want cooperative exit — the next exception return should
+/// go back to EL1 kernel mode instead of EL0.
+pub fn request_cooperative_exit() {
+    unsafe { COOPERATIVE_EXIT_REQUESTED = true; }
+}
+
 /// Kill a task by PID
 pub fn kill(pid: Pid) -> bool {
     if let Some(idx) = find_task_index(pid) {
@@ -1024,6 +1173,23 @@ pub fn reap_zombies() -> usize {
         }
     }
     reaped
+}
+
+/// Kill the current user process and force return to kernel cooperative mode.
+/// This prevents re-entering EL0 after a fatal exception (kill-loop fix).
+pub fn kill_current_and_exit(code: i64) {
+    let pid = current_pid();
+    if let Some(idx) = find_task_index(pid) {
+        unsafe {
+            if let Some(ref mut task) = TASK_TABLE[idx] {
+                task.state = TaskState::Zombie;
+                task.exit_code = code;
+                println!("[sched] PID {} killed (exit code {})", pid, code);
+            }
+        }
+    }
+    // Request cooperative exit so eret returns to EL1h kernel mode
+    request_cooperative_exit();
 }
 
 /// Print scheduler status

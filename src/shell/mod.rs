@@ -959,6 +959,28 @@ fn run_builtin(
         "ipconfig" => cmd_ifconfig(args, argc),
         // User process execution
         "run" => cmd_run(args, argc),
+        "cc" => cmd_cc(args, argc),
+        // Text editor
+        "vi" | "edit" | "ed" | "nano" => cmd_editor(args, argc),
+        // Text processing
+        "grep" => cmd_grep(args, argc),
+        "sort" => cmd_sort(args, argc),
+        "cut" => cmd_cut(args, argc),
+        "tr" => cmd_tr(args, argc),
+        "uniq" => cmd_uniq(args, argc),
+        "seq" => cmd_seq(args, argc),
+        "yes" => cmd_yes(args, argc),
+        "tee" => cmd_tee(args, argc),
+        // File info
+        "stat" => cmd_stat(args, argc),
+        "file" => cmd_file(args, argc),
+        "ln" => cmd_ln(args, argc),
+        "basename" => cmd_basename(args, argc),
+        "dirname" => cmd_dirname(args, argc),
+        // Misc
+        "sleep" => cmd_sleep(args, argc),
+        "man" => cmd_man(args, argc),
+        "who" => cmd_who(),
         // Service management commands
         "svc" => cmd_svc(args, argc),
         "runlevel" => cmd_runlevel(args, argc),
@@ -1044,7 +1066,22 @@ fn cmd_help() {
     Uart10::puts("  which <cmd>     Locate a command\r\n");
     Uart10::puts("  uname           Show system information\r\n");
     Uart10::puts("  date            Show system time/uptime\r\n");
-    Uart10::puts("  run <path|demo> Run ELF binary as user process\r\n");
+    Uart10::puts(" run <path|demo> Run ELF binary as user process\r\n");
+    Uart10::puts(" cc <file.c>     Compile C source to ELF (via lobster-net)\r\n");
+    Uart10::puts(" vi <file>       Simple text editor (line-based)\r\n");
+    Uart10::puts(" grep <pat> <file> Search for pattern in file\r\n");
+    Uart10::puts(" sort <file>     Sort lines of file\r\n");
+    Uart10::puts(" cut <field> <file> Extract fields from lines\r\n");
+    Uart10::puts(" tr <set1> <set2> Translate characters\r\n");
+    Uart10::puts(" seq <n>         Print number sequence\r\n");
+    Uart10::puts(" stat <path>     Show file stats\r\n");
+    Uart10::puts(" file <path>     Show file type\r\n");
+    Uart10::puts(" ln <src> <dst>  Create hard link\r\n");
+    Uart10::puts(" sleep <sec>     Sleep for N seconds\r\n");
+    Uart10::puts(" man <cmd>       Show manual for command\r\n");
+    Uart10::puts(" who             Show logged-in users\r\n");
+    Uart10::puts(" basename <path> Strip directory from path\r\n");
+    Uart10::puts(" dirname <path>  Strip filename from path\r\n");
     Uart10::puts(" svc <list|start|stop|restart|reset|deps> Service mgmt\r\n");
     Uart10::puts(" runlevel [get|set <N>] Show/set runlevel\r\n");
     Uart10::puts(
@@ -3542,6 +3579,8 @@ fn cmd_run(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         match crate::sched::spawn_demo() {
             Some(pid) => {
                 crate::println!("run: hello-EL0 demo spawned as PID {}", pid);
+                let exit_code = crate::sched::run_and_wait(pid);
+                crate::println!("run: process exited with code {}", exit_code);
                 0
             }
             None => {
@@ -3554,6 +3593,8 @@ fn cmd_run(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         match crate::sched::spawn_from_path(&path, priority) {
             Some(pid) => {
                 crate::println!("run: {} spawned as PID {}", path, pid);
+                let exit_code = crate::sched::run_and_wait(pid);
+                crate::println!("run: process exited with code {}", exit_code);
                 0
             }
             None => {
@@ -4068,6 +4109,9 @@ fn cmd_which(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         "cat", "ls", "cd", "pwd", "mkdir", "rm", "mv", "chmod", "chown",
         "touch", "cp", "head", "tail", "wc", "du", "df", "free", "which",
         "uname", "date", "find", "run", "svc", "runlevel", "reboot", "halt",
+        "cc", "curl", "wget", "pkg", "vi", "edit", "ed", "nano",
+        "grep", "sort", "cut", "tr", "uniq", "seq", "yes", "tee",
+        "stat", "file", "ln", "basename", "dirname", "sleep", "man", "who",
     ];
     if builtin.contains(&args[1]) {
         crate::println!("{}: shell built-in command", args[1]);
@@ -4283,12 +4327,12 @@ fn cmd_curl(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     });
 
     #[cfg(feature = "qemu_raspi5b")]
-    let body_opt = crate::drivers::lobster_net::http_fetch_string(url).map(|body| {
+    let body_opt = crate::drivers::lobster_net::http_fetch(url).map(|body| {
         let len = body.len();
         if !silent {
             crate::println!("curl: HTTP 200 ({} bytes)", len);
         }
-        (200, body.into_bytes())
+        (200, body)
     });
 
     match body_opt {
@@ -4399,9 +4443,7 @@ fn cmd_wget(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     });
 
     #[cfg(feature = "qemu_raspi5b")]
-    let body_opt = crate::drivers::lobster_net::http_fetch_string(url).map(|body| {
-        (200, body.into_bytes())
-    });
+    let body_opt = crate::drivers::lobster_net::http_fetch(url).map(|body| (200, body));
 
     match body_opt {
         Some((status_code, body)) => {
@@ -4758,3 +4800,690 @@ fn cmd_netstat() -> i32 {
     }
     0
 }
+
+
+// ============================================================
+// NEW COMMANDS — Text Editor, Text Processing, File Utils
+// ============================================================
+
+/// Text editor (vi/ed/edit/nano) — simple line-based editor
+/// Usage: vi <file>    — opens file for editing
+/// In editor mode, each line typed is appended to the buffer.
+/// Commands: . = save & quit, :w = save, :q = quit, :wq = save & quit
+///           :l = list contents, :d <N> = delete line N, :i <N> = insert before line N
+fn cmd_editor(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: vi <file>\r\n");
+        Uart10::puts("  Line-based editor. Commands:\r\n");
+        Uart10::puts("    .         Save and quit\r\n");
+        Uart10::puts("    :w        Save\r\n");
+        Uart10::puts("    :q        Quit without save\r\n");
+        Uart10::puts("    :wq       Save and quit\r\n");
+        Uart10::puts("    :l        List all lines\r\n");
+        Uart10::puts("    :d <N>    Delete line N\r\n");
+        Uart10::puts("    :i <N>    Insert before line N (end with .)\r\n");
+        Uart10::puts("    <text>    Append line to buffer\r\n");
+        return 1;
+    }
+
+    let path = resolve_path(args[1]);
+
+    // Load existing content
+    let mut buffer: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+    match crate::fs::vfs::read_file(&path) {
+        Ok(data) => {
+            buffer = data;
+            if !buffer.is_empty() {
+                Uart10::puts(&alloc::format!("Editing {} ({} bytes)\r\n", path, buffer.len()));
+                // Show existing lines
+                let content = core::str::from_utf8(&buffer).unwrap_or("");
+                for (i, line) in content.lines().enumerate() {
+                    crate::println!("  {:>3}  {}", i + 1, line);
+                }
+            } else {
+                Uart10::puts(&alloc::format!("New file: {}\r\n", path));
+            }
+        }
+        Err(_) => {
+            Uart10::puts(&alloc::format!("New file: {}\r\n", path));
+        }
+    }
+
+    Uart10::puts("Editor mode. Type lines to append. '.' to save & quit, ':q' to quit.\r\n");
+    Uart10::puts("> ");
+
+    loop {
+        let mut line_buf = [0u8; 512];
+        let len = crate::drivers::serial_input::read_line_blocking(&mut line_buf);
+        let line = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+
+        match line.trim() {
+            "." | ":wq" => {
+                // Save and quit
+                match crate::fs::vfs::write_file(&path, &buffer) {
+                    Ok(n) => crate::println!("Saved {} bytes to {}", n, path),
+                    Err(e) => crate::println!("Error saving: {:?}", e),
+                }
+                Uart10::puts("\r\n");
+                return 0;
+            }
+            ":w" => {
+                match crate::fs::vfs::write_file(&path, &buffer) {
+                    Ok(n) => crate::println!("Saved {} bytes to {}", n, path),
+                    Err(e) => crate::println!("Error saving: {:?}", e),
+                }
+            }
+            ":q" => {
+                Uart10::puts("\r\n");
+                return 0;
+            }
+            ":l" => {
+                let content = core::str::from_utf8(&buffer).unwrap_or("");
+                for (i, l) in content.lines().enumerate() {
+                    crate::println!("  {:>3}  {}", i + 1, l);
+                }
+            }
+            s if s.starts_with(":d ") => {
+                if let Ok(n) = s[3..].trim().parse::<usize>() {
+                    let content = core::str::from_utf8(&buffer).unwrap_or("");
+                    let lines: alloc::vec::Vec<&str> = content.lines().collect();
+                    if n > 0 && n <= lines.len() {
+                        let mut new_buf = alloc::vec::Vec::new();
+                        for (i, l) in lines.iter().enumerate() {
+                            if i + 1 != n {
+                                new_buf.extend_from_slice(l.as_bytes());
+                                new_buf.push(b'\n');
+                            }
+                        }
+                        buffer = new_buf;
+                        crate::println!("Deleted line {}", n);
+                    } else {
+                        Uart10::puts("Invalid line number\r\n");
+                    }
+                }
+            }
+            s if s.starts_with(":i ") => {
+                if let Ok(n) = s[3..].trim().parse::<usize>() {
+                    // Read lines to insert
+                    Uart10::puts("Inserting (end with .):\r\n");
+                    let mut insert_lines: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
+                    loop {
+                        Uart10::puts(">> ");
+                        let mut ibuf = [0u8; 512];
+                        let ilen = crate::drivers::serial_input::read_line_blocking(&mut ibuf);
+                        let iline = core::str::from_utf8(&ibuf[..ilen]).unwrap_or("");
+                        if iline.trim() == "." {
+                            break;
+                        }
+                        insert_lines.push(alloc::string::String::from(iline));
+                    }
+                    // Rebuild buffer with inserted lines
+                    let content = core::str::from_utf8(&buffer).unwrap_or("");
+                    let lines: alloc::vec::Vec<&str> = content.lines().collect();
+                    let mut new_buf = alloc::vec::Vec::new();
+                    for (i, l) in lines.iter().enumerate() {
+                        if i + 1 == n {
+                            for il in &insert_lines {
+                                new_buf.extend_from_slice(il.as_bytes());
+                                new_buf.push(b'\n');
+                            }
+                        }
+                        new_buf.extend_from_slice(l.as_bytes());
+                        new_buf.push(b'\n');
+                    }
+                    if n > lines.len() {
+                        for il in &insert_lines {
+                            new_buf.extend_from_slice(il.as_bytes());
+                            new_buf.push(b'\n');
+                        }
+                    }
+                    buffer = new_buf;
+                    crate::println!("Inserted {} lines at {}", insert_lines.len(), n);
+                }
+            }
+            _ => {
+                // Append line to buffer
+                buffer.extend_from_slice(line.as_bytes());
+                buffer.push(b'\n');
+            }
+        }
+        Uart10::puts("> ");
+    }
+}
+
+/// cc — Compile C source to ELF using lobster-net compile proxy
+/// Usage: cc <file.c> [-o output] [-run]
+fn cmd_cc(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: cc <file.c> [-o output] [-run]\r\n");
+        Uart10::puts("  Compiles C source via lobster-net MMIO compile proxy.\r\n");
+        Uart10::puts("  -o <path>  Output path (default: /bin/<name without .c>)\r\n");
+        Uart10::puts("  -run       Run after compiling\r\n");
+        Uart10::puts("\r\nExample: cc hello.c -run\r\n");
+        return 1;
+    }
+
+    let mut source_path: Option<&str> = None;
+    let mut output_path: Option<&str> = None;
+    let mut run_after = false;
+
+    let mut i = 1;
+    while i < argc {
+        match args[i] {
+            "-o" if i + 1 < argc => {
+                output_path = Some(args[i + 1]);
+                i += 1;
+            }
+            "-run" => run_after = true,
+            s if !s.starts_with('-') => {
+                if source_path.is_none() {
+                    source_path = Some(s);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let source_path = match source_path {
+        Some(p) => p,
+        None => {
+            crate::println!("cc: no source file specified");
+            return 1;
+        }
+    };
+
+    let full_source = resolve_path(source_path);
+
+    // Read source file from VFS
+    let source_data = match crate::fs::vfs::read_file(&full_source) {
+        Ok(data) => data,
+        Err(e) => {
+            crate::println!("cc: cannot read {}: {:?}", full_source, e);
+            return 1;
+        }
+    };
+
+    if source_data.is_empty() {
+        crate::println!("cc: {} is empty", full_source);
+        return 1;
+    }
+
+    crate::println!("cc: compiling {} ({} bytes)...", full_source, source_data.len());
+
+    // Determine output path
+    let default_output = {
+        let name = source_path.rsplit('/').next().unwrap_or(source_path);
+        let stem = name.strip_suffix(".c").unwrap_or(name);
+        alloc::string::String::from("/bin/") + stem
+    };
+    let output = output_path
+        .map(|p| resolve_path(p))
+        .unwrap_or(default_output);
+
+    // Compile via lobster-net device
+    let source_str = match core::str::from_utf8(&source_data) {
+        Ok(s) => s,
+        Err(_) => {
+            crate::println!("cc: source file is not valid UTF-8");
+            return 1;
+        }
+    };
+
+    match crate::drivers::lobster_net::compile(source_str) {
+        Some(elf) => {
+            crate::println!("cc: compiled OK ({} bytes ELF)", elf.len());
+
+            // Ensure /bin directory exists
+            let _ = crate::fs::vfs::create_dir("/bin");
+
+            match crate::fs::vfs::write_file(&output, &elf) {
+                Ok(n) => crate::println!("cc: saved {} bytes to {}", n, output),
+                Err(e) => {
+                    crate::println!("cc: failed to write {}: {:?}", output, e);
+                    return 1;
+                }
+            }
+
+            if run_after {
+                crate::println!("cc: running {}...", output);
+                match crate::sched::spawn_from_path(&output, crate::sched::Priority::Normal) {
+                    Some(pid) => {
+                        crate::println!("cc: spawned PID {}", pid);
+                        let exit_code = crate::sched::run_and_wait(pid);
+                        crate::println!("cc: process exited with code {}", exit_code);
+                    }
+                    None => crate::println!("cc: failed to spawn process"),
+                }
+            }
+            0
+        }
+        None => {
+            crate::println!("cc: compilation failed (no response from compile proxy)");
+            crate::println!("cc: ensure compile_server.py or lobster-net CMD=3 is available");
+            1
+        }
+    }
+}
+
+/// grep — search for pattern in file
+fn cmd_grep(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 3 {
+        Uart10::puts("Usage: grep <pattern> <file>\r\n");
+        return 1;
+    }
+    let pattern = args[1];
+    let path = resolve_path(args[2]);
+
+    let data = match crate::fs::vfs::read_file(&path) {
+        Ok(d) => d,
+        Err(e) => {
+            crate::println!("grep: {}: {:?}", path, e);
+            return 1;
+        }
+    };
+
+    let content = core::str::from_utf8(&data).unwrap_or("");
+    let mut count = 0;
+    for (i, line) in content.lines().enumerate() {
+        if line.contains(pattern) {
+            crate::println!("{}: {}", i + 1, line);
+            count += 1;
+        }
+    }
+
+    if count == 0 {
+        crate::println!("grep: no matches");
+    }
+    0
+}
+
+/// sort — sort lines of a file
+fn cmd_sort(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: sort <file>\r\n");
+        return 1;
+    }
+    let path = resolve_path(args[1]);
+
+    let data = match crate::fs::vfs::read_file(&path) {
+        Ok(d) => d,
+        Err(e) => {
+            crate::println!("sort: {}: {:?}", path, e);
+            return 1;
+        }
+    };
+
+    let content = core::str::from_utf8(&data).unwrap_or("");
+    let mut lines: alloc::vec::Vec<&str> = content.lines().collect();
+    lines.sort();
+    for line in &lines {
+        crate::println!("{}", line);
+    }
+    0
+}
+
+/// cut — extract fields from lines (delim default: space, field default: 1)
+fn cmd_cut(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: cut [-d <delim>] [-f <N>] <file>\r\n");
+        return 1;
+    }
+
+    let mut delim = ' ';
+    let mut field = 1usize;
+    let mut file_path: Option<&str> = None;
+
+    let mut i = 1;
+    while i < argc {
+        match args[i] {
+            "-d" if i + 1 < argc => {
+                let d = args[i + 1];
+                if !d.is_empty() {
+                    delim = d.chars().next().unwrap();
+                }
+                i += 1;
+            }
+            "-f" if i + 1 < argc => {
+                field = args[i + 1].parse().unwrap_or(1);
+                i += 1;
+            }
+            s if !s.starts_with('-') => {
+                file_path = Some(s);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let path = match file_path {
+        Some(p) => resolve_path(p),
+        None => {
+            Uart10::puts("cut: no file specified\r\n");
+            return 1;
+        }
+    };
+
+    let data = match crate::fs::vfs::read_file(&path) {
+        Ok(d) => d,
+        Err(e) => {
+            crate::println!("cut: {}: {:?}", path, e);
+            return 1;
+        }
+    };
+
+    let content = core::str::from_utf8(&data).unwrap_or("");
+    for line in content.lines() {
+        let parts: alloc::vec::Vec<&str> = line.split(delim).collect();
+        if field > 0 && field <= parts.len() {
+            crate::println!("{}", parts[field - 1]);
+        }
+    }
+    0
+}
+
+/// tr — translate characters (simplified: maps set1 to set2 char-by-char)
+fn cmd_tr(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 3 {
+        Uart10::puts("Usage: tr <set1> <set2> <file>\r\n");
+        Uart10::puts("  Replaces each char in set1 with corresponding char in set2\r\n");
+        return 1;
+    }
+    let set1 = args[1];
+    let set2 = args[2];
+    let path = resolve_path(args[3]);
+
+    let data = match crate::fs::vfs::read_file(&path) {
+        Ok(d) => d,
+        Err(e) => {
+            crate::println!("tr: {}: {:?}", path, e);
+            return 1;
+        }
+    };
+
+    let content = core::str::from_utf8(&data).unwrap_or("");
+    let s1: alloc::vec::Vec<char> = set1.chars().collect();
+    let s2: alloc::vec::Vec<char> = set2.chars().collect();
+    let result: alloc::string::String = content.chars().map(|c| {
+        for (i, &sc) in s1.iter().enumerate() {
+            if c == sc && i < s2.len() {
+                return s2[i];
+            }
+        }
+        c
+    }).collect();
+    crate::println!("{}", result);
+    0
+}
+
+/// uniq — filter adjacent matching lines (keep only first of each run)
+fn cmd_uniq(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: uniq <file>\r\n");
+        return 1;
+    }
+    let path = resolve_path(args[1]);
+
+    let data = match crate::fs::vfs::read_file(&path) {
+        Ok(d) => d,
+        Err(e) => {
+            crate::println!("uniq: {}: {:?}", path, e);
+            return 1;
+        }
+    };
+
+    let content = core::str::from_utf8(&data).unwrap_or("");
+    let mut prev: Option<&str> = None;
+    let mut count = 0;
+    for line in content.lines() {
+        if Some(line) != prev {
+            crate::println!("{}", line);
+            count += 1;
+        }
+        prev = Some(line);
+    }
+    crate::println!("({} unique lines)", count);
+    0
+}
+
+/// seq — print a sequence of numbers
+fn cmd_seq(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    let (start, end) = match argc {
+        2 => (1, args[1].parse::<i64>().unwrap_or(0)),
+        3 => {
+            let s = args[1].parse::<i64>().unwrap_or(0);
+            let e = args[2].parse::<i64>().unwrap_or(0);
+            (s, e)
+        }
+        _ => {
+            Uart10::puts("Usage: seq <n>  or  seq <start> <end>\r\n");
+            return 1;
+        }
+    };
+
+    if start <= end {
+        for n in start..=end {
+            crate::println!("{}", n);
+        }
+    } else {
+        for n in (end..=start).rev() {
+            crate::println!("{}", n);
+        }
+    }
+    0
+}
+
+/// yes — repeat a string forever (or until interrupted)
+fn cmd_yes(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    let text = if argc >= 2 { args[1] } else { "y" };
+    for _ in 0..100 {
+        crate::println!("{}", text);
+    }
+    Uart10::puts("(yes: stopped at 100 lines for safety)\r\n");
+    0
+}
+
+/// tee — read from stdin (not implemented, just copy file to stdout + write to file)
+fn cmd_tee(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: tee <file>\r\n");
+        return 1;
+    }
+    let path = resolve_path(args[1]);
+    let mut buf = [0u8; 512];
+    let len = crate::drivers::serial_input::read_line_blocking(&mut buf);
+    let text = core::str::from_utf8(&buf[..len]).unwrap_or("");
+    crate::println!("{}", text);
+    let _ = crate::fs::vfs::write_file(&path, text.as_bytes());
+    crate::println!("tee: wrote {} bytes to {}", len, path);
+    0
+}
+
+/// stat — show file statistics
+fn cmd_stat(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: stat <path>\r\n");
+        return 1;
+    }
+    let path = resolve_path(args[1]);
+    match crate::fs::vfs::stat(&path) {
+        Some(meta) => {
+            crate::println!("  File: {}", path);
+            let type_str = match meta.file_type {
+                crate::fs::vfs::FileType::RegularFile => "regular file",
+                crate::fs::vfs::FileType::Directory => "directory",
+                crate::fs::vfs::FileType::Symlink => "symlink",
+                crate::fs::vfs::FileType::Device => "device",
+            };
+            crate::println!("  Type: {}", type_str);
+            crate::println!("  Size: {} bytes", meta.size);
+            crate::println!("  Inode: {}", meta.inode_id);
+            crate::println!("  Perm: {:#o}", meta.permissions);
+            crate::println!("  UID: {}  GID: {}", meta.uid, meta.gid);
+            0
+        }
+        None => {
+            crate::println!("stat: {}: not found", path);
+            1
+        }
+    }
+}
+
+/// file — show file type
+fn cmd_file(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: file <path>\r\n");
+        return 1;
+    }
+    let path = resolve_path(args[1]);
+
+    match crate::fs::vfs::read_file(&path) {
+        Ok(data) => {
+            // Check magic bytes
+            let ftype = if data.len() >= 4 {
+                let magic = &data[..4];
+                if magic == b"\x7fELF" {
+                    "ELF executable (AArch64)"
+                } else if &data[..2] == b"#!" {
+                    "script"
+                } else if data.starts_with(b"<") {
+                    "XML/HTML"
+                } else if data.starts_with(b"{") || data.starts_with(b"[") {
+                    "JSON"
+                } else if data.iter().all(|&b| b.is_ascii() || b == b'\n' || b == b'\r' || b == b'\t') {
+                    "ASCII text"
+                } else {
+                    "binary data"
+                }
+            } else if data.is_empty() {
+                "empty"
+            } else {
+                "ASCII text"
+            };
+            crate::println!("{}: {} ({} bytes)", path, ftype, data.len());
+        }
+        Err(_) => {
+            // Check if it's a directory
+            match crate::fs::vfs::list_dir(&path) {
+                Ok(_) => crate::println!("{}: directory", path),
+                Err(_) => crate::println!("{}: not found", path),
+            }
+        }
+    }
+    0
+}
+
+/// ln — create a link (simplified: copies file to new name)
+fn cmd_ln(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 3 {
+        Uart10::puts("Usage: ln <source> <target>\r\n");
+        return 1;
+    }
+    let src = resolve_path(args[1]);
+    let dst = resolve_path(args[2]);
+
+    match crate::fs::vfs::read_file(&src) {
+        Ok(data) => {
+            match crate::fs::vfs::write_file(&dst, &data) {
+                Ok(n) => crate::println!("ln: linked {} -> {} ({} bytes)", src, dst, n),
+                Err(e) => crate::println!("ln: {:?}", e),
+            }
+            0
+        }
+        Err(e) => {
+            crate::println!("ln: {}: {:?}", src, e);
+            1
+        }
+    }
+}
+
+/// basename — strip directory and suffix from path
+fn cmd_basename(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: basename <path> [suffix]\r\n");
+        return 1;
+    }
+    let path = args[1];
+    let suffix = if argc >= 3 { Some(args[2]) } else { None };
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let result = match suffix {
+        Some(s) => name.strip_suffix(s).unwrap_or(name),
+        None => name,
+    };
+    crate::println!("{}", result);
+    0
+}
+
+/// dirname — strip filename from path, leaving directory
+fn cmd_dirname(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: dirname <path>\r\n");
+        return 1;
+    }
+    let path = args[1];
+    match path.rfind('/') {
+        Some(0) => crate::println!("/"),
+        Some(i) => crate::println!("{}", &path[..i]),
+        None => crate::println!("."),
+    }
+    0
+}
+
+/// sleep — sleep for N seconds (using WFE)
+fn cmd_sleep(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: sleep <seconds>\r\n");
+        return 1;
+    }
+    let secs = args[1].parse::<u64>().unwrap_or(0);
+    for _ in 0..secs {
+        for _ in 0..1_000_000 {
+            crate::arch::cpu::wfe();
+        }
+    }
+    crate::println!("slept {} seconds", secs);
+    0
+}
+
+/// man — show manual page for a command
+fn cmd_man(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 {
+        Uart10::puts("Usage: man <command>\r\n");
+        return 1;
+    }
+    let cmd = args[1];
+    let docs = [
+        ("vi", "vi <file> — Line-based text editor.\nCommands: . save&quit, :w save, :q quit, :l list, :d<N> delete, :i<N> insert"),
+        ("cc", "cc <file.c> [-o out] [-run] — Compile C source via lobster-net.\nThe C source is sent to the host compiler (aarch64-linux-gnu-gcc) and the resulting ELF is loaded into VFS."),
+        ("curl", "curl [-o file] [-s] <url> — HTTP GET via lobster-net MMIO.\nThe request is proxied to the host's curl binary by the QEMU device."),
+        ("run", "run <path|demo> — Load ELF from VFS and execute as EL0 user process."),
+        ("grep", "grep <pattern> <file> — Search for pattern in file (substring match)."),
+        ("pkg", "pkg <install|remove|list> — Package manager (uses lobster-net fetch)."),
+        ("ls", "ls [-l|-a] [path] — List directory contents."),
+        ("cat", "cat <file> — Display file contents."),
+        ("rm", "rm <path> — Remove file or directory (recursive)."),
+        ("cp", "cp <src> <dst> — Copy file in VFS."),
+        ("echo", "echo <text> — Print text to console."),
+        ("ps", "ps — List running processes (tasks)."),
+        ("help", "help — Show all available commands."),
+    ];
+
+    for (name, doc) in &docs {
+        if *name == cmd {
+            crate::println!("{}\n{}", name.to_uppercase() , doc);
+            return 0;
+        }
+    }
+    crate::println!("man: no manual for {}", cmd);
+    1
+}
+
+/// who — show logged-in users
+fn cmd_who() -> i32 {
+    let pid = crate::sched::current_pid();
+    crate::println!("USER      TTY      PID     LOGIN@");
+    crate::println!("root      tty1     1       (boot)");
+    crate::println!("(current PID: {})", pid);
+    0
+}
+

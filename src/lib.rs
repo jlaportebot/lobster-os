@@ -570,6 +570,26 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::println!("[fs] VFS initialized");
     crate::display::splash::update_progress(2, "Filesystem ready");
 
+    // 8a. Embed prebuilt user programs into VFS
+    // This makes `run /bin/hello` work out-of-the-box for testing EL0 execution
+    {
+        // Create /bin directory
+        let _ = crate::fs::vfs::create_dir("/bin");
+        // Embed the cross-compiled C hello program
+        let hello_elf = include_bytes!("../tools/hello_lobster.bin");
+        match crate::fs::vfs::write_file("/bin/hello", hello_elf) {
+            Ok(n) => crate::println!("[fs] Embedded /bin/hello ({} bytes)", n),
+            Err(e) => crate::println!("[fs] Failed to embed /bin/hello: {:?}", e),
+        }
+
+        // Embed a C source file for testing in-emulator compilation
+        let hello_c = include_str!("../tools/hello_cc.c");
+        match crate::fs::vfs::write_file("/bin/hello.c", hello_c.as_bytes()) {
+            Ok(n) => crate::println!("[fs] Embedded /bin/hello.c ({} bytes)", n),
+            Err(e) => crate::println!("[fs] Failed to embed /bin/hello.c: {:?}", e),
+        }
+    }
+
     // 8b. Initialize user database (create default users if missing)
     crate::println!("[users] Initializing user database...");
     crate::users::init();
@@ -856,6 +876,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
                 // Also drive SMP per-core timer accounting
                 let core_id = crate::smp::current_core_id() as usize;
                 crate::smp::runqueue::on_core_timer_tick(core_id);
+                // In cooperative mode, just request a schedule.
+                // The actual context switch happens in the timer IRQ handler
+                // or after a syscall returns. Do NOT call schedule() here
+                // — it does eret (noreturn) and never returns to this loop.
+                crate::sched::request_schedule();
             }
         }
 

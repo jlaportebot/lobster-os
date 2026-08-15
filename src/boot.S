@@ -393,8 +393,10 @@ exception_vector_table:
 // ============================================================
 
 // Save all general-purpose registers, call Rust handler, restore
+// Frame layout: x0-x30 (31 × 8 = 248 bytes) + SP_EL0 (8 bytes) + 8 padding = 264
+// But we allocate 272 for 16-byte alignment. SP_EL0 is at offset 248.
 .macro SAVE_CONTEXT
-    sub     sp, sp, #272        // 31 × 8 bytes (x0-x30) + 8 padding
+    sub     sp, sp, #272        // 31 × 8 bytes (x0-x30) + 8 (SP_EL0) + 8 padding
     stp     x0, x1, [sp, #0]
     stp     x2, x3, [sp, #16]
     stp     x4, x5, [sp, #32]
@@ -412,6 +414,10 @@ exception_vector_table:
     stp     x28, x29, [sp, #224]
     str     x30, [sp, #240]
 
+    // Save SP_EL0 (user stack pointer) at offset 248
+    mrs     x0, SP_EL0
+    str     x0, [sp, #248]
+
     // Save special registers
     mrs     x0, SPSR_EL1
     mrs     x1, ELR_EL1
@@ -424,9 +430,12 @@ exception_vector_table:
 .endm
 
 .macro RESTORE_CONTEXT
-    // Restore special registers
-    ldr     x0, [sp, #248]      // We'll store ESR/FAR info separately
-    ldp     x0, x1, [sp, #0]    // Actually just restore GPRs
+    // Restore SP_EL0 (user stack pointer) from offset 248
+    ldr     x0, [sp, #248]
+    msr     SP_EL0, x0
+
+    // Restore GPRs
+    ldp     x0, x1, [sp, #0]
     ldp     x2, x3, [sp, #16]
     ldp     x4, x5, [sp, #32]
     ldp     x6, x7, [sp, #48]

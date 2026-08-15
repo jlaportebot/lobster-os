@@ -1,0 +1,20 @@
+{
+  "bootstrap": [],
+  "build": [
+    "make FEATURES=qemu_raspi5b"
+  ],
+  "evidence": [
+    "no_std bare-metal kernel for Raspberry Pi 5",
+    "Build target: aarch64-unknown-none with qemu_raspi5b feature",
+    "Runtime: QEMU raspi5b emulator with serial stdio",
+    "Verification: build + cargo check + QEMU PTY boot test"
+  ],
+  "kind": "rust-nostd",
+  "name": "LobsterOS kernel (QEMU raspi5b)",
+  "port": null,
+  "readinessPath": null,
+  "start": null,
+  "test": [
+    "cargo check --target aarch64-unknown-none --features qemu_raspi5b"
+  ]
+}

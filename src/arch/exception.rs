@@ -12,11 +12,13 @@ use crate::println;
 use crate::sched;
 
 /// ESR_EL1.EC values (Exception Class)
-const EC_SVC64: u32 = 0b111101; // SVC instruction from AArch64
-const EC_DATA_ABORT: u32 = 0b100101;
-const EC_INSN_ABORT: u32 = 0b100000;
-const EC_PC_ALIGN: u32 = 0b100001;
-const EC_SP_ALIGN: u32 = 0b100010;
+const EC_SVC64: u32 = 0b010101; // SVC instruction from AArch64 (EL0 or EL1)
+const EC_DATA_ABORT_LOW: u32 = 0b100100; // Data Abort from lower EL
+const EC_DATA_ABORT_CUR: u32 = 0b100101; // Data Abort from current EL
+const EC_INSN_ABORT_LOW: u32 = 0b100000; // Instruction Abort from lower EL
+const EC_INSN_ABORT_CUR: u32 = 0b100001; // Instruction Abort from current EL
+const EC_PC_ALIGN: u32 = 0b100010; // PC Alignment fault
+const EC_SP_ALIGN: u32 = 0b100110; // SP Alignment fault
 #[allow(dead_code)]
 const EC_TRAP_FP: u32 = 0b111000;
 
@@ -40,7 +42,7 @@ pub unsafe extern "C" fn handle_sync_exception(
                 svc_num
             );
         }
-        EC_DATA_ABORT => {
+        EC_DATA_ABORT_CUR => {
             let wnr = (iss >> 6) & 1; // Write not Read
             let access_type = if wnr != 0 { "write" } else { "read" };
             println!(
@@ -55,7 +57,7 @@ pub unsafe extern "C" fn handle_sync_exception(
                 crate::arch::cpu::wfe();
             }
         }
-        EC_INSN_ABORT => {
+        EC_INSN_ABORT_CUR => {
             println!(
                 "[exception] Instruction Abort at ELR={:#018x} FAR={:#018x}",
                 elr, far
@@ -148,41 +150,37 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
                 crate::sched::syscall::set_current_trap_frame(core::ptr::null_mut());
             }
         }
-        EC_DATA_ABORT => {
+        EC_DATA_ABORT_LOW => {
             let wnr = (iss >> 6) & 1;
             let access_type = if wnr != 0 { "write" } else { "read" };
             println!(
                 "[exception] EL0 Data Abort ({}) at ELR={:#018x} FAR={:#018x}",
                 access_type, elr, far
             );
-            println!(
-                "[exception] ESR={:#018x} (EC={}, ISS={:#010x})",
-                esr, ec, iss
-            );
             // Route to page fault handler
             let is_write = wnr != 0;
             if !crate::sched::process::handle_page_fault(far, is_write) {
-                // Could not handle - kill the process
+                // Could not handle - kill the process and return to kernel
                 println!(
                     "[exception] Unhandled page fault, killing PID {}",
                     sched::current_pid()
                 );
-                sched::kill(sched::current_pid());
+                sched::kill_current_and_exit(-1);
             }
         }
-        EC_INSN_ABORT => {
+        EC_INSN_ABORT_LOW => {
             println!(
                 "[exception] EL0 Instruction Abort at ELR={:#018x} FAR={:#018x}",
                 elr, far
             );
             // This could be a page fault on instruction fetch
             if !crate::sched::process::handle_page_fault(far, false) {
-                sched::kill(sched::current_pid());
+                sched::kill_current_and_exit(-1);
             }
         }
         EC_PC_ALIGN | EC_SP_ALIGN => {
             println!("[exception] EL0 Alignment Fault at ELR={:#018x}", elr);
-            sched::kill(sched::current_pid());
+            sched::kill_current_and_exit(-1);
         }
         _ => {
             println!("[exception] EL0 exception at ELR={:#018x}", elr);
@@ -191,8 +189,22 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
                 esr, ec, iss
             );
             println!("[exception] SPSR={:#018x} FAR={:#018x}", spsr, far);
-            sched::kill(sched::current_pid());
+            sched::kill_current_and_exit(-1);
         }
+    }
+
+    // Centralized cooperative exit check — runs for ALL exception types.
+    // When set (by SYS_EXIT or kill_current_and_exit), modify SPSR_EL1 to
+    // return to EL1 instead of EL0, and set ELR_EL1 to the saved kernel
+    // return address so we resume in kernel code that launched the process.
+    if crate::sched::cooperative_exit_pending() {
+        crate::sched::clear_cooperative_exit();
+        let kr = crate::sched::kernel_return_address();
+        unsafe {
+            core::arch::asm!("msr SPSR_EL1, {0}", in(reg) 0x5u64);
+            core::arch::asm!("msr ELR_EL1, {0}", in(reg) kr);
+        }
+        crate::sched::set_current_pid(0);
     }
 }
 
@@ -204,6 +216,8 @@ pub unsafe extern "C" fn handle_irq(_spsr: u64, _elr: u64, _esr: u64, _far: u64,
     if irq_id >= 1020 {
         return;
     }
+
+    let is_timer_irq = irq_id == 29 || (64..=67).contains(&irq_id);
 
     match irq_id {
         0..=15 => {
@@ -242,12 +256,15 @@ pub unsafe extern "C" fn handle_irq(_spsr: u64, _elr: u64, _esr: u64, _far: u64,
         }
     }
 
-    // Check if a context switch is pending
-    if sched::schedule_pending() {
-        sched::clear_schedule_flag();
-        // The actual context switch happens on exception return
-        // In a full implementation, we'd modify the return frame here
-        sched::schedule();
+    // In cooperative QEMU mode, do NOT call schedule() from the IRQ handler.
+    // schedule() does eret (noreturn) which corrupts the main loop context.
+    // User processes are run directly from the shell's 'run' command instead.
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    if is_timer_irq {
+        if sched::schedule_pending() {
+            sched::clear_schedule_flag();
+            sched::schedule();
+        }
     }
 
     gic::Gic::end_of_interrupt(irq_id);

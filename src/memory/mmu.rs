@@ -17,6 +17,9 @@ pub const PTE_TABLE: u64 = 1 << 1; // Block (0) vs Table (1) at L1/L2
 pub const PTE_PAGE: u64 = 1 << 1; // Page descriptor at L3
 pub const PTE_ACCESS: u64 = 1 << 10; // AF (Access Flag)
 pub const PTE_NG: u64 = 1 << 11; // nG (non-Global)
+pub const PTE_AP_EL0_RW: u64 = 1 << 6; // AP[1]=1 → EL0+EL1 read/write
+pub const PTE_UXN: u64 = 1 << 54; // Unprivileged Execute Never
+pub const PTE_PXN: u64 = 1 << 53; // Privileged Execute Never
 pub const PTE_DBM: u64 = 1 << 51; // Dirty Bit Modifier (hardware update)
 
 /// Shareability attributes
@@ -276,6 +279,13 @@ unsafe fn enable_mmu_and_caches(ttbr0: u64, ttbr1: u64) {
     crate::println!("[mmu] SCTLR before = {:#018x}", sctlr);
 
     sctlr |= 1 << 0; // M: MMU enable ONLY
+
+    // SET SCTLR_EL1.SPAN (bit 23) to DISABLE PAN entirely.
+    // SPAN=1 → PAN is always off, EL1 can freely access EL0 pages.
+    // SPAN=0 → PSTATE.PAN defaults to 1, blocking EL1 from reading
+    // EL0-accessible pages (AP=01), causing Permission fault (DFSC=0x0F).
+    // Even though cortex-a72 is ARMv8.0, QEMU's model implements ARMv8.1 PAN.
+    sctlr |= 1 << 23; // SPAN=1: force PAN off
 
     // Clear WXN (write implies XN) and other restrictive bits
     sctlr &= !((1 << 19)  // WXN
