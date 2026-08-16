@@ -31,6 +31,14 @@ typedef unsigned long long  uint64_t;
 typedef long           intptr_t;
 typedef unsigned long uintptr_t;
 
+/* Pointer integer limits */
+#define INTPTR_MIN (-9223372036854775807L - 1L)
+#define INTPTR_MAX 9223372036854775807L
+#define UINTPTR_MAX (18446744073709551615UL)
+
+/* Size limits */
+#define SIZE_MAX (18446744073709551615UL)
+
 /* NULL */
 #ifndef NULL
 #define NULL ((void *)0)

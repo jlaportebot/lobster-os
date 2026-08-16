@@ -43,7 +43,7 @@ const NET_CMD_COMPILE: u32 = 3;
 const MAX_URL_LEN: usize = 3840;
 
 /// Maximum response body / ELF binary length (256KB for libc-linked binaries)
-const MAX_RESP_LEN: usize = 262144;
+const MAX_RESP_LEN: usize = 524288;
 
 /// MMIO read/write helpers
 #[inline]

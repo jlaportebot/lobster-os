@@ -876,10 +876,31 @@ fn sys_read(fd: i32, buf_ptr: u64, len: usize) -> u64 {
     }
 
     // Fallback: fd=0 (stdin) → UART
-    if fd != 0 {
-        return u64::MAX; // -1 (EBADF)
+    if fd == 0 {
+        // Read from UART — non-blocking poll for data
+        let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, len) };
+        let mut count = 0usize;
+        for slot in buf.iter_mut() {
+            // Poll UART for a byte
+            match crate::drivers::uart::Uart10::read_byte_nb() {
+                Some(byte) => {
+                    *slot = byte;
+                    count += 1;
+                    if byte == b'\r' || byte == b'\n' {
+                        break; // Line-buffered: stop at newline
+                    }
+                }
+                None => break, // No more data available
+            }
+        }
+        if count == 0 {
+            // No data available — yield to scheduler and return 0
+            crate::arch::cpu::wfe();
+            return 0;
+        }
+        return count as u64;
     }
-    0 // Return 0 bytes read (EOF)
+    u64::MAX // -1 (EBADF)
 }
 
 /// sys_open(path, flags) — open a file

@@ -595,6 +595,13 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
             Ok(n) => crate::println!("[fs] Embedded /bin/libc_test.c ({} bytes)", n),
             Err(e) => crate::println!("[fs] Failed to embed /bin/libc_test.c: {:?}", e),
         }
+
+        // Embed MicroPython interpreter binary
+        let micropython_bin = include_bytes!("../tools/micropython_min.bin");
+        match crate::fs::vfs::write_file("/bin/python", micropython_bin) {
+            Ok(n) => crate::println!("[fs] Embedded /bin/python ({}/{} bytes)", n, micropython_bin.len()),
+            Err(e) => crate::println!("[fs] Failed to embed /bin/python: {:?}", e),
+        }
     }
 
     // 8b. Initialize user database (create default users if missing)

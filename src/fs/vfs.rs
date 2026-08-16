@@ -128,7 +128,7 @@ impl DirEntry {
 pub const MAX_DIR_ENTRIES: usize = 16;
 
 /// Maximum inline file data size (256KB per file — supports libc-linked binaries)
-pub const MAX_FILE_DATA: usize = 262144;
+pub const MAX_FILE_DATA: usize = 524288;
 
 /// VFS Node — represents a file, directory, device, or symlink
 #[derive(Copy, Clone)]
