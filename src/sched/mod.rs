@@ -1258,3 +1258,25 @@ pub fn get_oom_victim() -> Option<Pid> {
         victim_pid
     }
 }
+
+// ── Program break (brk) management ──
+// Single-process cooperative model: one global brk is sufficient
+static mut USER_BRK: u64 = 0x20000000; // Default heap base
+static mut USER_BRK_LIMIT: u64 = 0x30000000; // Heap grows up to here
+
+/// Get the current program break for the running user process
+pub fn get_user_brk() -> u64 {
+    unsafe { USER_BRK }
+}
+
+/// Set the program break (called from brk/mmap syscalls)
+pub fn set_user_brk(new_brk: u64) -> bool {
+    unsafe {
+        if new_brk >= USER_BRK && new_brk <= USER_BRK_LIMIT {
+            USER_BRK = new_brk;
+            true
+        } else {
+            false
+        }
+    }
+}

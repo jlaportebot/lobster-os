@@ -344,8 +344,444 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_RT_SIGRETURN => sys_rt_sigreturn(),
         // ── Kernel log control (dmesg) ──
         SYS_KLOGCTL => sys_klogctl(args[0] as i32, args[1] as u64, args[2] as usize),
-        _ => u64::MAX, // -1 (ENOSYS)
+        _ => {
+            // Try Linux ABI compatibility layer for unrecognized syscalls
+            linux_compat::dispatch_linux(syscall_num, args)
+        }
     }
+}
+
+// ═══════════════════════════════════════════════
+// Linux ABI Compatibility Layer
+// ═══════════════════════════════════════════════
+// Maps standard AArch64 Linux syscall numbers to our
+// existing VFS/scheduler implementations. This allows
+// programs compiled with standard Linux headers (using
+// Linux syscall numbers) to work on LobsterOS.
+
+mod linux_compat {
+    use super::*;
+
+    // Linux AArch64 syscall numbers (from unistd.h)
+    const LINUX_IOV_SETUP: u64 = 0;
+    const LINUX_IOV_DESTROY: u64 = 1;
+    const LINUX_IOV_RESUME: u64 = 2;
+    const LINUX_IOV_REGISTER: u64 = 3;
+    const LINUX_IOV_UNREGISTER: u64 = 4;
+    const LINUX_OPENAT: u64 = 56;
+    const LINUX_CLOSE: u64 = 57;
+    const LINUX_READ: u64 = 63;
+    const LINUX_WRITE: u64 = 64;
+    const LINUX_WRITEV: u64 = 66;
+    const LINUX_READV: u64 = 65;
+    const LINUX_LSEEK: u64 = 62;
+    const LINUX_PIPE2: u64 = 59;
+    const LINUX_PIPE: u64 = 21;
+    const LINUX_DUP: u64 = 23;
+    const LINUX_DUP3: u64 = 24;
+    const LINUX_FCNTL: u64 = 25;
+    const LINUX_IOCTL: u64 = 29;
+    const LINUX_NEWFSTATAT: u64 = 79;
+    const LINUX_FSTAT: u64 = 80;
+    const LINUX_STAT: u64 = 79; // same as newfstatat with AT_FDCWD
+    const LINUX_STATFS: u64 = 44;
+    const LINUX_FSTATFS: u64 = 45;
+    const LINUX_TRUNCATE: u64 = 45;
+    const LINUX_FTRUNCATE: u64 = 46;
+    const LINUX_FALLOCATE: u64 = 47;
+    const LINUX_FACCESSAT: u64 = 48;
+    const LINUX_FCHDIR: u64 = 49;
+    const LINUX_FCHOWN: u64 = 50;
+    const LINUX_FCHMOD: u64 = 52;
+    const LINUX_FCHOWNAT: u64 = 54;
+    const LINUX_FCHMODAT: u64 = 53;
+    const LINUX_OPEN: u64 = 22; // obsolete, maps to openat
+    const LINUX_GETCWD: u64 = 17;
+    const LINUX_CHDIR: u64 = 49;
+    const LINUX_MKDIR: u64 = 53;
+    const LINUX_RMDIR: u64 = 84;
+    const LINUX_UNLINK: u64 = 87;
+    const LINUX_UNLINKAT: u64 = 35;
+    const LINUX_RENAME: u64 = 85;
+    const LINUX_RENAMEAT: u64 = 38;
+    const LINUX_SYMLINK: u64 = 88;
+    const LINUX_SYMLINKAT: u64 = 86;
+    const LINUX_READLINK: u64 = 89;
+    const LINUX_READLINKAT: u64 = 78;
+    const LINUX_LINK: u64 = 79;
+    const LINUX_LINKAT: u64 = 38;
+    const LINUX_GETPID: u64 = 172;
+    const LINUX_GETTID: u64 = 178;
+    const LINUX_GETUID: u64 = 174;
+    const LINUX_GETGID: u64 = 176;
+    const LINUX_GETEUID: u64 = 175;
+    const LINUX_GETEGID: u64 = 177;
+    const LINUX_EXIT: u64 = 93;
+    const LINUX_EXIT_GROUP: u64 = 94;
+    const LINUX_SCHED_YIELD: u64 = 124;
+    const LINUX_NANOSLEEP: u64 = 101;
+    const LINUX_CLONE: u64 = 220;
+    const LINUX_FORK: u64 = 220;
+    const LINUX_EXECVE: u64 = 221;
+    const LINUX_WAIT4: u64 = 260;
+    const LINUX_MMAP: u64 = 222;
+    const LINUX_MUNMAP: u64 = 215;
+    const LINUX_MPROTECT: u64 = 226;
+    const LINUX_BRK: u64 = 214;
+    const LINUX_GETRANDOM: u64 = 278;
+    const LINUX_SOCKET: u64 = 198;
+    const LINUX_BIND: u64 = 200;
+    const LINUX_LISTEN: u64 = 201;
+    const LINUX_ACCEPT: u64 = 202;
+    const LINUX_CONNECT: u64 = 203;
+    const LINUX_SENDTO: u64 = 206;
+    const LINUX_RECVFROM: u64 = 207;
+    const LINUX_SETSOCKOPT: u64 = 208;
+    const LINUX_GETSOCKOPT: u64 = 209;
+    const LINUX_SHUTDOWN: u64 = 210;
+    const LINUX_GETSOCKNAME: u64 = 204;
+    const LINUX_GETPEERNAME: u64 = 205;
+    const LINUX_FUTEX: u64 = 98;
+    const LINUX_SET_TID_ADDRESS: u64 = 96;
+    const LINUX_RT_SIGPROCMASK: u64 = 135;
+    const LINUX_RT_SIGACTION: u64 = 134;
+    const LINUX_RT_SIGRETURN: u64 = 139;
+    const LINUX_KILL: u64 = 129;
+    const LINUX_TGKILL: u64 = 131;
+    const LINUX_TKILL: u64 = 130;
+    const LINUX_IOCTL_: u64 = 29;
+    const LINUX_WRITEV_: u64 = 66;
+    const LINUX_PREAD64: u64 = 67;
+    const LINUX_PWRITE64: u64 = 68;
+    const LINUX_READV_: u64 = 65;
+    const LINUX_FSYNC: u64 = 82;
+    const LINUX_FDATASYNC: u64 = 83;
+    const LINUX_MADVISE: u64 = 233;
+    const LINUX_MINCORE: u64 = 232;
+    const LINUX_MLOCK: u64 = 229;
+    const LINUX_MUNLOCK: u64 = 228;
+    const LINUX_GETTIMEOFDAY: u64 = 169;
+    const LINUX_SETTIMEOFDAY: u64 = 170;
+    const LINUX_TIME: u64 = 169;
+    const LINUX_CLOCK_GETTIME: u64 = 113;
+    const LINUX_CLOCK_SETTIME: u64 = 112;
+    const LINUX_UNAME: u64 = 160;
+    const LINUX_UMASK: u64 = 167;
+    const LINUX_GETRLIMIT: u64 = 163;
+    const LINUX_SETRLIMIT: u64 = 164;
+    const LINUX_GETRUSAGE: u64 = 165;
+    const LINUX_SYSINFO: u64 = 179;
+    const LINUX_PERSONALITY: u64 = 92;
+
+    /// Dispatch Linux ABI syscall
+    pub fn dispatch_linux(syscall_num: u64, args: &[u64; 6]) -> u64 {
+        match syscall_num {
+            LINUX_WRITE => sys_write(args[0] as i32, args[1], args[2] as usize),
+            LINUX_READ => sys_read(args[0] as i32, args[1], args[2] as usize),
+            LINUX_CLOSE => sys_close(args[0] as i32),
+
+            LINUX_EXIT | LINUX_EXIT_GROUP => {
+                sys_exit(args[0] as i64)
+            }
+
+            LINUX_GETPID => sched::current_pid(),
+            LINUX_GETTID => sched::current_pid(),
+            LINUX_SCHED_YIELD => {
+                sys_yield();
+                0
+            }
+
+            LINUX_GETUID => crate::security::sys_getuid() as u64,
+            LINUX_GETGID => crate::security::sys_getgid() as u64,
+            LINUX_GETEUID => crate::security::sys_geteuid() as u64,
+            LINUX_GETEGID => crate::security::sys_getegid() as u64,
+
+            LINUX_BRK => sys_brk(args[0]),
+            LINUX_GETRANDOM => sys_getrandom(args[0], args[1] as usize, args[2] as u32),
+
+            LINUX_RT_SIGRETURN => sys_rt_sigreturn(),
+
+            // Stubbed syscalls — return 0 (success) to prevent crashes
+            LINUX_RT_SIGPROCMASK | LINUX_RT_SIGACTION => 0,
+            LINUX_SET_TID_ADDRESS => 0,
+            LINUX_FUTEX => 0,
+            LINUX_MPROTECT => 0,
+            LINUX_MADVISE => 0,
+            LINUX_PERSONALITY => 0,
+            LINUX_UMASK => 0o022,
+            LINUX_GETRLIMIT | LINUX_SETRLIMIT => 0,
+            LINUX_GETRUSAGE => 0,
+            LINUX_SYSINFO => 0,
+            LINUX_MLOCK | LINUX_MUNLOCK => 0,
+            LINUX_MINCORE => 0,
+            LINUX_IOCTL | LINUX_IOCTL_ => 0,
+            LINUX_FSYNC | LINUX_FDATASYNC => 0,
+            LINUX_FACCESSAT => 0,
+            LINUX_STATFS | LINUX_FSTATFS => 0,
+
+            LINUX_NANOSLEEP => {
+                // args[0] = timespec ptr {sec, nsec}, args[1] = rem ptr
+                let secs = if args[0] != 0 {
+                    unsafe { *(args[0] as *const u64) }
+                } else { 0 };
+                sys_sleep(secs * 1000);
+                0
+            }
+
+            LINUX_UNAME => {
+                // Fill utsname struct (6 × 65-byte fields)
+                if args[0] != 0 {
+                    let buf = unsafe {
+                        core::slice::from_raw_parts_mut(
+                            args[0] as *mut u8,
+                            6 * 65,
+                        )
+                    };
+                    for b in buf.iter_mut() { *b = 0; }
+                    // sysname
+                    let name = b"lobster-os\0";
+                    buf[..name.len()].copy_from_slice(name);
+                    // nodename
+                    let node = b"lobster\0";
+                    buf[65..65+node.len()].copy_from_slice(node);
+                    // release
+                    let rel = b"0.2.0\0";
+                    buf[130..130+rel.len()].copy_from_slice(rel);
+                    // version
+                    let ver = b"lobster-os 0.2.0\0";
+                    buf[195..195+ver.len()].copy_from_slice(ver);
+                    // machine
+                    let mach = b"aarch64\0";
+                    buf[260..260+mach.len()].copy_from_slice(mach);
+                }
+                0
+            }
+
+            LINUX_CLOCK_GETTIME | LINUX_GETTIMEOFDAY | LINUX_TIME => {
+                // Return system uptime in appropriate format
+                let now_us = crate::arch::timer::Timer::system_time_us();
+                if syscall_num == LINUX_CLOCK_GETTIME {
+                    // args[1] = timespec ptr {sec, nsec}
+                    if args[1] != 0 {
+                        unsafe {
+                            *(args[1] as *mut u64) = now_us / 1_000_000;
+                            *((args[1] as *mut u64).add(1)) = (now_us % 1_000_000) * 1000;
+                        }
+                    }
+                } else if syscall_num == LINUX_GETTIMEOFDAY {
+                    // args[0] = timeval ptr {sec, usec}
+                    if args[0] != 0 {
+                        unsafe {
+                            *(args[0] as *mut u64) = now_us / 1_000_000;
+                            *((args[0] as *mut u64).add(1)) = now_us % 1_000_000;
+                        }
+                    }
+                }
+                0
+            }
+
+            LINUX_OPENAT => {
+                // args[0] = dirfd (AT_FDCWD = -100), args[1] = path ptr, args[2] = flags, args[3] = mode
+                let path_ptr = args[1] as *const u8;
+                let flags = args[2] as u32;
+                if path_ptr.is_null() {
+                    return u64::MAX;
+                }
+                // Read null-terminated path
+                let path_str = unsafe {
+                    let mut len = 0usize;
+                    while *path_ptr.add(len) != 0 && len < 256 {
+                        len += 1;
+                    }
+                    core::str::from_utf8_unchecked(
+                        core::slice::from_raw_parts(path_ptr, len)
+                    )
+                };
+                sys_open_vfs(path_str, flags)
+            }
+
+            LINUX_OPEN => {
+                // Legacy open(path, flags, mode)
+                let path_ptr = args[0] as *const u8;
+                let flags = args[1] as u32;
+                if path_ptr.is_null() {
+                    return u64::MAX;
+                }
+                let path_str = unsafe {
+                    let mut len = 0usize;
+                    while *path_ptr.add(len) != 0 && len < 256 {
+                        len += 1;
+                    }
+                    core::str::from_utf8_unchecked(
+                        core::slice::from_raw_parts(path_ptr, len)
+                    )
+                };
+                sys_open_vfs(path_str, flags)
+            }
+
+            LINUX_FSTAT | LINUX_NEWFSTATAT => {
+                // Fill stat struct — we return a minimal struct
+                let fd = args[0] as i32;
+                let stat_ptr = if syscall_num == LINUX_FSTAT {
+                    args[1]
+                } else {
+                    args[2] // newfstatat: dirfd, path, statbuf, flag
+                };
+                if stat_ptr != 0 {
+                    // Linux stat struct (128 bytes on AArch64)
+                    let buf = unsafe {
+                        core::slice::from_raw_parts_mut(stat_ptr as *mut u8, 128)
+                    };
+                    for b in buf.iter_mut() { *b = 0; }
+                    // st_mode = 0100644 (regular file, rw-r--r--)
+                    unsafe { *(stat_ptr as *mut u32) = 0o100644; }
+                    // st_size — get from VFS fd
+                    // For stdout/stderr (fd 1, 2), return 0
+                    let _ = fd;
+                }
+                0
+            }
+
+            LINUX_WRITEV => {
+                // args[0] = fd, args[1] = iov ptr, args[2] = iovcnt
+                let fd = args[0] as i32;
+                let iov_ptr = args[1] as *const u64;
+                let iovcnt = args[2] as usize;
+                let mut total = 0u64;
+                for i in 0..iovcnt {
+                    unsafe {
+                        let buf_ptr = *iov_ptr.add(i * 2);
+                        let len = *iov_ptr.add(i * 2 + 1) as usize;
+                        if len > 0 && buf_ptr != 0 {
+                            total += sys_write(fd, buf_ptr, len);
+                        }
+                    }
+                }
+                total
+            }
+
+            LINUX_READV => {
+                0 // Stub — return 0 bytes read
+            }
+
+            LINUX_PREAD64 => {
+                // Same as read but with offset — we don't support seeking from syscall yet
+                sys_read(args[0] as i32, args[1], args[2] as usize)
+            }
+
+            LINUX_PWRITE64 => {
+                sys_write(args[0] as i32, args[1], args[2] as usize)
+            }
+
+            LINUX_LSEEK => {
+                // args[0] = fd, args[1] = offset, args[2] = whence
+                crate::fs::vfs::seek(args[0] as usize, args[1] as i64, args[2] as u32)
+                    .unwrap_or(0)
+            }
+
+            LINUX_PIPE | LINUX_PIPE2 => {
+                sys_pipe(args[0], args[1])
+            }
+
+            LINUX_DUP => sys_dup(args[0] as i32),
+            LINUX_FCNTL => sys_fcntl(args[0] as i32, args[1] as u32, args[2]),
+
+            LINUX_MMAP => {
+                // args[0]=addr, args[1]=len, args[2]=prot, args[3]=flags, args[4]=fd, args[5]=offset
+                sys_mmap(args[1], args[1] as usize, args[2] as u32, args[3] as u32)
+            }
+
+            LINUX_MUNMAP => {
+                // Stub — we don't actually track user mmaps
+                0
+            }
+
+            LINUX_CLONE => {
+                // Stub — return child PID 0 (as child)
+                // Real implementation would call sys_fork()
+                sys_fork()
+            }
+
+            LINUX_EXECVE => {
+                // args[0] = path ptr, args[1] = argv ptr, args[2] = envp ptr
+                let path_ptr = args[0] as *const u8;
+                if path_ptr.is_null() { return u64::MAX; }
+                let path_str = unsafe {
+                    let mut len = 0usize;
+                    while *path_ptr.add(len) != 0 && len < 256 {
+                        len += 1;
+                    }
+                    core::str::from_utf8_unchecked(
+                        core::slice::from_raw_parts(path_ptr, len)
+                    )
+                };
+                sys_exec(path_str)
+            }
+
+            LINUX_WAIT4 => {
+                // args[0] = pid, args[1] = status ptr, args[2] = options, args[3] = rusage ptr
+                sys_wait(args[0])
+            }
+
+            LINUX_SOCKET => u64::MAX, // No network yet
+            LINUX_CONNECT => u64::MAX,
+            LINUX_BIND => u64::MAX,
+            LINUX_LISTEN => u64::MAX,
+            LINUX_ACCEPT => u64::MAX,
+            LINUX_SENDTO => u64::MAX,
+            LINUX_RECVFROM => u64::MAX,
+            LINUX_SETSOCKOPT => 0,
+            LINUX_GETSOCKOPT => 0,
+            LINUX_SHUTDOWN => 0,
+
+            _ => {
+                // Unknown — log and return -1
+                #[cfg(feature = "debug_syscalls")]
+                println!(
+                    "[syscall] Unhandled Linux syscall #{} from PID {}",
+                    syscall_num, sched::current_pid()
+                );
+                let _ = syscall_num;
+                u64::MAX
+            }
+        }
+    }
+}
+
+/// sys_open_vfs — real VFS open that returns a file descriptor
+fn sys_open_vfs(path: &str, flags: u32) -> u64 {
+    match crate::fs::vfs::open(path, flags) {
+        Ok(fd) => fd as u64,
+        Err(e) => {
+            #[cfg(feature = "debug_syscalls")]
+            println!("[syscall] open({}) failed: {:?}", path, e);
+            u64::MAX
+        }
+    }
+}
+
+/// sys_brk — set/get program break (heap pointer)
+fn sys_brk(addr: u64) -> u64 {
+    if addr == 0 {
+        crate::sched::get_user_brk()
+    } else {
+        crate::sched::set_user_brk(addr);
+        addr
+    }
+}
+
+/// sys_getrandom — fill buffer with random bytes
+fn sys_getrandom(buf_ptr: u64, len: usize, _flags: u32) -> u64 {
+    if buf_ptr == 0 || len == 0 {
+        return 0;
+    }
+    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, len) };
+    let mut seed = crate::arch::timer::Timer::system_time_us() as u32;
+    for b in buf.iter_mut() {
+        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+        *b = (seed >> 16) as u8;
+    }
+    len as u64
 }
 
 // ═══════════════════════════════════════════════
@@ -447,9 +883,18 @@ fn sys_read(fd: i32, buf_ptr: u64, len: usize) -> u64 {
 }
 
 /// sys_open(path, flags) — open a file
-fn sys_open(_path: *const u8, _flags: u32) -> u64 {
-    // TODO: implement via VFS
-    u64::MAX // -1 (ENOSYS)
+fn sys_open(path: *const u8, flags: u32) -> u64 {
+    if path.is_null() {
+        return u64::MAX;
+    }
+    let path_str = unsafe {
+        let mut len = 0usize;
+        while *path.add(len) != 0 && len < 256 {
+            len += 1;
+        }
+        core::str::from_utf8_unchecked(core::slice::from_raw_parts(path, len))
+    };
+    sys_open_vfs(path_str, flags)
 }
 
 /// sys_close(fd) — close a file descriptor

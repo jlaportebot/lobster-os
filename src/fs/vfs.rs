@@ -127,8 +127,8 @@ impl DirEntry {
 /// Maximum directory entries per node
 pub const MAX_DIR_ENTRIES: usize = 16;
 
-/// Maximum inline file data size (4KB per file)
-pub const MAX_FILE_DATA: usize = 4096;
+/// Maximum inline file data size (256KB per file — supports libc-linked binaries)
+pub const MAX_FILE_DATA: usize = 262144;
 
 /// VFS Node — represents a file, directory, device, or symlink
 #[derive(Copy, Clone)]
@@ -273,8 +273,8 @@ impl MountPoint {
     }
 }
 
-/// Maximum number of nodes in the VFS (increased for ext2 rootfs support)
-const MAX_VFS_NODES: usize = 64;
+/// Maximum number of nodes in the VFS (reduced to fit 256KB file data)
+const MAX_VFS_NODES: usize = 16;
 
 /// Maximum mount points
 const MAX_MOUNT_POINTS: usize = 8;

@@ -588,6 +588,13 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
             Ok(n) => crate::println!("[fs] Embedded /bin/hello.c ({} bytes)", n),
             Err(e) => crate::println!("[fs] Failed to embed /bin/hello.c: {:?}", e),
         }
+
+        // Embed a libc test source file
+        let libc_test_c = include_str!("../tools/libc/test_full.c");
+        match crate::fs::vfs::write_file("/bin/libc_test.c", libc_test_c.as_bytes()) {
+            Ok(n) => crate::println!("[fs] Embedded /bin/libc_test.c ({} bytes)", n),
+            Err(e) => crate::println!("[fs] Failed to embed /bin/libc_test.c: {:?}", e),
+        }
     }
 
     // 8b. Initialize user database (create default users if missing)

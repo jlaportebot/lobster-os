@@ -42,8 +42,8 @@ const NET_CMD_COMPILE: u32 = 3;
 /// Maximum URL/source length (must match QEMU device: 3840 bytes)
 const MAX_URL_LEN: usize = 3840;
 
-/// Maximum response body / ELF binary length
-const MAX_RESP_LEN: usize = 65536;
+/// Maximum response body / ELF binary length (256KB for libc-linked binaries)
+const MAX_RESP_LEN: usize = 262144;
 
 /// MMIO read/write helpers
 #[inline]
