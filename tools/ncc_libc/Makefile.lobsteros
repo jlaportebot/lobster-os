@@ -1,0 +1,49 @@
+# NCC libc build for LobsterOS
+# Output architecture: arm (AArch64)
+OUT = arm
+
+# Compiler - use NCC itself for self-hosting, or cross-compiler for bootstrap
+CC = aarch64-linux-gnu-gcc
+AS = aarch64-linux-gnu-as
+AR = aarch64-linux-gnu-ar
+
+# For bootstrap with cross-compiler
+CFLAGS = -ffreestanding -nostdlib -nostdinc -Os \
+         -I. \
+         -I../include \
+         -Ilobsteros \
+         -D__lobsteros__ \
+         -D__neatcc__ \
+         -fno-stack-protector \
+         -fno-builtin
+
+ASFLAGS =
+
+# Source files (C)
+CSRC = $(wildcard *.c)
+CSRC += $(wildcard elks/*.c)
+COBJS = $(patsubst %.c,%.o,$(CSRC))
+
+# Assembly sources for LobsterOS
+ASSRC = lobsteros/start.s
+ASOBJS = $(patsubst %.s,%.o,$(ASSRC))
+
+# All objects
+OBJS = $(COBJS) $(ASOBJS)
+
+all: libc.a
+
+%.o: %.c
+	$(CC) -c $(CFLAGS) $< -o $@
+
+%.o: %.s
+	$(AS) $< -o $@
+
+libc.a: $(OBJS)
+	$(AR) rcs $@ $(OBJS)
+	@echo "Built libc.a with $(words $(OBJS)) objects"
+
+clean:
+	rm -f *.o *.a elks/*.o lobsteros/*.o
+
+.PHONY: all clean

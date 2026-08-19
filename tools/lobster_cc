@@ -1,0 +1,133 @@
+#!/bin/bash
+# LobsterOS native C compiler wrapper
+# Uses aarch64-linux-gnu-gcc with our NCC libc
+
+set -e
+
+CC="/usr/bin/aarch64-linux-gnu-gcc"
+NCC_LIBC="/mnt/data/sd-overflow/LobsterOS/lobster-os/tools/ncc_libc"
+NCC_LD="/mnt/data/sd-overflow/LobsterOS/lobster-os/tools/ncc_ld"
+
+# Default flags for LobsterOS
+CFLAGS="-ffreestanding -nostdlib -nostdinc -Os -I$NCC_LIBC -I$NCC_LIBC/lobsteros -D__lobsteros__ -D__neatcc__ -fno-stack-protector -fno-builtin"
+LDFLAGS="-nostdlib -static -nostartfiles -Wl,-Ttext=0x10000000 -Wl,--build-id=none -Wl,--nmagic -L$NCC_LIBC -l:libc.a"
+
+usage() {
+    echo "Usage: $0 [options] source.c [-o output]"
+    echo "  -o <file>    Output file (default: /bin/<source_name>)"
+    echo "  -run         Run after compiling"
+    echo "  -c           Compile only (produce .o)"
+    echo "  -E           Preprocess only"
+    echo "  -I <dir>     Add include directory"
+    echo "  -L <dir>     Add library directory"
+    echo "  -l <lib>     Link library"
+    exit 1
+}
+
+# Parse arguments
+OUTPUT=""
+RUN_AFTER=0
+COMPILE_ONLY=0
+PREPROCESS_ONLY=0
+EXTRA_CFLAGS=""
+EXTRA_LDFLAGS=""
+SOURCES=()
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -o)
+            OUTPUT="$2"
+            shift 2
+            ;;
+        -run)
+            RUN_AFTER=1
+            shift
+            ;;
+        -c)
+            COMPILE_ONLY=1
+            shift
+            ;;
+        -E)
+            PREPROCESS_ONLY=1
+            shift
+            ;;
+        -I)
+            EXTRA_CFLAGS="$EXTRA_CFLAGS -I$2"
+            shift 2
+            ;;
+        -L)
+            EXTRA_LDFLAGS="$EXTRA_LDFLAGS -L$2"
+            shift 2
+            ;;
+        -l)
+            EXTRA_LDFLAGS="$EXTRA_LDFLAGS -l$2"
+            shift 2
+            ;;
+        *.c|*.s|*.S)
+            SOURCES+=("$1")
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            usage
+            ;;
+    esac
+done
+
+if [[ ${#SOURCES[@]} -eq 0 ]]; then
+    echo "Error: No source file specified"
+    usage
+fi
+
+if [[ ${#SOURCES[@]} -gt 1 && -n "$OUTPUT" ]]; then
+    echo "Error: Cannot specify -o with multiple sources"
+    exit 1
+fi
+
+# Default output
+if [[ -z "$OUTPUT" ]]; then
+    BASE=$(basename "${SOURCES[0]}" .c)
+    OUTPUT="/bin/$BASE"
+fi
+
+# Build object files
+OBJS=()
+for SRC in "${SOURCES[@]}"; do
+    OBJ="${SRC%.c}.o"
+    OBJ="${OBJ%.s}.o"
+    OBJS+=("$OBJ")
+    
+    if [[ "$SRC" == *.s ]] || [[ "$SRC" == *.S ]]; then
+        # Assembly
+        $CC -c $CFLAGS $EXTRA_CFLAGS "$SRC" -o "$OBJ"
+    else
+        # C source
+        $CC -c $CFLAGS $EXTRA_CFLAGS "$SRC" -o "$OBJ"
+    fi
+done
+
+if [[ $COMPILE_ONLY -eq 1 ]]; then
+    exit 0
+fi
+
+if [[ $PREPROCESS_ONLY -eq 1 ]]; then
+    $CC -E $CFLAGS $EXTRA_CFLAGS "${SOURCES[0]}"
+    exit 0
+fi
+
+# Link
+if [[ ${#OBJS[@]} -eq 1 ]]; then
+    # Single object, link with libc
+    $CC $LDFLAGS $EXTRA_LDFLAGS "${OBJS[0]}" -o "$OUTPUT"
+else
+    # Multiple objects
+    $CC $LDFLAGS $EXTRA_LDFLAGS "${OBJS[@]}" -o "$OUTPUT"
+fi
+
+echo "Built: $OUTPUT ($(stat -c%s "$OUTPUT" 2>/dev/null || echo "?") bytes)"
+
+if [[ $RUN_AFTER -eq 1 ]]; then
+    echo "Running: $OUTPUT"
+    # This would need to run inside LobsterOS emulator
+    echo "Note: Run inside LobsterOS emulator with: run $OUTPUT"
+fi
