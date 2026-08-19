@@ -1268,7 +1268,45 @@ pub fn ftruncate(fd: usize, length: u64) -> Result<(), VfsError> {
     }
 }
 
-/// Mount virtual filesystems (/proc, /dev, /sys) and register them with the VFS.
+/// Truncate a file to a specific length
+pub fn truncate(path: &str, length: u64) -> Result<(), VfsError> {
+    let inode_id = resolve_path(path)?;
+    let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
+    
+    if node.metadata.file_type != FileType::RegularFile {
+        return Err(VfsError::NotAFile);
+    }
+    
+    // Check write permission
+    let write_access = crate::security::PERM_OWNER_WRITE
+        | crate::security::PERM_GROUP_WRITE
+        | crate::security::PERM_OTHERS_WRITE;
+    if !check_permission(node, write_access) {
+        return Err(VfsError::PermissionDenied);
+    }
+    
+    if length <= MAX_FILE_DATA as u64 {
+        node.data_len = length;
+        node.metadata.size = length;
+        // If extending, zero-fill new space
+        if length > node.data_len as u64 {
+            // In a real implementation, we'd extend the backing store
+        }
+    } else {
+        return Err(VfsError::InvalidOffset);
+    }
+    Ok(())
+}
+
+/// Sync all VFS data (no-op for in-memory VFS)
+pub fn sync() {
+    // VFS is in-memory, nothing to flush
+}
+
+/// Get directory entries for getdents
+pub fn getdents(path: &str) -> Result<alloc::vec::Vec<DirEntry>, VfsError> {
+    list_dir(path)
+}
 /// Called from kernel_init after vfs::init().
 pub fn mount_virtual_fs() {
     // Create mount-point directories in VFS root

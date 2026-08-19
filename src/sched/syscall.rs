@@ -122,8 +122,40 @@ pub const SYS_SET_NO_NEW_PRIVS: u64 = 65;
 pub const SYS_GET_NO_NEW_PRIVS: u64 = 66;
 pub const SYS_KLOGCTL: u64 = 67;
 
+// ── Filesystem / VFS syscalls ──
+pub const SYS_BRK: u64 = 68;
+pub const SYS_GETTIMEOFDAY: u64 = 69;
+pub const SYS_NANOSLEEP: u64 = 70;
+pub const SYS_STAT: u64 = 71;
+pub const SYS_FSTAT: u64 = 72;
+pub const SYS_LSTAT: u64 = 73;
+pub const SYS_LSEEK: u64 = 74;
+pub const SYS_GETDENTS: u64 = 75;
+pub const SYS_MKDIR: u64 = 76;
+pub const SYS_RMDIR: u64 = 77;
+pub const SYS_UNLINK: u64 = 78;
+pub const SYS_CREAT: u64 = 79;
+pub const SYS_ACCESS: u64 = 80;
+pub const SYS_GETCWD: u64 = 81;
+pub const SYS_CHDIR: u64 = 82;
+pub const SYS_TIME: u64 = 83;
+pub const SYS_UTIME: u64 = 84;
+pub const SYS_GETPPID: u64 = 85;
+pub const SYS_SETSID: u64 = 86;
+pub const SYS_UNAME: u64 = 87;
+pub const SYS_SYNC: u64 = 88;
+pub const SYS_FSYNC: u64 = 89;
+pub const SYS_FDATASYNC: u64 = 90;
+pub const SYS_TRUNCATE: u64 = 91;
+pub const SYS_FTRUNCATE: u64 = 92;
+
+// ── Dynamic linking syscalls ──
+pub const SYS_DLOPEN: u64 = 93;
+pub const SYS_DLSYM: u64 = 94;
+pub const SYS_DLCLOSE: u64 = 95;
+
 /// Maximum syscall number
-const MAX_SYSCALL: u64 = 67;
+const MAX_SYSCALL: u64 = 95;
 
 // Global pointer to current trap frame during syscall handling (for sigreturn)
 static mut CURRENT_TRAP_FRAME: *mut TrapFrame = core::ptr::null_mut();
@@ -344,6 +376,200 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_RT_SIGRETURN => sys_rt_sigreturn(),
         // ── Kernel log control (dmesg) ──
         SYS_KLOGCTL => sys_klogctl(args[0] as i32, args[1] as u64, args[2] as usize),
+        // ── Filesystem / VFS syscalls ──
+        SYS_BRK => sys_brk(args[0]),
+        SYS_GETTIMEOFDAY => {
+            let tv_ptr = args[0] as *mut u64;
+            let tz_ptr = args[1] as *mut u64;
+            let now_us = crate::arch::timer::Timer::system_time_us();
+            if !tv_ptr.is_null() {
+                unsafe {
+                    *tv_ptr = now_us / 1_000_000;
+                    *tv_ptr.add(1) = now_us % 1_000_000;
+                }
+            }
+            if !tz_ptr.is_null() {
+                unsafe { *tz_ptr = 0; }
+            }
+            0
+        }
+        SYS_NANOSLEEP => {
+            let req_ptr = args[0] as *const u64;
+            let rem_ptr = args[1] as *mut u64;
+            let secs = if !req_ptr.is_null() {
+                unsafe { *req_ptr }
+            } else { 0 };
+            let nsecs = if !req_ptr.is_null() {
+                unsafe { *req_ptr.add(1) }
+            } else { 0 };
+            let total_ms = (secs * 1000) + (nsecs / 1_000_000);
+            sys_sleep(total_ms);
+            if !rem_ptr.is_null() {
+                unsafe { *rem_ptr = 0; *rem_ptr.add(1) = 0; }
+            }
+            0
+        }
+        SYS_STAT => {
+            let path_ptr = args[0] as *const u8;
+            let path_len = args[1] as usize;
+            let stat_ptr = args[2] as *mut u8;
+            if path_ptr.is_null() || stat_ptr.is_null() { return u64::MAX; }
+            let path_str = unsafe {
+                let mut len = 0usize;
+                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+            };
+            sys_stat(path_str, stat_ptr)
+        }
+        SYS_FSTAT => sys_fstat(args[0] as i32, args[1] as *mut u8),
+        SYS_LSTAT => {
+            let path_ptr = args[0] as *const u8;
+            if path_ptr.is_null() { return u64::MAX; }
+            let path_str = unsafe {
+                let mut len = 0usize;
+                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+            };
+            sys_stat(path_str, args[1] as *mut u8)
+        }
+        SYS_LSEEK => {
+            crate::fs::vfs::seek(args[0] as usize, args[1] as i64, args[2] as u32)
+                .unwrap_or(u64::MAX) as u64
+        }
+        SYS_GETDENTS => sys_getdents(args[0] as i32, args[1] as *mut u8, args[2] as usize),
+        SYS_MKDIR => {
+            let path_ptr = args[0] as *const u8;
+            let path_len = args[1] as usize;
+            let mode = args[2] as u32;
+            if path_ptr.is_null() { return u64::MAX; }
+            let path_str = unsafe {
+                let mut len = 0usize;
+                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+            };
+            match crate::fs::vfs::mkdir(path_str) { Ok(_) => 0, Err(_) => u64::MAX }
+        }
+        SYS_RMDIR => {
+            let path_ptr = args[0] as *const u8;
+            let path_len = args[1] as usize;
+            if path_ptr.is_null() { return u64::MAX; }
+            let path_str = unsafe {
+                let mut len = 0usize;
+                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+            };
+            match crate::fs::vfs::remove(path_str) { Ok(_) => 0, Err(_) => u64::MAX }
+        }
+        SYS_UNLINK => {
+            let path_ptr = args[0] as *const u8;
+            let path_len = args[1] as usize;
+            if path_ptr.is_null() { return u64::MAX; }
+            let path_str = unsafe {
+                let mut len = 0usize;
+                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+            };
+            match crate::fs::vfs::unlink(path_str) { Ok(_) => 0, Err(_) => u64::MAX }
+        }
+        SYS_CREAT => {
+            let path_ptr = args[0] as *const u8;
+            let path_len = args[1] as usize;
+            let mode = args[2] as u32;
+            if path_ptr.is_null() { return u64::MAX; }
+            let path_str = unsafe {
+                let mut len = 0usize;
+                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+            };
+            match crate::fs::vfs::open(path_str, crate::fs::vfs::O_WRONLY | crate::fs::vfs::O_CREAT | crate::fs::vfs::O_TRUNC) {
+                Ok(fd) => fd as u64, Err(_) => u64::MAX
+            }
+        }
+        SYS_ACCESS => {
+            // args[0] = path ptr, args[1] = mode (F_OK=0, R_OK=4, W_OK=2, X_OK=1)
+            // For now just check if file exists
+            let path_ptr = args[0] as *const u8;
+            let path_len = args[1] as usize;
+            if path_ptr.is_null() { return u64::MAX; }
+            let path_str = unsafe {
+                let mut len = 0usize;
+                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+            };
+            match crate::fs::vfs::resolve_path(path_str) { Ok(_) => 0, Err(_) => u64::MAX }
+        }
+        SYS_GETCWD => {
+            let buf_ptr = args[0] as *mut u8;
+            let buf_size = args[1] as usize;
+            if buf_ptr.is_null() || buf_size == 0 { return u64::MAX; }
+            let cwd = crate::shell::cwd();
+            let bytes = cwd.as_bytes();
+            let copy_len = bytes.len().min(buf_size - 1);
+            unsafe { core::slice::from_raw_parts_mut(buf_ptr, copy_len) }.copy_from_slice(&bytes[..copy_len]);
+            unsafe { *buf_ptr.add(copy_len) = 0; }
+            buf_ptr as u64
+        }
+        SYS_CHDIR => {
+            let path_ptr = args[0] as *const u8;
+            let path_len = args[1] as usize;
+            if path_ptr.is_null() { return u64::MAX; }
+            let path_str = unsafe {
+                let mut len = 0usize;
+                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+            };
+            match crate::fs::vfs::resolve_path(path_str) {
+                Ok(_) => { crate::shell::set_cwd(path_str); 0 }
+                Err(_) => u64::MAX
+            }
+        }
+        SYS_TIME => {
+            let tloc = args[0] as *mut u64;
+            let now_sec = crate::arch::timer::Timer::system_time_us() / 1_000_000;
+            if !tloc.is_null() {
+                unsafe { *tloc = now_sec; }
+            }
+            now_sec
+        }
+        SYS_UTIME => {
+            // args[0] = path, args[1] = utimbuf ptr
+            // Stub for now
+            0
+        }
+        SYS_GETPPID => crate::sched::get_parent_pid(),
+        SYS_SETSID => crate::sched::create_session(),
+        SYS_UNAME => {
+            let buf_ptr = args[0] as *mut u8;
+            if buf_ptr.is_null() { return u64::MAX; }
+            let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, 6 * 65) };
+            for b in buf.iter_mut() { *b = 0; }
+            let name = b"lobster-os\0"; buf[..name.len()].copy_from_slice(name);
+            let node = b"lobster\0"; buf[65..65+node.len()].copy_from_slice(node);
+            let rel = b"0.2.0\0"; buf[130..130+rel.len()].copy_from_slice(rel);
+            let ver = b"lobster-os 0.2.0\0"; buf[195..195+ver.len()].copy_from_slice(ver);
+            let mach = b"aarch64\0"; buf[260..260+mach.len()].copy_from_slice(mach);
+            0
+        }
+        SYS_SYNC => { crate::fs::vfs::sync(); 0 },
+        SYS_FSYNC => sys_fsync(args[0] as i32),
+        SYS_FDATASYNC => sys_fsync(args[0] as i32),
+        SYS_TRUNCATE => {
+            let path_ptr = args[0] as *const u8;
+            let path_len = args[1] as usize;
+            let length = args[2] as u64;
+            if path_ptr.is_null() { return u64::MAX; }
+            let path_str = unsafe {
+                let mut len = 0usize;
+                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+            };
+            sys_truncate(path_str, length)
+        }
+        SYS_FTRUNCATE => sys_ftruncate(args[0] as i32, args[1] as u64),
+        // ── Dynamic linking syscalls ──
+        SYS_DLOPEN => sys_dlopen(args[0], args[1] as u32),
+        SYS_DLSYM => sys_dlsym(args[0] as u64, args[1]),
+        SYS_DLCLOSE => sys_dlclose(args[0] as u64),
         _ => {
             // Try Linux ABI compatibility layer for unrecognized syscalls
             linux_compat::dispatch_linux(syscall_num, args)
@@ -1595,4 +1821,87 @@ mod arch_syscalls {
         );
         ret
     }
+}
+
+/// sys_stat — fill stat struct for a path
+fn sys_stat(path: &str, stat_ptr: *mut u8) -> u64 {
+    match crate::fs::vfs::stat(path) {
+        Some(meta) => {
+            unsafe {
+                // Linux stat struct (128 bytes on AArch64)
+                let buf = core::slice::from_raw_parts_mut(stat_ptr, 128);
+                for b in buf.iter_mut() { *b = 0; }
+                // st_mode
+                *(stat_ptr as *mut u32) = meta.file_type as u32 | meta.permissions;
+                // st_size
+                *(stat_ptr.add(48) as *mut u64) = meta.size;
+                // st_uid, st_gid
+                *(stat_ptr.add(64) as *mut u32) = meta.uid;
+                *(stat_ptr.add(68) as *mut u32) = meta.gid;
+                // st_mtime (seconds)
+                *(stat_ptr.add(88) as *mut u64) = meta.modified_time;
+            }
+            0
+        }
+        None => u64::MAX
+    }
+}
+
+/// sys_fstat — fill stat struct for an open fd
+fn sys_fstat(fd: i32, stat_ptr: *mut u8) -> u64 {
+    if fd < 0 || fd > 2 { return u64::MAX; }
+    unsafe {
+        let buf = core::slice::from_raw_parts_mut(stat_ptr, 128);
+        for b in buf.iter_mut() { *b = 0; }
+        // stdout/stderr/stdin are char devices
+        *(stat_ptr as *mut u32) = 0o100644; // regular file for simplicity
+        *(stat_ptr.add(48) as *mut u64) = 0;
+        *(stat_ptr.add(64) as *mut u32) = 0;
+        *(stat_ptr.add(68) as *mut u32) = 0;
+        *(stat_ptr.add(88) as *mut u64) = 0;
+    }
+    0
+}
+
+/// sys_getdents — read directory entries
+fn sys_getdents(fd: i32, buf_ptr: *mut u8, buf_size: usize) -> u64 {
+    // For now, only support fd opened via VFS
+    // This is a simplified implementation
+    if buf_ptr.is_null() || buf_size == 0 { return u64::MAX; }
+    0 // Return 0 entries (end of directory)
+}
+
+/// sys_fsync — sync file data (already in memory for VFS)
+fn sys_fsync(fd: i32) -> u64 {
+    if fd < 0 { return u64::MAX; }
+    0 // VFS is in-memory, nothing to flush
+}
+
+/// sys_truncate — truncate file by path
+fn sys_truncate(path: &str, length: u64) -> u64 {
+    match crate::fs::vfs::truncate(path, length) {
+        Ok(_) => 0,
+        Err(_) => u64::MAX
+    }
+}
+
+/// sys_ftruncate — truncate file by fd
+fn sys_ftruncate(fd: i32, length: u64) -> u64 {
+    // VFS ftruncate not yet implemented
+    u64::MAX
+}
+
+/// sys_dlopen — load shared library
+fn sys_dlopen(_path_ptr: u64, _flags: u32) -> u64 {
+    0 // Not implemented yet
+}
+
+/// sys_dlsym — lookup symbol in shared library
+fn sys_dlsym(_handle: u64, _symbol_ptr: u64) -> u64 {
+    0 // Not implemented yet
+}
+
+/// sys_dlclose — unload shared library
+fn sys_dlclose(_handle: u64) -> u64 {
+    0 // Not implemented yet
 }

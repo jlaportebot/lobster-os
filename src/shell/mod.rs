@@ -3324,7 +3324,7 @@ fn cmd_reboot() {
 static mut CWD: [u8; 256] = [b'/'; 256];
 static mut CWD_LEN: usize = 1;
 
-fn cwd() -> &'static str {
+pub fn cwd() -> &'static str {
     unsafe {
         if CWD_LEN == 0 || CWD[0] == 0 {
             CWD[0] = b'/';
@@ -3334,7 +3334,7 @@ fn cwd() -> &'static str {
     }
 }
 
-fn set_cwd(path: &str) {
+pub fn set_cwd(path: &str) {
     unsafe {
         let len = path.len().min(255);
         CWD[..len].copy_from_slice(&path.as_bytes()[..len]);

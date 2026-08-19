@@ -1280,3 +1280,31 @@ pub fn set_user_brk(new_brk: u64) -> bool {
         }
     }
 }
+
+/// Get the parent PID of the current process
+pub fn get_parent_pid() -> u64 {
+    let pid = current_pid();
+    if let Some(idx) = find_task_index(pid) {
+        unsafe {
+            if let Some(ref task) = TASK_TABLE[idx] {
+                return task.parent_pid;
+            }
+        }
+    }
+    0 // No parent (init process)
+}
+
+/// Create a new session (setsid syscall)
+pub fn create_session() -> u64 {
+    let pid = current_pid();
+    if let Some(idx) = find_task_index(pid) {
+        unsafe {
+            if let Some(ref mut task) = TASK_TABLE[idx] {
+                task.sid = pid;
+                task.pgid = pid;
+                return pid;
+            }
+        }
+    }
+    u64::MAX // Error
+}
