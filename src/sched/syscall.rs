@@ -1886,22 +1886,22 @@ fn sys_truncate(path: &str, length: u64) -> u64 {
 }
 
 /// sys_ftruncate — truncate file by fd
-fn sys_ftruncate(fd: i32, length: u64) -> u64 {
+fn sys_ftruncate(_fd: i32, _length: u64) -> u64 {
     // VFS ftruncate not yet implemented
     u64::MAX
 }
 
 /// sys_dlopen — load shared library
-fn sys_dlopen(_path_ptr: u64, _flags: u32) -> u64 {
-    0 // Not implemented yet
+fn sys_dlopen(path_ptr: u64, flags: u32) -> u64 {
+    crate::sched::shared_lib::sys_dlopen(path_ptr, flags)
 }
 
 /// sys_dlsym — lookup symbol in shared library
-fn sys_dlsym(_handle: u64, _symbol_ptr: u64) -> u64 {
-    0 // Not implemented yet
+fn sys_dlsym(handle: u64, symbol_ptr: u64) -> u64 {
+    crate::sched::shared_lib::sys_dlsym(handle, symbol_ptr)
 }
 
 /// sys_dlclose — unload shared library
-fn sys_dlclose(_handle: u64) -> u64 {
-    0 // Not implemented yet
+fn sys_dlclose(handle: u64) -> u64 {
+    crate::sched::shared_lib::sys_dlclose(handle)
 }

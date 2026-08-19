@@ -17,6 +17,7 @@ pub mod dlinker;
 pub mod elf;
 pub mod init;
 pub mod process;
+pub mod shared_lib;
 pub mod signal;
 pub mod syscall;
 
