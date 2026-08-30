@@ -142,8 +142,13 @@ pub struct VfsNode {
     /// For directories: list of child entries
     pub dir_entries: [DirEntry; MAX_DIR_ENTRIES],
     pub dir_count: usize,
-    /// For regular files: inline data storage
-    pub data: [u8; MAX_FILE_DATA],
+    /// For regular files: heap-backed data storage.
+    /// `data_ptr` is null until the file is written; the buffer is lazily
+    /// allocated so directories and empty nodes cost nothing. This replaces
+    /// the old per-node inline `[u8; MAX_FILE_DATA]` array, which inflated
+    /// the kernel .bss by ~512KB per node and hard-capped the node table.
+    pub data_ptr: *mut u8,
+    pub data_cap: usize,
     pub data_len: u64,
 }
 
@@ -166,7 +171,8 @@ impl VfsNode {
             parent_id: 0,
             dir_entries: [DirEntry::empty(); MAX_DIR_ENTRIES],
             dir_count: 0,
-            data: [0u8; MAX_FILE_DATA],
+            data_ptr: core::ptr::null_mut(),
+            data_cap: 0,
             data_len: 0,
         }
     }
@@ -182,6 +188,57 @@ impl VfsNode {
         core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("?")
     }
 
+    /// Current file contents (length = data_len). Returns empty slice
+    /// when the file has not yet been written.
+    pub fn data(&self) -> &[u8] {
+        if self.data_ptr.is_null() {
+            return &[];
+        }
+        unsafe { core::slice::from_raw_parts(self.data_ptr, self.data_len as usize) }
+    }
+
+    /// Ensure the backing buffer can hold at least `cap` bytes, growing it
+    /// on the heap if needed. Content already present is preserved.
+    fn ensure_capacity(&mut self, cap: usize) -> Result<(), VfsError> {
+        if cap <= self.data_cap {
+            return Ok(());
+        }
+        // Lazily allocate and copy from the previous buffer (if any).
+        let new_cap = cap; // exact-fit; callers already bound writes to MAX_FILE_DATA
+        let mut new_box = alloc::vec![0u8; new_cap].into_boxed_slice();
+        if !self.data_ptr.is_null() {
+            let old_len = (self.data_len as usize).min(new_cap);
+            let old = unsafe { core::slice::from_raw_parts(self.data_ptr, old_len) };
+            new_box[..old_len].copy_from_slice(old);
+            // Release the previous buffer.
+            let _ = unsafe {
+                alloc::boxed::Box::<[u8]>::from_raw(core::slice::from_raw_parts_mut(
+                    self.data_ptr,
+                    old_len,
+                ))
+            };
+        }
+        self.data_ptr = alloc::boxed::Box::into_raw(new_box) as *mut u8;
+        self.data_cap = new_cap;
+        Ok(())
+    }
+
+    /// Replace the entire file contents with `src` (used by initrd loader,
+    /// symlink targets, and on-demand writers).
+    pub fn set_data(&mut self, src: &[u8]) -> Result<(), VfsError> {
+        if src.len() > MAX_FILE_DATA {
+            return Err(VfsError::OutOfMemory);
+        }
+        self.ensure_capacity(src.len())?;
+        if !self.data_ptr.is_null() {
+            let dst = unsafe { core::slice::from_raw_parts_mut(self.data_ptr, src.len()) };
+            dst.copy_from_slice(src);
+        }
+        self.data_len = src.len() as u64;
+        self.metadata.size = src.len() as u64;
+        Ok(())
+    }
+
     pub fn read(&self, offset: u64, buf: &mut [u8]) -> Result<usize, VfsError> {
         if self.metadata.file_type != FileType::RegularFile {
             return Err(VfsError::NotAFile);
@@ -192,7 +249,7 @@ impl VfsNode {
         let remaining = (self.data_len - offset) as usize;
         let to_read = buf.len().min(remaining);
         let src_start = offset as usize;
-        buf[..to_read].copy_from_slice(&self.data[src_start..src_start + to_read]);
+        buf[..to_read].copy_from_slice(&self.data()[src_start..src_start + to_read]);
         Ok(to_read)
     }
 
@@ -206,7 +263,12 @@ impl VfsNode {
         if to_write == 0 {
             return Err(VfsError::OutOfMemory);
         }
-        self.data[offset_usize..offset_usize + to_write].copy_from_slice(&buf[..to_write]);
+        self.ensure_capacity(offset_usize + to_write)?;
+        if !self.data_ptr.is_null() {
+            let dst =
+                unsafe { core::slice::from_raw_parts_mut(self.data_ptr, offset_usize + to_write) };
+            dst[offset_usize..offset_usize + to_write].copy_from_slice(&buf[..to_write]);
+        }
         self.data_len = self.data_len.max(offset + to_write as u64);
         self.metadata.size = self.data_len;
         Ok(to_write)
@@ -274,7 +336,7 @@ impl MountPoint {
 }
 
 /// Maximum number of nodes in the VFS (reduced to fit 256KB file data)
-const MAX_VFS_NODES: usize = 16;
+const MAX_VFS_NODES: usize = 128;
 
 /// Maximum mount points
 const MAX_MOUNT_POINTS: usize = 8;
@@ -367,8 +429,9 @@ pub fn alloc_node(name: &str, file_type: FileType, parent_id: u64) -> Result<u64
         node.fs_id = 0;
         node.parent_id = parent_id;
         node.dir_count = 0;
+        node.data_ptr = core::ptr::null_mut();
+        node.data_cap = 0;
         node.data_len = 0;
-        node.data = [0u8; MAX_FILE_DATA];
         VFS_NODE_COUNT += 1;
 
         // Add to parent directory
@@ -1037,10 +1100,8 @@ pub fn symlink(target: &str, link_path: &str) -> Result<u64, VfsError> {
         if target_bytes.len() > 255 {
             return Err(VfsError::InvalidPath);
         }
-        node.data_len = target_bytes.len() as u64;
+        node.set_data(target_bytes)?;
         node.metadata.size = target_bytes.len() as u64;
-        // Store symlink target in inline data buffer
-        node.data[..target_bytes.len()].copy_from_slice(target_bytes);
     }
     Ok(link_id)
 }
@@ -1286,12 +1347,16 @@ pub fn truncate(path: &str, length: u64) -> Result<(), VfsError> {
     }
     
     if length <= MAX_FILE_DATA as u64 {
+        // Growing the file: ensure backing buffer covers the new length so
+        // reads of the extended region stay in bounds (zero-filled).
+        let need = length as usize;
+        node.ensure_capacity(need)?;
+        if length as usize > node.data_len as usize && need <= node.data_cap && !node.data_ptr.is_null() {
+            let dst = unsafe { core::slice::from_raw_parts_mut(node.data_ptr, node.data_cap) };
+            dst[node.data_len as usize..].fill(0);
+        }
         node.data_len = length;
         node.metadata.size = length;
-        // If extending, zero-fill new space
-        if length > node.data_len as u64 {
-            // In a real implementation, we'd extend the backing store
-        }
     } else {
         return Err(VfsError::InvalidOffset);
     }

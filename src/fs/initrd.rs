@@ -134,14 +134,18 @@ pub unsafe fn load_initrd(base: *const u8, size: usize) -> Result<(), VfsError> 
         let node_id = alloc_node(entry_name, file_type, initrd_inode)?;
         if file_type == FileType::RegularFile && filesize > 0 {
             if let Some(node) = get_node_mut(node_id) {
-                // Copy initrd data into inline buffer (up to MAX_FILE_DATA)
+                // Copy initrd data into heap-backed buffer (up to MAX_FILE_DATA).
+                // set_data() allocates lazily and records data_len + size.
                 let copy_size = filesize.min(crate::fs::vfs::MAX_FILE_DATA);
                 let src = unsafe {
                     core::slice::from_raw_parts(base.add(data_offset), copy_size)
                 };
-                node.data[..copy_size].copy_from_slice(src);
-                node.data_len = filesize as u64;
-                node.metadata.size = filesize as u64;
+                let _ = node.set_data(src);
+                if filesize > copy_size {
+                    // Truncated to fit: reflect the clamped length.
+                    node.data_len = copy_size as u64;
+                    node.metadata.size = copy_size as u64;
+                }
             }
         }
 
