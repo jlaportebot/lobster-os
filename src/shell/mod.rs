@@ -899,6 +899,7 @@ fn run_builtin(
             Uart10::puts("Package manager not available on x86_64.\r\n");
             0
         }
+        "gh" => cmd_gh(args, argc),
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "panel" => {
             cmd_panel(args, argc);
@@ -961,7 +962,7 @@ fn run_builtin(
         "run" => cmd_run(args, argc),
         "cc" => cmd_cc(args, argc),
         // Text editor
-        "vi" | "edit" | "ed" | "nano" => cmd_editor(args, argc),
+        "vi" | "edit" | "ed" | "nano" | "code" => cmd_editor(args, argc),
         // Text processing
         "grep" => cmd_grep(args, argc),
         "sort" => cmd_sort(args, argc),
@@ -1062,7 +1063,8 @@ fn cmd_help() {
     Uart10::puts("  ping <host>      Send ICMP echo to host\r\n");
     Uart10::puts("  host <name>       DNS lookup\r\n");
     Uart10::puts("  netstat          Show network socket status\r\n");
-    Uart10::puts("  pkg <cmd>        Package manager (install/remove/list)\r\n");
+    Uart10::puts("  pkg <cmd>        Package manager (install/remove/list, update/search)\r\n");
+    Uart10::puts("  gh <cmd>         GitHub CLI: auth login|status|logout, api <endpoint>, repo list, user\r\n");
     Uart10::puts("  which <cmd>     Locate a command\r\n");
     Uart10::puts("  uname           Show system information\r\n");
     Uart10::puts("  date            Show system time/uptime\r\n");
@@ -1130,7 +1132,9 @@ fn cmd_uptime() {
 }
 
 fn cmd_mem() {
-    let (total_frames, used_frames, free_frames) = crate::memory::frame_alloc::stats();
+    // stats() returns (total, allocated, first_free); free = total - allocated
+    let (total_frames, used_frames, _first_free) = crate::memory::frame_alloc::stats();
+    let free_frames = total_frames.saturating_sub(used_frames);
     let page_size = 4096u64;
     let total_kb = (total_frames as u64 * page_size) / 1024;
     let used_kb = (used_frames as u64 * page_size) / 1024;
@@ -4109,7 +4113,7 @@ fn cmd_which(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         "cat", "ls", "cd", "pwd", "mkdir", "rm", "mv", "chmod", "chown",
         "touch", "cp", "head", "tail", "wc", "du", "df", "free", "which",
         "uname", "date", "find", "run", "svc", "runlevel", "reboot", "halt",
-        "cc", "curl", "wget", "pkg", "vi", "edit", "ed", "nano",
+        "cc", "curl", "wget", "pkg", "gh", "vi", "edit", "ed", "nano",
         "grep", "sort", "cut", "tr", "uniq", "seq", "yes", "tee",
         "stat", "file", "ln", "basename", "dirname", "sleep", "man", "who",
     ];
@@ -4807,6 +4811,182 @@ fn cmd_netstat() -> i32 {
 // ============================================================
 
 /// Text editor (vi/ed/edit/nano) — simple line-based editor
+/// GitHub CLI (gh) — lightweight GitHub API client over the lobster-net proxy.
+/// Token is stored in /etc/github_token (a VFS file). Because the lobster-net
+/// device terminates TLS on the host via curl, HTTPS to api.github.com works.
+/// Commands: auth login|status|logout, api <endpoint>, repo list [owner], user
+const GH_TOKEN_PATH: &str = "/etc/github_token";
+
+fn gh_read_token() -> Option<alloc::string::String> {
+    match crate::fs::vfs::read_file(GH_TOKEN_PATH) {
+        Ok(data) => {
+            let trimmed = data.iter().copied()
+                .take_while(|&b| b != b'\n' && b != b'\r' && b != b' ' && b != b'\t')
+                .collect::<alloc::vec::Vec<u8>>();
+            if trimmed.is_empty() {
+                None
+            } else {
+                alloc::string::String::from_utf8(trimmed).ok()
+            }
+        }
+        Err(_) => None,
+    }
+}
+
+fn gh_write_token(token: &str) -> bool {
+    crate::fs::vfs::write_file(GH_TOKEN_PATH, token.as_bytes()).is_ok()
+}
+
+/// GET an api.github.com endpoint through the lobster-net proxy, using the
+/// stored token if present. Prints status and returns the raw body.
+fn gh_get(endpoint: &str) -> Option<alloc::vec::Vec<u8>> {
+    let url = alloc::format!("https://api.github.com{}", endpoint);
+    if let Some(token) = gh_read_token() {
+        crate::drivers::lobster_net::http_fetch_auth(&url, &token)
+    } else {
+        crate::drivers::lobster_net::http_fetch(&url)
+    }
+}
+
+fn cmd_gh(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc < 2 || args[1] == "help" {
+        Uart10::puts("Usage: gh <command> [args]\r\n");
+        Uart10::puts("  gh auth login     Save a GitHub Personal Access Token\r\n");
+        Uart10::puts("  gh auth status    Show login state\r\n");
+        Uart10::puts("  gh auth logout    Remove the saved token\r\n");
+        Uart10::puts("  gh api <endpoint> GET https://api.github.com<endpoint>\r\n");
+        Uart10::puts("  gh repo list [owner]  List an owner's public repos\r\n");
+        Uart10::puts("  gh user           Show the authenticated user (needs token)\r\n");
+        return if argc < 2 { 1 } else { 0 };
+    }
+
+    if !net_available() {
+        net_unavailable_msg("gh");
+        return 1;
+    }
+
+    match args[1] {
+        "auth" => {
+            if argc < 3 {
+                Uart10::puts("Usage: gh auth <login|status|logout>\r\n");
+                return 1;
+            }
+            match args[2] {
+                "login" => {
+                    Uart10::puts("Paste your GitHub Personal Access Token (SCAN / repo scope): ");
+                    let mut buf = [0u8; 256];
+                    let saved_echo = crate::drivers::serial_input::echo_enabled();
+                    crate::drivers::serial_input::set_echo(false);
+                    let len = crate::drivers::serial_input::read_line_blocking(&mut buf);
+                    crate::drivers::serial_input::set_echo(saved_echo);
+                    let token = core::str::from_utf8(&buf[..len]).unwrap_or("").trim();
+                    if token.is_empty() {
+                        crate::println!("gh: no token entered");
+                        return 1;
+                    }
+                    // Validate token charset matches the device allowlist
+                    let ok = token.bytes().all(|b| {
+                        b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.'
+                    });
+                    if !ok {
+                        crate::println!("gh: token contains unsupported characters");
+                        return 1;
+                    }
+                    if gh_write_token(token) {
+                        crate::println!("");
+                        crate::println!("✓ Authenticated. Token saved to /etc/github_token");
+                        crate::println!("  Test with: gh api /user  or  gh user");
+                        0
+                    } else {
+                        crate::println!("gh: failed to save token to /etc/github_token");
+                        1
+                    }
+                }
+                "status" => {
+                    if gh_read_token().is_some() {
+                        crate::println!("Logged in to GitHub (token present in /etc/github_token)");
+                    } else {
+                        crate::println!("Not logged in. Run: gh auth login");
+                    }
+                    0
+                }
+                "logout" => {
+                    if crate::fs::vfs::remove(GH_TOKEN_PATH).is_ok() {
+                        crate::println!("Logged out. Removed /etc/github_token");
+                    } else {
+                        crate::println!("No token to revoke (already logged out)");
+                    }
+                    0
+                }
+                _ => {
+                    crate::println!("gh auth: unknown subcommand '{}'", args[2]);
+                    1
+                }
+            }
+        }
+        "user" => {
+            match gh_get("/user") {
+                Some(body) => {
+                    let s = core::str::from_utf8(&body).unwrap_or("<binary>");
+                    crate::println!("{}", s);
+                    0
+                }
+                None => {
+                    crate::println!("gh: request failed (are you logged in? see 'gh auth status')");
+                    1
+                }
+            }
+        }
+        "api" => {
+            if argc < 3 {
+                Uart10::puts("Usage: gh api <endpoint>   e.g. gh api /repos/jlaportebot/lobster-os\r\n");
+                return 1;
+            }
+            let mut endpoint = alloc::string::String::from(args[2]);
+            if !endpoint.starts_with('/') {
+                endpoint.insert(0, '/');
+            }
+            match gh_get(&endpoint) {
+                Some(body) => {
+                    let s = core::str::from_utf8(&body).unwrap_or("<binary>");
+                    crate::println!("{}", s);
+                    0
+                }
+                None => {
+                    crate::println!("gh: request failed (check endpoint / token)");
+                    1
+                }
+            }
+        }
+        "repo" => {
+            if argc < 3 || args[2] != "list" {
+                Uart10::puts("Usage: gh repo list [owner]  (defaults to /user/repos)\r\n");
+                return 1;
+            }
+            let endpoint = if argc >= 4 {
+                alloc::format!("/users/{}/repos", args[3])
+            } else {
+                alloc::string::String::from("/user/repos")
+            };
+            match gh_get(&endpoint) {
+                Some(body) => {
+                    let s = core::str::from_utf8(&body).unwrap_or("<binary>");
+                    crate::println!("{}", s);
+                    0
+                }
+                None => {
+                    crate::println!("gh: failed to list repos");
+                    1
+                }
+            }
+        }
+        _ => {
+            crate::println!("gh: unknown command '{}' (see 'gh help')", args[1]);
+            1
+        }
+    }
+}
+
 /// Usage: vi <file>    — opens file for editing
 /// In editor mode, each line typed is appended to the buffer.
 /// Commands: . = save & quit, :w = save, :q = quit, :wq = save & quit

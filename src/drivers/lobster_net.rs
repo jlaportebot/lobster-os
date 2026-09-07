@@ -25,8 +25,13 @@ const LOBSTER_NET_CMD: u64 = 0x24;          // write-only: 1=fetch, 2=reset, 3=c
 const LOBSTER_NET_STATUS: u64 = 0x28;       // read-only: 0=idle, 1=busy, 2=done, 3=error
 const LOBSTER_NET_RESP_LEN: u64 = 0x2C;     // read-only
 const LOBSTER_NET_RESP_CODE: u64 = 0x30;    // read-only
+const LOBSTER_NET_AUTH_MODE: u64 = 0x34;    // read/write: 0=none, 1=bearer
 const LOBSTER_NET_URL_DATA: u64 = 0x100;    // URL/source bytes (write)
 const LOBSTER_NET_RESP_DATA: u64 = 0x1000;  // response body/ELF (read)
+
+/// Auth modes for the lobster-net device (match hw/misc/lobster_net.c)
+const AUTH_NONE: u32 = 0;
+const AUTH_BEARER: u32 = 1;
 
 /// Status codes
 const NET_STATUS_IDLE: u32 = 0;
@@ -102,6 +107,17 @@ pub unsafe fn init() {
 /// Fetch a URL via the lobster-net device
 /// Returns Some(response_body) on success, None on failure
 pub fn http_fetch(url: &str) -> Option<alloc::vec::Vec<u8>> {
+    fetch_impl(url, None)
+}
+
+/// Fetch a URL with an optional bearer-token Authorization header.
+/// The token is carried to the device as "<token>\n<url>" and the device
+/// appends `-H "Authorization: Bearer <token>"` to its host curl command.
+pub fn http_fetch_auth(url: &str, token: &str) -> Option<alloc::vec::Vec<u8>> {
+    fetch_impl(url, Some(token))
+}
+
+fn fetch_impl(url: &str, token: Option<&str>) -> Option<alloc::vec::Vec<u8>> {
     // Check device is present
     let magic = unsafe { mmio_read32(LOBSTER_NET_MAGIC) };
     if magic != 0x4C4E4554 {
@@ -109,27 +125,50 @@ pub fn http_fetch(url: &str) -> Option<alloc::vec::Vec<u8>> {
     }
 
     let url_bytes = url.as_bytes();
-    if url_bytes.len() > MAX_URL_LEN {
-        return None;
-    }
 
     // Reset device first to clear any previous state
     unsafe { mmio_write32(LOBSTER_NET_CMD, NET_CMD_RESET); }
 
-    // Write URL length
-    unsafe {
-        mmio_write32(LOBSTER_NET_URL_LEN, url_bytes.len() as u32);
-    }
+    // When authenticating, prepend "<token>\n" to the payload written to the
+    // URL region and set AUTH_MODE; otherwise write the bare URL.
+    let (payload_len, auth_mode) = if let Some(tok) = token {
+        let t = tok.as_bytes();
+        if t.len() + 1 + url_bytes.len() > MAX_URL_LEN {
+            return None;
+        }
+        // Validate token chars to match the device-side allowlist
+        for &b in t {
+            if !(b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.') {
+                unsafe { mmio_write32(LOBSTER_NET_CMD, NET_CMD_RESET); }
+                return None;
+            }
+        }
+        (t.len() + 1 + url_bytes.len(), AUTH_BEARER)
+    } else {
+        (url_bytes.len(), AUTH_NONE)
+    };
 
-    // Write URL bytes
+    // Write auth mode
+    unsafe { mmio_write32(LOBSTER_NET_AUTH_MODE, auth_mode); }
+
+    // Write payload length
+    unsafe { mmio_write32(LOBSTER_NET_URL_LEN, payload_len as u32); }
+
+    // Write token prefix (if any) followed by URL bytes, contiguously
     unsafe {
-        mmio_write_bytes(LOBSTER_NET_URL_DATA, url_bytes);
+        let dst = (LOBSTER_NET_BASE + LOBSTER_NET_URL_DATA) as *mut u8;
+        let mut off = 0usize;
+        if let Some(tok) = token {
+            core::ptr::copy_nonoverlapping(tok.as_ptr(), dst, tok.len());
+            off = tok.len();
+            *dst.add(off) = b'\n';
+            off += 1;
+        }
+        core::ptr::copy_nonoverlapping(url_bytes.as_ptr(), dst.add(off), url_bytes.len());
     }
 
     // Trigger fetch
-    unsafe {
-        mmio_write32(LOBSTER_NET_CMD, NET_CMD_FETCH);
-    }
+    unsafe { mmio_write32(LOBSTER_NET_CMD, NET_CMD_FETCH); }
 
     // Poll for completion
     for _ in 0..50000 {
