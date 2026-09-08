@@ -11,18 +11,6 @@
 
 ---
 
-## 🎬 Acceptance Demo
-
-[![LobsterOS Acceptance Demo](https://img.youtube.com/vi/placeholder/0.jpg)](acceptance_demo.mp4)
-
-**Watch the full acceptance demonstration (1:02):**
-
-https://github.com/jlaportebot/lobster-os/blob/main/acceptance_demo.mp4
-
-*The video demonstrates: bare-metal boot → shell with 100+ commands → C compilation to AArch64 ELF → user process execution → interactive vi editor → MicroPython REPL → network via lobster-net MMIO proxy → package manager → GitHub CLI → filesystem & multi-user management. All recorded from live QEMU sessions — no simulation.*
-
----
-
 ## ✨ Features
 
 ### Core Kernel
