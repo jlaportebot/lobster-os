@@ -1,10 +1,23 @@
 //! Framebuffer driver — BCM2835 mailbox property channel for display setup
+//!
+//! QEMU raspi5b: bcm2835_fb (created by base peripherals) places framebuffer at vcram_base + 0x100000 = 0x8100000
+//! Default resolution: 640x480 @ 16bpp. Property channel works on QEMU raspi5b when mailbox base is correct.
 
+use crate::memory::{phys_to_virt, PhysAddr, PHYS_MAP_OFFSET};
 use crate::println;
 
 /// Mailbox base address (mapped via BCM2712 peripheral base)
-const MAILBOX_BASE: u64 = 0x10_7C00_B880;
-const MAILBOX_READ: u64 = MAILBOX_BASE;
+#[cfg(all(not(feature = "qemu"), not(feature = "qemu_raspi5b")))]
+const MAILBOX_BASE: u64 = 0x10_7C00_B880; // BCM2712 (real Pi 5) - SOC peripheral base + offset
+
+#[cfg(all(feature = "qemu"), not(feature = "qemu_raspi5b"))]
+const MAILBOX_BASE: u64 = 0xFE_00_B880; // BCM2711 (QEMU raspi4b) - peri_base (0xFE000000) + 0xB880
+
+#[cfg(feature = "qemu_raspi5b")]
+const MAILBOX_BASE: u64 = 0x7C00_B880; // BCM2711-style at peri_base (0x7C000000) + 0xB880 (QEMU raspi5b)
+
+/// Mailbox register offsets (relative to MAILBOX_BASE)
+const MAILBOX_READ: u64 = MAILBOX_BASE + 0x00;
 const MAILBOX_STATUS: u64 = MAILBOX_BASE + 0x18;
 const MAILBOX_WRITE: u64 = MAILBOX_BASE + 0x20;
 
@@ -15,7 +28,7 @@ const CHANNEL_PROPERTY: u32 = 8;
 const MAILBOX_FULL: u32 = 0x80000000;
 const MAILBOX_EMPTY: u32 = 0x40000000;
 
-/// Property tag IDs
+/// Property tag IDs (from raspberrypi-fw-defs.h)
 const TAG_ALLOCATE_BUFFER: u32 = 0x00040001;
 const TAG_SET_PHYSICAL_SIZE: u32 = 0x00048003;
 const TAG_SET_VIRTUAL_SIZE: u32 = 0x00048004;
@@ -27,7 +40,7 @@ const TAG_GET_PITCH: u32 = 0x00040008;
 const TAG_RELEASE_BUFFER: u32 = 0x00048001;
 const TAG_END: u32 = 0x00000000;
 
-/// Property tag request code
+/// Property tag request/response codes
 const CODE_REQUEST: u32 = 0x00000000;
 const CODE_RESPONSE_SUCCESS: u32 = 0x80000000;
 
@@ -125,16 +138,21 @@ unsafe fn mailbox_write(value: u32) {
     core::ptr::write_volatile(MAILBOX_WRITE as *mut u32, value);
 }
 
+/// Convert a virtual kernel address to physical (bus) address for DMA/mailbox
+/// On this kernel, virtual = physical + PHYS_MAP_OFFSET
+fn virt_to_phys(virt: u64) -> u64 {
+    virt - PHYS_MAP_OFFSET
+}
+
 /// Send a property message and wait for response
 unsafe fn send_property_message(_len: usize) -> Result<(), FbError> {
-    let buf_addr = &PROP_BUFFER as *const PropertyBuffer as u32;
+    // Get the virtual address of our buffer
+    let buf_virt = &PROP_BUFFER as *const PropertyBuffer as u64;
 
-    // Send the bus address (convert virtual to bus address for mailbox)
-    // On RPi, peripheral bus address = virtual address - 0x10_0000_0000 + 0x0C000000
-    // Simplified: assume the buffer is in a region the GPU can access
-    let bus_addr = buf_addr & 0x3FFFFFFF; // Convert to bus address range
+    // Convert to physical (bus) address for the GPU/mailbox
+    let bus_addr = virt_to_phys(buf_virt);
 
-    mailbox_write(bus_addr | CHANNEL_PROPERTY);
+    mailbox_write((bus_addr as u32) | CHANNEL_PROPERTY);
 
     // Wait for response
     let response_addr = mailbox_read();
@@ -253,7 +271,7 @@ pub fn init(width: u32, height: u32, bpp: u32) -> Result<FramebufferInfo, FbErro
                     resp_bpp = buf[tag_idx + 3];
                 }
                 TAG_ALLOCATE_BUFFER => {
-                    // Response: alignment/result, then framebuffer address
+                    // Response: alignment/result, then framebuffer address, then size
                     fb_addr = buf[tag_idx + 4] as u64;
                     fb_size = buf[tag_idx + 5] as u64;
                 }

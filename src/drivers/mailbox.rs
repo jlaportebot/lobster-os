@@ -2,11 +2,11 @@
 
 /// Mailbox base address
 #[cfg(all(not(feature = "qemu"), not(feature = "qemu_raspi5b")))]
-const MAILBOX_BASE: u64 = 0x10_7C00_B880; // BCM2712 (real Pi 5)
-#[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
-const MAILBOX_BASE: u64 = 0xFE_00_B880; // BCM2711 (QEMU raspi4b)
+const MAILBOX_BASE: u64 = 0x10_7C00_B880; // BCM2712 (real Pi 5) - SOC peripheral base + offset
+#[cfg(all(feature = "qemu"), not(feature = "qemu_raspi5b"))]
+const MAILBOX_BASE: u64 = 0xFE_00_B880; // BCM2711 (QEMU raspi4b) - peri_base (0xFE000000) + 0xB880
 #[cfg(feature = "qemu_raspi5b")]
-const MAILBOX_BASE: u64 = 0x7C01_3880; // BCM2711-style (QEMU raspi5b)
+const MAILBOX_BASE: u64 = 0x7C00_B880; // BCM2711-style at peri_base (0x7C000000) + 0xB880 (QEMU raspi5b)
 
 /// Mailbox registers
 const MAILBOX_READ: u64 = MAILBOX_BASE + 0x00;
