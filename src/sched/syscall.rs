@@ -1026,6 +1026,7 @@ fn sys_exit(code: i64) -> u64 {
             if let Some(ref mut task) = crate::sched::TASK_TABLE[idx] {
                 task.state = crate::sched::TaskState::Zombie;
                 task.exit_code = code;
+                crate::sched::set_coop_exit_code(code);
                 println!("[sched] PID {} exited with code {}", pid, code);
             }
         }

@@ -3714,7 +3714,7 @@ fn cmd_run(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         match crate::sched::spawn_demo() {
             Some(pid) => {
                 crate::println!("run: hello-EL0 demo spawned as PID {}", pid);
-                let exit_code = crate::sched::run_and_wait(pid);
+                let exit_code = unsafe { crate::sched::run_and_wait(pid as u64) };
                 crate::println!("run: process exited with code {}", exit_code);
                 0
             }
@@ -3728,7 +3728,7 @@ fn cmd_run(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         match crate::sched::spawn_from_path(&path, priority) {
             Some(pid) => {
                 crate::println!("run: {} spawned as PID {}", path, pid);
-                let exit_code = crate::sched::run_and_wait(pid);
+                let exit_code = unsafe { crate::sched::run_and_wait(pid as u64) };
                 crate::println!("run: process exited with code {}", exit_code);
                 0
             }
@@ -5361,7 +5361,7 @@ fn cmd_cc(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                 match crate::sched::spawn_from_path(&output, crate::sched::Priority::Normal) {
                     Some(pid) => {
                         crate::println!("cc: spawned PID {}", pid);
-                        let exit_code = crate::sched::run_and_wait(pid);
+                        let exit_code = unsafe { crate::sched::run_and_wait(pid as u64) };
                         crate::println!("cc: process exited with code {}", exit_code);
                     }
                     None => crate::println!("cc: failed to spawn process"),

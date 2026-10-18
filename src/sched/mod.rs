@@ -1044,6 +1044,11 @@ static mut COOPERATIVE_EXIT_REQUESTED: bool = false;
 /// returns to the kernel code that called run_user_process().
 static mut KERNEL_RETURN_ADDR: u64 = 0;
 
+/// Exit code of the most recently cooperatively-exited user process —
+/// the exception handler copies it into the trap frame's x0 so the resume
+/// trampoline returns it to run_and_wait's caller.
+static mut COOP_EXIT_CODE: i64 = 0;
+
 /// Saved kernel SP at the point run_and_wait was entered — the cooperative
 /// exit path restores it so eret resumes the caller with a sane stack.
 static mut KERNEL_SP: u64 = 0;
@@ -1051,7 +1056,7 @@ static mut KERNEL_SP: u64 = 0;
 /// Saved kernel callee-saved registers (x19-x30) at run_and_wait entry.
 /// eret-into-user clobbers all GPRs; the cooperative exit must restore these
 /// before resuming the caller, or the caller branches through garbage.
-static mut KERNEL_REGS: [u64; 12] = [0; 12];
+
 
 /// Run a user process synchronously in cooperative mode.
 ///
@@ -1064,46 +1069,93 @@ static mut KERNEL_REGS: [u64; 12] = [0; 12];
 /// 6. eret returns to the saved kernel return address — this function returns
 ///
 /// Returns the exit code of the user process.
-pub fn run_and_wait(pid: Pid) -> i64 {
+/// Entry trampoline for cooperative run-and-wait.
+///
+/// Saves the caller's callee-saved registers (x19-x30), SP and LR into
+/// statics, then tail-calls the body. When the user process exits, the
+/// exception handler performs eret back to `.Lcoop_resume` with the same
+/// statics restored, so the caller sees a normal function return with the
+/// exit code in x0.
+///
+/// # Safety
+/// Called from kernel context at EL1h only.
+#[unsafe(naked)]
+pub unsafe extern "C" fn run_and_wait(_pid: u64) -> i64 {
+    core::arch::naked_asm!(
+        // Stash callee-saved regs + lr into statics.
+        "ldr x18, =KERNEL_CALLEE_SAVE",
+        "stp x19, x20, [x18, #0]",
+        "stp x21, x22, [x18, #16]",
+        "stp x23, x24, [x18, #32]",
+        "stp x25, x26, [x18, #48]",
+        "stp x27, x28, [x18, #64]",
+        "stp x29, x30, [x18, #80]",
+        "mov x1, sp",
+        "str x1, [x18, #96]",          // save SP
+        "bl run_and_wait_body",
+        // Normal return path (body found no task etc.): restore and return.
+        "ldr x18, =KERNEL_CALLEE_SAVE",
+        "ldp x19, x20, [x18, #0]",
+        "ldp x21, x22, [x18, #16]",
+        "ldp x23, x24, [x18, #32]",
+        "ldp x25, x26, [x18, #48]",
+        "ldp x27, x28, [x18, #64]",
+        "ldp x29, x30, [x18, #80]",
+        "ret",
+        // Cooperative-exit resume target: exception handler erets here with
+        // exit code in x0. Restore regs/SP and return to the caller.
+        ".global COOP_RESUME_ADDR",
+        ".Lcoop_resume:",
+        "ldr x18, =KERNEL_CALLEE_SAVE",
+        "ldp x19, x20, [x18, #0]",
+        "ldp x21, x22, [x18, #16]",
+        "ldp x23, x24, [x18, #32]",
+        "ldp x25, x26, [x18, #48]",
+        "ldp x27, x28, [x18, #64]",
+        "ldp x29, x30, [x18, #80]",
+        "ldr x1, [x18, #96]",
+        "mov sp, x1",
+        "ret",
+        ".align 3",
+        "KERNEL_CALLEE_SAVE:",
+        ".zero 104",
+    )
+}
+
+/// Address of the cooperative-exit resume label (set at link time via
+/// a small init that stores the label — done by `coop_resume_addr()`).
+static mut COOP_RESUME: u64 = 0;
+
+/// Body of run_and_wait: spawns nothing — the caller spawned the task; we
+/// just eret into it and (on exit) the exception handler resumes the
+/// trampoline. Returns -1 if the task vanished before we could enter it.
+#[no_mangle]
+pub unsafe extern "C" fn run_and_wait_body(_pid: u64) -> i64 {
+    let pid = _pid as Pid;
     let idx = match find_task_index(pid) {
         Some(i) => i,
         None => return -1,
     };
 
-    // Debug: confirm we got here
     println!("[sched] run_and_wait: entered for PID {}", pid);
 
-    // Save kernel return address (link register for after eret)
-    let kernel_lr: u64;
+    // Record the resume address for the exception handler once.
     unsafe {
-        core::arch::asm!("mov {}, lr", out(reg) kernel_lr);
-        KERNEL_RETURN_ADDR = kernel_lr;
-        core::arch::asm!("mov {}, sp", out(reg) KERNEL_SP);
-        // Stash x19-x30 so the cooperative exit path can restore them.
-        core::arch::asm!(
-            "stp x19, x20, [{r}, #0]",
-            "stp x21, x22, [{r}, #16]",
-            "stp x23, x24, [{r}, #32]",
-            "stp x25, x26, [{r}, #48]",
-            "stp x27, x28, [{r}, #64]",
-            "stp x29, x30, [{r}, #80]",
-            r = in(reg) (&raw mut KERNEL_REGS) as usize,
-        );
+        if COOP_RESUME == 0 {
+            COOP_RESUME = coop_resume_label();
+        }
+        KERNEL_RETURN_ADDR = COOP_RESUME;
+        let sp: u64;
+        core::arch::asm!("mov {}, sp", out(reg) sp);
+        KERNEL_SP = sp;
     }
-    println!("[sched] run_and_wait: saved kernel_lr={:#018x}", kernel_lr);
 
-    // Set current PID to the user process
     unsafe {
         CURRENT_PID = pid;
     }
 
-    // Print before entering the if-let block
-    // (debug prints suppressed for cleaner output)
-
-    // Mark as running
     unsafe {
         if let Some(ref mut task) = TASK_TABLE[idx] {
-            // (debug prints suppressed)
             task.state = TaskState::Running;
             task.time_slice = time_slice_for(task.priority);
 
@@ -1112,15 +1164,27 @@ pub fn run_and_wait(pid: Pid) -> i64 {
             // kernel's page table still active.
             let frame = task.regs;
 
-            // Restore context — this eret's into EL0 and never returns
-            // When the process exits, the exception handler returns to KERNEL_RETURN_ADDR
+            // Restore context — this eret's into EL0 and never returns.
+            // When the process exits, the exception handler erets to the
+            // trampoline's resume label with the exit code in x0.
             restore_context(&frame);
         }
     }
 
-    // We should never reach here — restore_context does eret (noreturn)
-    // But if we do (e.g. no valid task), return error
+    // Unreachable — restore_context does eret (noreturn).
     -1
+}
+
+/// Resolve the resume label address (asm helper).
+fn coop_resume_label() -> u64 {
+    let addr: u64;
+    unsafe {
+        core::arch::asm!(
+            "ldr {0}, =.Lcoop_resume",
+            out(reg) addr,
+        );
+    }
+    addr
 }
 
 /// Get the saved kernel return address (called from exception handler)
@@ -1133,19 +1197,25 @@ pub fn kernel_sp() -> u64 {
     unsafe { KERNEL_SP }
 }
 
-/// Restore saved kernel callee-saved registers (x19-x30) into the exception
-/// frame's saved register area so eret resumes the caller with its own
-/// register state. `regs` points at the trap frame x0 slot (31 regs).
-pub unsafe fn restore_kernel_regs(regs: *mut u64) {
-    let r = (&raw const KERNEL_REGS) as *const u64;
-    for i in 0..12 {
-        *regs.add(19 + i) = *r.add(i);
-    }
-}
+/// Restore saved kernel callee-saved registers (x19-x30) — kept for API
+/// compatibility; the naked trampoline restores them in asm now.
+pub unsafe fn restore_kernel_regs(_regs: *mut u64) {}
 
 /// Check if a cooperative exit was requested (called from exception return path)
 pub fn cooperative_exit_pending() -> bool {
     unsafe { COOPERATIVE_EXIT_REQUESTED }
+}
+
+/// Record the exit code to deliver through the resume trampoline (x0).
+pub fn set_coop_exit_code(code: i64) {
+    unsafe {
+        COOP_EXIT_CODE = code;
+    }
+}
+
+/// Read the recorded exit code.
+pub fn coop_exit_code() -> i64 {
+    unsafe { COOP_EXIT_CODE }
 }
 
 /// Clear the cooperative exit flag
