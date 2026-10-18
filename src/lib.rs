@@ -861,9 +861,18 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::sched::enable();
     crate::println!("[boot] Scheduler enabled");
 
-    // Boot is complete — safe to take timer ticks now.
-    unsafe { crate::arch::timer::Timer::enable_irq_source(); }
-    crate::println!("[boot] Timer IRQ source enabled");
+    // Boot is complete. On real hardware, enable hardware timer ticks now.
+    // On QEMU raspi5b, hardware tick delivery hits a PSTATE.IL-class UNDEF at
+    // IRQ-vector handler entry (under investigation) — the cooperative main
+    // loop below drives on_timer_tick via system_time_us polling instead, so
+    // hardware ticks stay masked there until the issue is fixed.
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        unsafe { crate::arch::timer::Timer::enable_irq_source(); }
+        crate::println!("[boot] Timer IRQ source enabled (hardware ticks)");
+    }
+    #[cfg(feature = "qemu_raspi5b")]
+    crate::println!("[boot] QEMU build: cooperative tick mode (hardware ticks masked)");
 
     // Boot init is complete — safe to take interrupts now.
     crate::println!("[boot] Enabling IRQs...");

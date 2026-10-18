@@ -87,8 +87,7 @@ pub unsafe extern "C" fn handle_sync_exception(
                 if _regs.is_null() {0} else {*_regs.add(0)},
                 if _regs.is_null() {0} else {*_regs.add(1)},
                 if _regs.is_null() {0} else {*_regs.add(29)});
-            // Do NOT hang on unexpected exceptions during bring-up — return to
-            // the faulting context so we can observe repeated behavior.
+            // Bring-up: do not halt; the caller context resumes.
         }
     }
 }

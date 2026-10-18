@@ -62,10 +62,17 @@ pub unsafe fn init() {
     // Clear any pending UART interrupts
     core::ptr::write_volatile(UART_ICR as *mut u32, 0x7FF);
 
-    // Enable UART10 SPI in GIC
-    crate::arch::gic::Gic::enable_spi(UART10_SPI);
-    crate::arch::gic::Gic::set_config(UART10_SPI, 0b10); // Edge-triggered
-    crate::arch::gic::Gic::set_priority(UART10_SPI, 0x60); // Higher priority than timer
+    // Enable UART10 SPI in GIC — real hardware only.
+    // QEMU raspi5b: taking the RX IRQ vectors into a PSTATE.IL-class UNDEF
+    // at the IRQ handler entry (all instructions UNDEF, even nops — verified
+    // via direct image patching). Polled input (shell::poll) is used there;
+    // it is faster than IRQ-per-byte for the emulated serial anyway.
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        crate::arch::gic::Gic::enable_spi(UART10_SPI);
+        crate::arch::gic::Gic::set_config(UART10_SPI, 0b10); // Edge-triggered
+        crate::arch::gic::Gic::set_priority(UART10_SPI, 0x60); // Higher priority than timer
+    }
 
     crate::println!("[serial] UART10 RX interrupt enabled (SPI {})", UART10_SPI);
 }
