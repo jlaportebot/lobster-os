@@ -1,6 +1,6 @@
 //! LobsterOS Fast Serial — bulk TX via the QEMU lobster-serial MMIO window
 //!
-//! On QEMU raspi5b, a companion MMIO device ("lobster-serial" at 0x7D00A000)
+//! On QEMU raspi5b, a companion MMIO device ("lobster-serial" at 0x7D100000)
 //! accepts up to 2048 bytes of payload plus one register write to flush the
 //! whole chunk to the serial chardev in a single host call. This replaces
 //! the PL011 per-byte (FR poll + DR write) path for bulk console output —
@@ -14,9 +14,9 @@ use crate::drivers::uart::Uart10;
 
 /// MMIO base of the lobster-serial device (QEMU raspi5b)
 #[cfg(feature = "qemu_raspi5b")]
-const FAST_SERIAL_BASE: u64 = 0x7D00_A000;
+const FAST_SERIAL_BASE: u64 = 0x7D10_0000;
 #[cfg(all(feature = "qemu", not(feature = "qemu_raspi5b")))]
-const FAST_SERIAL_BASE: u64 = 0x7D00_A000;
+const FAST_SERIAL_BASE: u64 = 0x7D10_0000;
 
 /// Register offsets
 const REG_TXLEN: u64 = 0x00; // write: flush N bytes from the buffer
