@@ -301,6 +301,97 @@ pub struct Ext2FileSystem {
 
 static mut EXT2_INSTANCE: Option<Ext2FileSystem> = None;
 
+/// Expand an ext2-backed directory: read its entries and materialize VFS
+/// child nodes (once per directory per boot). Called lazily by the VFS on
+/// first traversal into a backing-store directory.
+pub fn expand_dir(ino: u32, parent_node_id: u64, fs_id: u32) -> Result<(), VfsError> {
+    unsafe {
+        let fs = EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)?;
+        let entries = fs.read_dir(ino)?;
+        for entry in &entries {
+            if entry.name_len == 0 {
+                break;
+            }
+            let name = entry.name_str();
+            if name == "." || name == ".." {
+                continue;
+            }
+            // Skip if the child already exists in the VFS.
+            if let Some(parent) = crate::fs::vfs::get_node(parent_node_id) {
+                if parent.find_child(name).is_some() {
+                    continue;
+                }
+            }
+            if let Ok(node_id) = crate::fs::vfs::alloc_node(name, entry.file_type, parent_node_id) {
+                crate::fs::vfs::set_node_backing(node_id, fs_id, entry.inode_id as u32);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether a VFS node's backing directory has been expanded already.
+pub fn dir_expanded(node_id: u64) -> bool {
+    crate::fs::vfs::node_dir_expanded(node_id)
+}
+
+/// Read a file's full contents from the mounted ext2 instance (backing store).
+pub fn read_backing_file(ino: u32) -> Result<alloc::vec::Vec<u8>, VfsError> {
+    unsafe {
+        let fs = EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)?;
+        let inode = fs.read_inode(ino)?;
+        let size = u32::from_le(inode.i_size) as usize;
+        let mut buf = alloc::vec::Vec::with_capacity(size);
+        unsafe {
+            buf.set_len(size);
+        }
+        fs.read_file(ino, 0, &mut buf)?;
+        Ok(buf)
+    }
+}
+
+/// Create a new file in the ext2 backing store: allocate an inode, link it
+/// into the parent directory, write `data`, and return the new inode number.
+pub fn create_backing_file(parent_ino: u32, name: &str, data: &[u8]) -> Result<u32, VfsError> {
+    unsafe {
+        let fs = EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)?;
+
+        // 1. New inode
+        let ino = fs.alloc_inode()?;
+        {
+            let mut inode = fs.read_inode(ino)?;
+            let mode: u16 = 0o100644; // regular file, rw-r--r--
+            inode.i_mode = mode.to_le();
+            inode.i_size = 0u32.to_le();
+            inode.i_blocks = 0u32.to_le();
+            inode.i_links_count = 1u16.to_le();
+            const EXT2_NBLOCKS: usize = 15;
+            for i in 0..EXT2_NBLOCKS {
+                inode.i_block[i] = 0u32.to_le();
+            }
+            fs.write_inode(ino, &inode)?;
+        }
+
+        // 2. Link into parent directory
+        fs.add_dir_entry(parent_ino, ino, name, EXT2_FT_REG_FILE)?;
+
+        // 3. Write the data
+        fs.write_file(ino, 0, data)?;
+        fs.journal_commit()?;
+        Ok(ino)
+    }
+}
+
+/// Write a file's full contents back through the mounted ext2 instance.
+pub fn write_backing_file(ino: u32, data: &[u8]) -> Result<(), VfsError> {
+    unsafe {
+        let fs = EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)?;
+        fs.write_file(ino, 0, data)?;
+        fs.journal_commit()?;
+    }
+    Ok(())
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Helper: block device I/O
 // ═══════════════════════════════════════════════════════════════
@@ -710,7 +801,10 @@ impl Ext2FileSystem {
         let bitmap_offset = bitmap_block as u64 * self.block_size as u64;
         let bitmap_size = self.block_size as usize;
 
-        if bitmap_size > 512 {
+        // Bitmap windows are 512 bytes in the cache regardless of the on-disk
+        // block size; for larger blocks only the first 512 bytes are needed
+        // (4096 inodes per group maximum).
+        if bitmap_size >= 512 {
             dev_read(
                 self.device_index,
                 self.partition_start,
@@ -751,11 +845,19 @@ impl Ext2FileSystem {
                             let gdesc = self.group_descs[group];
                             let bitmap_block = u32::from_le(gdesc.bg_block_bitmap);
                             let bitmap_offset = bitmap_block as u64 * self.block_size as u64;
+                            // Bitmap cache holds 512 bytes regardless of the
+                            // on-disk block size (4096 inodes/group max).
+                            let bitmap_len = self.block_size as usize;
+                            let bitmap_bytes: &mut [u8] = if bitmap_len >= 512 {
+                                &mut bitmap[..512]
+                            } else {
+                                &mut bitmap[..bitmap_len]
+                            };
                             dev_write(
                                 self.device_index,
                                 self.partition_start,
                                 bitmap_offset,
-                                &bitmap[..self.block_size as usize],
+                                bitmap_bytes,
                             )?;
 
                             // Update free block count
@@ -835,11 +937,18 @@ impl Ext2FileSystem {
                             let gdesc = self.group_descs[group];
                             let bitmap_block = u32::from_le(gdesc.bg_inode_bitmap);
                             let bitmap_offset = bitmap_block as u64 * self.block_size as u64;
+                            // Bitmap cache is 512 bytes max (see load_inode_bitmap)
+                            let bitmap_len = self.block_size as usize;
+                            let bitmap_bytes: &mut [u8] = if bitmap_len >= 512 {
+                                &mut bitmap[..512]
+                            } else {
+                                &mut bitmap[..bitmap_len]
+                            };
                             dev_write(
                                 self.device_index,
                                 self.partition_start,
                                 bitmap_offset,
-                                &bitmap[..self.block_size as usize],
+                                bitmap_bytes,
                             )?;
 
                             self.superblock.s_free_inodes_count =
@@ -1103,8 +1212,14 @@ impl Ext2FileSystem {
 
         write_block(self, block_num, &block_buf[..bs])?;
 
-        // Update parent inode size if needed
-        let new_size = (u32::from_le(parent.i_size)).max((pos + entry_len as usize) as u32);
+        // Update parent inode size: cover all blocks through the one we
+        // appended into. `pos` is block-relative, so a write into block N
+        // must grow i_size to (N+1)*block_size at minimum, or boot-time
+        // read_dir (which sizes by i_size) would never see later blocks.
+        let min_size = ((last_block_idx + 1) * bs) as u32;
+        let new_size = (u32::from_le(parent.i_size))
+            .max(min_size)
+            .max((last_block_idx * bs + pos + entry_len as usize) as u32);
         parent.i_size = new_size.to_le();
         self.write_inode(parent_inode_num, &parent)?;
 
@@ -1565,7 +1680,7 @@ impl Ext2FileSystem {
     // ─── VFS integration ────────────────────────────────────────────
 
     /// Populate the VFS with entries from the ext2 root directory.
-    fn populate_vfs(&mut self) -> Result<(), VfsError> {
+    fn populate_vfs(&mut self, parent_id: u64, fs_id: u32) -> Result<(), VfsError> {
         let root_entries = self.read_dir(EXT2_ROOT_INO)?;
 
         for entry in &root_entries {
@@ -1576,7 +1691,12 @@ impl Ext2FileSystem {
             if name == "." || name == ".." {
                 continue; // Skip self/parent references
             }
-            let _ = alloc_node(name, entry.file_type, 0);
+            if let Ok(node_id) = alloc_node(name, entry.file_type, parent_id) {
+                // Tag the node with the ext2 filesystem id + record the ext2
+                // inode so reads/writes can route through the backing store.
+                let ext2_ino = entry.inode_id as u32;
+                crate::fs::vfs::set_node_backing(node_id, fs_id, ext2_ino);
+            }
         }
 
         Ok(())
@@ -1696,8 +1816,19 @@ pub fn mount(device_index: usize, partition_start: u64, mount_path: &str) -> Res
     // Replay journal for crash recovery
     fs.journal_replay()?;
 
-    // Populate VFS with root directory entries
-    fs.populate_vfs()?;
+    // Create the mountpoint directory in the VFS (idempotent) so path
+    // resolution reaches it, then populate the ext2 root's entries beneath.
+    let mount_node = match crate::fs::vfs::mkdir(mount_path) {
+        Ok(id) => Some(id),
+        Err(crate::fs::vfs::VfsError::AlreadyExists) => {
+            crate::fs::vfs::resolve_path(mount_path).ok()
+        }
+        Err(e) => return Err(e),
+    };
+    let parent_id = mount_node.unwrap_or(0);
+
+    // Populate VFS with root directory entries under the mountpoint
+    fs.populate_vfs(parent_id, fs_id)?;
 
     // Mount in VFS
     let root_inode = EXT2_ROOT_INO as u64;

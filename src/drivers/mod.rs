@@ -33,6 +33,9 @@ pub mod uart;
 #[cfg(all(target_arch = "aarch64", feature = "qemu"))]
 pub mod fast_serial;
 
+#[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
+pub mod lobster_storage;
+
 #[cfg(target_arch = "aarch64")]
 pub mod lobster_net;
 #[cfg(target_arch = "aarch64")]

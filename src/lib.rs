@@ -698,7 +698,34 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     }
     #[cfg(feature = "qemu_raspi5b")]
     {
-        crate::println!("[emmc] QEMU mode: skipping eMMC (no SDHCI)");
+        // Paravirtual block device (host-backed disk image) instead of eMMC.
+        crate::println!("[vd] Probing lobster-vd0 (paravirtual disk)...");
+        match crate::drivers::lobster_storage::detect() {
+            Some(nblk) => {
+                crate::drivers::lobster_storage::TOTAL_BLOCKS
+                    .store(nblk, core::sync::atomic::Ordering::Relaxed);
+                static DISK: crate::drivers::lobster_storage::LobsterDisk =
+                    crate::drivers::lobster_storage::LobsterDisk::new();
+                match crate::fs::block_dev::register_device(&DISK) {
+                    Ok(idx) => {
+                        crate::println!(
+                            "[vd] lobster-vd0: {} blocks ({} MB) registered as device {}",
+                            nblk,
+                            nblk * 512 / (1024 * 1024),
+                            idx
+                        );
+                        // Mount persistent filesystem: whole-disk ext2 (no partition
+                        // table in the emulator image).
+                        match crate::fs::ext2::mount(idx, 0, "/sd") {
+                            Ok(()) => crate::println!("[ext2] persistent /sd mounted from lobster-vd0"),
+                            Err(e) => crate::println!("[ext2] /sd mount failed: {:?}", e),
+                        }
+                    }
+                    Err(e) => crate::println!("[vd] register failed: {:?}", e),
+                }
+            }
+            None => crate::println!("[vd] no paravirtual disk (LBST_DISKIMG unset)"),
+        }
     }
 
     // 19. Initialize package manager repositories from /etc/pkg/repos.conf
