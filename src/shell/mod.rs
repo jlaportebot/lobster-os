@@ -5441,14 +5441,52 @@ fn cmd_seq(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         }
     };
 
+    // Fast path: convert numbers into a 2KB batch buffer flushed through the
+    // bulk-serial window (when present) — one MMIO write per 2048 bytes
+    // instead of one MMIO write per byte via the PL011.
+    let mut num = [0u8; 24];
+    let mut batch = [0u8; 2048];
+    let mut batch_len = 0usize;
+
+    let emit_into = |n: i64, num: &mut [u8; 24], batch: &mut [u8; 2048], blen: &mut usize| {
+        let mut pos = num.len();
+        let mut v = n.unsigned_abs();
+        if v == 0 {
+            pos -= 1;
+            num[pos] = b'0';
+        }
+        while v > 0 {
+            pos -= 1;
+            num[pos] = b'0' + (v % 10) as u8;
+            v /= 10;
+        }
+        if n < 0 {
+            pos -= 1;
+            num[pos] = b'-';
+        }
+        let digits = &num[pos..];
+        if *blen + digits.len() + 2 > batch.len() {
+            Uart10::puts_bytes(&batch[..*blen]);
+            *blen = 0;
+        }
+        batch[*blen..*blen + digits.len()].copy_from_slice(digits);
+        *blen += digits.len();
+        batch[*blen] = b'\r';
+        batch[*blen + 1] = b'\n';
+        *blen += 2;
+    };
+
     if start <= end {
         for n in start..=end {
-            crate::println!("{}", n);
+            emit_into(n, &mut num, &mut batch, &mut batch_len);
         }
     } else {
         for n in (end..=start).rev() {
-            crate::println!("{}", n);
+            emit_into(n, &mut num, &mut batch, &mut batch_len);
         }
+    }
+    if batch_len > 0 {
+        Uart10::puts_bytes(&batch[..batch_len]);
     }
     0
 }

@@ -97,6 +97,28 @@ impl Uart10 {
             crate::arch::x86_64::console::serial_write_str(s);
         }
     }
+
+    /// Write a byte slice to the serial console (no UTF-8 validation).
+    /// On QEMU with the bulk-serial device present this goes through the
+    /// 2048-byte lobster-serial window (one MMIO write per chunk).
+    pub fn puts_bytes(b: &[u8]) {
+        #[cfg(all(target_arch = "aarch64", feature = "qemu"))]
+        {
+            crate::drivers::fast_serial::write(b);
+        }
+        #[cfg(all(target_arch = "aarch64", not(feature = "qemu")))]
+        {
+            for byte in b {
+                aarch64_uart::putc_aarch64(*byte);
+            }
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            for byte in b {
+                crate::arch::x86_64::console::serial_putc(*byte);
+            }
+        }
+    }
 }
 
 // AArch64-specific implementation

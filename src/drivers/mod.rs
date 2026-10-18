@@ -29,6 +29,10 @@ pub mod qemu_input;
 pub mod sdio;
 pub mod serial_input;
 pub mod uart;
+
+#[cfg(all(target_arch = "aarch64", feature = "qemu"))]
+pub mod fast_serial;
+
 #[cfg(target_arch = "aarch64")]
 pub mod lobster_net;
 #[cfg(target_arch = "aarch64")]
