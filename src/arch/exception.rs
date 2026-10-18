@@ -201,8 +201,25 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
         crate::sched::clear_cooperative_exit();
         let kr = crate::sched::kernel_return_address();
         unsafe {
-            core::arch::asm!("msr SPSR_EL1, {0}", in(reg) 0x5u64);
+            // Restore the kernel's callee-saved registers into the trap
+            // frame so eret resumes the caller with its own register state
+            // (eret-into-user clobbered every GPR).
+            if !regs.is_null() {
+                crate::sched::restore_kernel_regs(regs);
+            }
+            // EL1h (M=0b0101) with all DAIF masked: 0x3C5. The previous value
+            // 0x5 resumed KERNEL code at EL0t — unprivileged, so any privileged
+            // instruction after the resume (MMIO barriers, msr) faulted.
+            core::arch::asm!("msr SPSR_EL1, {0}", in(reg) 0x3C5u64);
             core::arch::asm!("msr ELR_EL1, {0}", in(reg) kr);
+            // Restore the kernel SP so the resumed caller has a sane stack.
+            // We run at EL1h with SPSel=1 — SP_EL1 is the ACTIVE bank, and
+            // `msr SP_EL1` against the active bank is UNDEFINED (this was
+            // the ELR=0xc00b0 UNDEF fault). Write the current sp instead.
+            let ksp = crate::sched::kernel_sp();
+            if ksp != 0 {
+                core::arch::asm!("mov sp, {0}", in(reg) ksp);
+            }
         }
         crate::sched::set_current_pid(0);
     }

@@ -330,6 +330,63 @@ struct ParsedLine {
 // String buffer helper
 // ═══════════════════════════════════════════════
 
+/// Quote-aware whitespace tokenizer (sh-style):
+/// `a "b c" d` -> ["a", "b c", "d"]; surrounding quotes are stripped.
+/// Quotes inside a token are preserved as literal characters.
+fn split_args_shell(line: &str) -> alloc::vec::Vec<&str> {
+    let mut out: alloc::vec::Vec<&str> = alloc::vec::Vec::new();
+    let bytes = line.as_bytes();
+    let mut i = 0usize;
+    let n = bytes.len();
+    // Leaked-arena approach is not available; we can only return subslices of
+    // the input line, so quoted spans that need dequoting cannot be returned
+    // as &str without allocation. Handle by returning the span INCLUDING the
+    // quotes stripped only when they wrap the whole token — which requires an
+    // owned buffer. To keep lifetimes simple we instead strip quotes in-place
+    // is impossible; so build owned Strings only when a token contains quotes.
+    while i < n {
+        while i < n && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= n {
+            break;
+        }
+        let start = i;
+        let mut end;
+        if bytes[i] == b'"' || bytes[i] == b'\'' {
+            let q = bytes[i];
+            i += 1;
+            let inner_start = i;
+            while i < n && bytes[i] != q {
+                i += 1;
+            }
+            end = i.min(n);
+            let inner = &line[inner_start..end];
+            // Skip past closing quote
+            if i < n {
+                i += 1;
+            }
+            // If there is trailing non-space content glued to the quote,
+            // extend to include it (rare; keep simple).
+            while i < n && !bytes[i].is_ascii_whitespace() {
+                i += 1;
+                end = i;
+            }
+            out.push(inner);
+            let _ = start;
+        } else {
+            while i < n && !bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            let tok = &line[start..i];
+            out.push(tok);
+            end = i;
+        }
+        let _ = end;
+    }
+    out
+}
+
 struct StringBuf<const N: usize> {
     buf: [u8; N],
     len: usize,
@@ -617,7 +674,9 @@ fn execute_command(line: &str) -> CmdResult {
         let mut stdout_redir = Redirect::None;
         let mut stdin_redir = Redirect::None;
         let mut clean_parts: alloc::vec::Vec<&str> = alloc::vec::Vec::new();
-        let tokens: alloc::vec::Vec<&str> = stage_str.split_whitespace().collect();
+        // Tokenize with quote-awareness: split on whitespace, but keep
+        // quoted runs together and strip the quotes (sh-style).
+        let tokens: alloc::vec::Vec<&str> = split_args_shell(stage_str);
         let mut i = 0;
 
         while i < tokens.len() {
@@ -732,15 +791,87 @@ fn execute_command(line: &str) -> CmdResult {
     CmdResult::Ok
 }
 
+/// Output sink for builtin commands: honors `> file`, `>> file` and pipe
+/// stages; falls back to the serial console. Builtins print through this
+/// instead of touching Uart10 directly.
+enum ShellOut {
+    /// Write to serial console (no redirect/pipe)
+    Console,
+    /// Redirect to a file (fd, append flag already handled at open)
+    File(usize),
+}
+
+impl ShellOut {
+    /// Create the sink for the current pipeline stage.
+    fn open(redir: &Redirect, pipe_out: Option<i32>) -> ShellOut {
+        match redir {
+            Redirect::Write(path) | Redirect::Append(path) => {
+                use crate::fs::vfs;
+                let flags = if matches!(redir, Redirect::Append(_)) {
+                    vfs::O_WRONLY | vfs::O_CREAT | vfs::O_APPEND
+                } else {
+                    vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC
+                };
+                match vfs::open(path.as_str(), flags) {
+                    Ok(fd) => ShellOut::File(fd as usize),
+                    Err(_) => ShellOut::Console,
+                }
+            }
+            Redirect::None => {
+                if let Some(fd) = pipe_out {
+                    ShellOut::File(fd as usize)
+                } else {
+                    ShellOut::Console
+                }
+            }
+            // stdin redirection doesn't affect the output sink
+            Redirect::Read(_) => ShellOut::Console,
+        }
+    }
+
+    fn puts(&self, s: &str) {
+        self.write_bytes(s.as_bytes());
+    }
+
+    fn write_bytes(&self, b: &[u8]) {
+        match self {
+            ShellOut::Console => Uart10::puts_bytes(b),
+            ShellOut::File(fd) => {
+                let _ = crate::fs::vfs::write(*fd, b);
+            }
+        }
+    }
+
+    fn close(&self) {
+        if let ShellOut::File(fd) = self {
+            let _ = crate::fs::vfs::close(*fd);
+        }
+    }
+}
+
 /// Run a builtin command, returning an exit code (0 = success, 1 = failure)
 fn run_builtin(
     cmd: &str,
     args: [&str; MAX_ARGS],
     argc: usize,
     _pipe_in: i32,
-    _stdout_redir: &Redirect,
+    stdout_redir: &Redirect,
     _stdin_redir: &Redirect,
-    _pipe_out: Option<i32>,
+    pipe_out: Option<i32>,
+) -> i32 {
+    // Sink honoring > file / >> file / pipe stages for output-producing builtins.
+    let out = ShellOut::open(stdout_redir, pipe_out);
+    let code = run_builtin_out(cmd, args, argc, &out);
+    out.close();
+    code
+}
+
+/// Builtin dispatch with the stage's output sink applied.
+fn run_builtin_out(
+    cmd: &str,
+    args: [&str; MAX_ARGS],
+    argc: usize,
+    out: &ShellOut,
 ) -> i32 {
     match cmd {
         "help" | "?" => {
@@ -764,7 +895,7 @@ fn run_builtin(
             0
         }
         "kill" => cmd_kill(args, argc),
-        "echo" => cmd_echo(args, argc),
+        "echo" => cmd_echo(args, argc, out),
         "reboot" => {
             cmd_reboot();
             0
@@ -1174,14 +1305,14 @@ fn cmd_kill(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
 }
 
-fn cmd_echo(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+fn cmd_echo(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) -> i32 {
     for i in 1..argc {
         if i > 1 {
-            Uart10::putc(b' ');
+            out.write_bytes(b" ");
         }
-        Uart10::puts(args[i]);
+        out.puts(args[i]);
     }
-    Uart10::puts("\r\n");
+    out.write_bytes(b"\n");
     0
 }
 

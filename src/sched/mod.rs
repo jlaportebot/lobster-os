@@ -1044,6 +1044,15 @@ static mut COOPERATIVE_EXIT_REQUESTED: bool = false;
 /// returns to the kernel code that called run_user_process().
 static mut KERNEL_RETURN_ADDR: u64 = 0;
 
+/// Saved kernel SP at the point run_and_wait was entered — the cooperative
+/// exit path restores it so eret resumes the caller with a sane stack.
+static mut KERNEL_SP: u64 = 0;
+
+/// Saved kernel callee-saved registers (x19-x30) at run_and_wait entry.
+/// eret-into-user clobbers all GPRs; the cooperative exit must restore these
+/// before resuming the caller, or the caller branches through garbage.
+static mut KERNEL_REGS: [u64; 12] = [0; 12];
+
 /// Run a user process synchronously in cooperative mode.
 ///
 /// This function:
@@ -1069,6 +1078,17 @@ pub fn run_and_wait(pid: Pid) -> i64 {
     unsafe {
         core::arch::asm!("mov {}, lr", out(reg) kernel_lr);
         KERNEL_RETURN_ADDR = kernel_lr;
+        core::arch::asm!("mov {}, sp", out(reg) KERNEL_SP);
+        // Stash x19-x30 so the cooperative exit path can restore them.
+        core::arch::asm!(
+            "stp x19, x20, [{r}, #0]",
+            "stp x21, x22, [{r}, #16]",
+            "stp x23, x24, [{r}, #32]",
+            "stp x25, x26, [{r}, #48]",
+            "stp x27, x28, [{r}, #64]",
+            "stp x29, x30, [{r}, #80]",
+            r = in(reg) (&raw mut KERNEL_REGS) as usize,
+        );
     }
     println!("[sched] run_and_wait: saved kernel_lr={:#018x}", kernel_lr);
 
@@ -1106,6 +1126,21 @@ pub fn run_and_wait(pid: Pid) -> i64 {
 /// Get the saved kernel return address (called from exception handler)
 pub fn kernel_return_address() -> u64 {
     unsafe { KERNEL_RETURN_ADDR }
+}
+
+/// Get the saved kernel stack pointer (called from exception handler)
+pub fn kernel_sp() -> u64 {
+    unsafe { KERNEL_SP }
+}
+
+/// Restore saved kernel callee-saved registers (x19-x30) into the exception
+/// frame's saved register area so eret resumes the caller with its own
+/// register state. `regs` points at the trap frame x0 slot (31 regs).
+pub unsafe fn restore_kernel_regs(regs: *mut u64) {
+    let r = (&raw const KERNEL_REGS) as *const u64;
+    for i in 0..12 {
+        *regs.add(19 + i) = *r.add(i);
+    }
 }
 
 /// Check if a cooperative exit was requested (called from exception return path)

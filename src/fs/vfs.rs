@@ -370,6 +370,7 @@ pub const O_WRONLY: u32 = 1;
 pub const O_RDWR: u32 = 2;
 pub const O_CREAT: u32 = 0x40;
 pub const O_TRUNC: u32 = 0x200;
+pub const O_APPEND: u32 = 0x400;
 
 /// Global open file table
 static mut OPEN_FILES: [Option<FileHandle>; MAX_OPEN_FILES] = [const { None }; MAX_OPEN_FILES];
@@ -399,8 +400,16 @@ pub fn init() {
         root.parent_id = 0;
         root.dir_count = 0;
         VFS_NODE_COUNT = 1;
+
+        // Create standard directories so fresh boots have a usable layout
+        // (VFS is volatile until a persistent disk is mounted).
+        for dir in ["/bin", "/etc", "/tmp", "/root", "/home", "/var", "/usr"] {
+            if let Ok(id) = alloc_node(dir.trim_start_matches('/'), FileType::Directory, 0) {
+                let _ = id;
+            }
+        }
     }
-    println!("[vfs] Virtual filesystem initialized");
+    println!("[vfs] Virtual filesystem initialized (root + /bin /etc /tmp /root /home /var /usr)");
 }
 
 /// Allocate a new VFS node
@@ -615,7 +624,12 @@ pub fn open(path: &str, flags: u32) -> Result<usize, VfsError> {
             if OPEN_FILES[i].is_none() {
                 OPEN_FILES[i] = Some(FileHandle {
                     inode_id,
-                    offset: 0,
+                    // O_APPEND starts at end-of-file so `>> file` extends it.
+                    offset: if flags & O_APPEND != 0 {
+                        get_node(inode_id).map(|n| n.data_len).unwrap_or(0)
+                    } else {
+                        0
+                    },
                     flags,
                 });
                 if flags & O_TRUNC != 0 {
