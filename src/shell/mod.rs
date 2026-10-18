@@ -5363,6 +5363,12 @@ fn cmd_cc(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                         crate::println!("cc: spawned PID {}", pid);
                         let exit_code = unsafe { crate::sched::run_and_wait(pid as u64) };
                         crate::println!("cc: process exited with code {}", exit_code);
+                        // sh semantics: propagate the program's exit status
+                        // through $? (and as cc's own exit status).
+                        unsafe {
+                            LAST_EXIT_CODE = exit_code as i32;
+                        }
+                        return exit_code as i32;
                     }
                     None => crate::println!("cc: failed to spawn process"),
                 }
