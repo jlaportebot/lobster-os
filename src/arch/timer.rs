@@ -108,7 +108,14 @@ impl Timer {
 
     /// Get uptime in milliseconds
     pub fn uptime_ms() -> u64 {
-        UPTIME_MS.load(Ordering::Relaxed)
+        // In cooperative QEMU mode the 1ms hardware tick never runs, so
+        // UPTIME_MS stays 0. Derive from the free-running system timer
+        // counter instead — it advances in real time on both paths.
+        let hw = UPTIME_MS.load(Ordering::Relaxed);
+        if hw > 0 {
+            return hw;
+        }
+        Self::system_time_us() / 1000
     }
 
     /// Get high-resolution timestamp from BCM2835 system timer (microseconds)
