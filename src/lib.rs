@@ -458,10 +458,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::arch::timer::Timer::init();
     }
 
-    // 6. Enable IRQs
-    crate::println!("[boot] Enabling IRQs...");
-    crate::arch::cpu::enable_irqs();
-    crate::println!("[boot] IRQs enabled");
+    // 6. IRQs stay masked during early boot (MMU init, heap init, drivers).
+    // The timer is already armed; enabling IRQs here made the 1ms tick fire
+    // mid-MMU-setup and corrupt bring-up. IRQs are unmasked after the
+    // scheduler is enabled, just before the main loop.
+    crate::println!("[boot] IRQs masked during early boot init");
 
     // Print memory map
     crate::memory::vmem::print_memory_map();
@@ -859,6 +860,15 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     // Enable preemptive scheduling (used for timer-driven tasks on real hardware)
     crate::sched::enable();
     crate::println!("[boot] Scheduler enabled");
+
+    // Boot is complete — safe to take timer ticks now.
+    unsafe { crate::arch::timer::Timer::enable_irq_source(); }
+    crate::println!("[boot] Timer IRQ source enabled");
+
+    // Boot init is complete — safe to take interrupts now.
+    crate::println!("[boot] Enabling IRQs...");
+    crate::arch::cpu::enable_irqs();
+    crate::println!("[boot] IRQs enabled");
 
     // 17. Run kernel main loop — drive WM and scheduler
     crate::println!("[boot] LobsterOS v0.2.0 initialization complete!");

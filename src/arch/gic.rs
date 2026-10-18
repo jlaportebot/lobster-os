@@ -94,6 +94,9 @@ impl Gic {
 
         // Set all SPIs (32+) to Group 1 (IRQ, not FIQ)
         // GICD_IGROUPR: 1 bit per IRQ, 32 bits per register
+        // NOTE: distributor registers are indexed by FULL irq ID (SGI+PPI+SPI),
+        // so SPI numbering starts at ID 32 — this loop is already correct because
+        // it iterates distributor IDs directly.
         for i in (32..num_irqs).step_by(32) {
             let reg = gicd_base() + GICD_IGROUPR_OFF + ((i / 32) as u64 * 4);
             Self::write32(reg, 0xFFFFFFFF); // All Group 1
@@ -149,13 +152,20 @@ impl Gic {
         Self::write32(gicc_base() + GICC_CTLR_OFF, 0x3);
     }
 
+    /// GICv2 distributor registers are indexed by the FULL interrupt ID:
+    ///   [0..15] SGIs, [16..31] PPIs, [32..] SPIs.
+    /// SPI N therefore lives at distributor register index N + 32.
+    /// (The BCM2712 GIC-400 numbers its SPIs 0-based from the GIC's IRQ 32.)
+    const SPI_TO_DIST: u32 = 32;
+
     /// Enable a specific SPI (Shared Peripheral Interrupt)
     pub unsafe fn enable_spi(irq_num: u32) {
         if irq_num < 32 {
             return; // SGIs/PPIs are always enabled on GICv2
         }
-        let reg = gicd_base() + GICD_ISENABLER_OFF + ((irq_num as u64 / 32) * 4);
-        let bit = 1u32 << (irq_num % 32);
+        let id = irq_num + Self::SPI_TO_DIST;
+        let reg = gicd_base() + GICD_ISENABLER_OFF + ((id as u64 / 32) * 4);
+        let bit = 1u32 << (id % 32);
         Self::write32(reg, bit);
     }
 
@@ -164,15 +174,17 @@ impl Gic {
         if irq_num < 32 {
             return;
         }
-        let reg = gicd_base() + GICD_ICENABLER_OFF + ((irq_num as u64 / 32) * 4);
-        let bit = 1u32 << (irq_num % 32);
+        let id = irq_num + Self::SPI_TO_DIST;
+        let reg = gicd_base() + GICD_ICENABLER_OFF + ((id as u64 / 32) * 4);
+        let bit = 1u32 << (id % 32);
         Self::write32(reg, bit);
     }
 
     /// Set priority for a specific IRQ (0 = highest, 0xFF = lowest)
     pub unsafe fn set_priority(irq_num: u32, priority: u8) {
-        let shift = (irq_num % 4) * 8;
-        let reg_aligned = gicd_base() + GICD_IPRIORITYR_OFF + ((irq_num as u64 / 4) * 4);
+        let id = irq_num + Self::SPI_TO_DIST;
+        let shift = (id % 4) * 8;
+        let reg_aligned = gicd_base() + GICD_IPRIORITYR_OFF + ((id as u64 / 4) * 4);
         let mut val = Self::read32(reg_aligned);
         val &= !(0xFF << shift);
         val |= (priority as u32) << shift;
@@ -181,8 +193,9 @@ impl Gic {
 
     /// Set target cores for a specific IRQ (bit mask: bit 0 = core 0, etc.)
     pub unsafe fn set_target(irq_num: u32, target_mask: u8) {
-        let reg = gicd_base() + GICD_ITARGETSR_OFF + ((irq_num as u64 / 4) * 4);
-        let shift = (irq_num % 4) * 8;
+        let id = irq_num + Self::SPI_TO_DIST;
+        let reg = gicd_base() + GICD_ITARGETSR_OFF + ((id as u64 / 4) * 4);
+        let shift = (id % 4) * 8;
         let mut val = Self::read32(reg);
         val &= !(0xFF << shift);
         val |= (target_mask as u32) << shift;
@@ -192,8 +205,9 @@ impl Gic {
     /// Set interrupt configuration (edge vs level triggered)
     /// config: 0b00 = level-sensitive, 0b10 = edge-triggered
     pub unsafe fn set_config(irq_num: u32, config: u32) {
-        let reg = gicd_base() + GICD_ICFGR_OFF + ((irq_num as u64 / 16) * 4);
-        let shift = (irq_num % 16) * 2;
+        let id = irq_num + Self::SPI_TO_DIST;
+        let reg = gicd_base() + GICD_ICFGR_OFF + ((id as u64 / 16) * 4);
+        let shift = (id % 16) * 2;
         let mut val = Self::read32(reg);
         val &= !(0b11 << shift);
         val |= config << shift;

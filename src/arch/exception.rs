@@ -50,12 +50,10 @@ pub unsafe extern "C" fn handle_sync_exception(
                 access_type, elr, far
             );
             println!(
-                "[exception] ESR={:#018x} (EC={}, ISS={:#010x})",
-                esr, ec, iss
+                "[exception] ESR={:#018x} (EC={}, ISS={:#010x}) SPSR={:#018x}",
+                esr, ec, iss, spsr
             );
-            loop {
-                crate::arch::cpu::wfe();
-            }
+            // Do not halt — allow continued execution for bring-up debugging.
         }
         EC_INSN_ABORT_CUR => {
             println!(
@@ -85,9 +83,12 @@ pub unsafe extern "C" fn handle_sync_exception(
                 esr, ec, iss
             );
             println!("[exception] SPSR={:#018x} FAR={:#018x}", spsr, far);
-            loop {
-                crate::arch::cpu::wfe();
-            }
+            println!("[exception] regs[0]={:#018x} regs[1]={:#018x} regs[29]={:#018x}",
+                if _regs.is_null() {0} else {*_regs.add(0)},
+                if _regs.is_null() {0} else {*_regs.add(1)},
+                if _regs.is_null() {0} else {*_regs.add(29)});
+            // Do NOT hang on unexpected exceptions during bring-up — return to
+            // the faulting context so we can observe repeated behavior.
         }
     }
 }

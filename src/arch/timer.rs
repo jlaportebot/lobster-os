@@ -78,12 +78,22 @@ impl Timer {
         let tick_interval = current_tick_interval();
         mmio_write32(TIMER_C1, current.wrapping_add(tick_interval));
 
-        // Enable system timer channel 1 in GIC (SPI 65)
+        // NOTE: GIC SPI 65 is NOT enabled here. Enabling it at boot made the
+        // first timer tick fire during MMU page-table setup (IRQs get unmasked
+        // by the console writer after every print), faulting the vector fetch.
+        // sched::enable() calls Timer::enable_irq_source() once boot is done.
+        crate::println!("[timer] Using BCM2835 System Timer (1 MHz, SPI 65)");
+    }
+
+    /// Enable the timer IRQ source in the GIC (call after boot completes).
+    pub unsafe fn enable_irq_source() {
         crate::arch::gic::Gic::enable_spi(65);
         crate::arch::gic::Gic::set_config(65, 0b10);
         crate::arch::gic::Gic::set_priority(65, 0x80);
-
-        crate::println!("[timer] Using BCM2835 System Timer (1 MHz, SPI 65)");
+        // Re-arm the compare in case the original deadline passed while masked
+        let current = mmio_read32(TIMER_CLO);
+        mmio_write32(TIMER_C1, current.wrapping_add(current_tick_interval()));
+        mmio_write32(TIMER_CS, 1 << 1);
     }
 
     /// Initialize timer for secondary cores

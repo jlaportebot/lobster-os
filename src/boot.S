@@ -92,7 +92,7 @@ _boot:
 
     // SPSR_EL2: EL1h, IRQ/FIQ/SError masked, AArch64
     //   M[3:0] = 0100 (EL1h), DAIF = 1111
-    mov     x8, #0x3C4           // DAIF=0xF, M=0x4 (EL1h)
+    mov     x8, #0x3C5           // DAIF=0xF, M=0x5 (EL1h — SP_EL1 bank)
     msr     SPSR_EL2, x8
 
     // SPSR_EL3 for EL3→EL2: EL2t, IRQ/FIQ/SError masked, AArch64
@@ -145,7 +145,7 @@ _boot:
 
     // SPSR_EL2: EL1h, IRQ/FIQ/SError masked, AArch64
     //   M[3:0] = 0100 (EL1h), DAIF = 1111
-    mov     x8, #0x3C4           // DAIF=0xF, M=0x4 (EL1h)
+    mov     x8, #0x3C5           // DAIF=0xF, M=0x5 (EL1h — SP_EL1 bank)
     msr     SPSR_EL2, x8
 
     // DEBUG: Store a marker before eret
@@ -186,7 +186,7 @@ _boot:
     // SPSR_EL2: EL1h, IRQ/FIQ/SError masked, AArch64
     //   M[3:0] = 0100 (EL1h)
     //   DAIF = 1111 (all masked)
-    mov     x8, #0x3C4           // DAIF=0xF, M=0x4 (EL1h)
+    mov     x8, #0x3C5           // DAIF=0xF, M=0x5 (EL1h — SP_EL1 bank)
     msr     SPSR_EL2, x8
 
     // Set up SP_EL1 for core 0 before dropping to EL1
@@ -344,18 +344,19 @@ _boot:
     .type exception_vector_table, function
 
 exception_vector_table:
-    // EL1 with SP0 (shouldn't happen in our kernel)
+    // Current EL with SP0 (EL1t). The kernel now runs at EL1h, but keep real
+    // handlers here in case any code path (or QEMU eret default) drops to EL1t.
     .balign 128
-    b       .Lexception_unexpected
+    b       .Lsync_el1h
 
     .balign 128
-    b       .Lexception_unexpected
+    b       .Lirq_el1h
 
     .balign 128
-    b       .Lexception_unexpected
+    b       .Lfiq_el1h
 
     .balign 128
-    b       .Lexception_unexpected
+    b       .Lserror_el1h
 
     // EL1 with SPn (SPx) — this is where kernel exceptions go
     .balign 128
