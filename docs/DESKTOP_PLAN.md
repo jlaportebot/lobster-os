@@ -49,7 +49,7 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 - [x] **B5.1 Text-mode browser** — DONE: URL bar + back/forward + HTML-strip rendering via lobster-net, visual-verified (B5.2 history/bookmarks persist TODO)
 - [x] **B5.2 History + bookmarks persisted to /sd** — DONE (verified round trip)
 ### B6. Media & extras
-- [ ] **B6.1 Image viewer from disk (BMP/PNG)**, wallpaper setter integration
+- [x] **B6.1 Image viewer from disk** — DONE: real BMP rendering (24/32-bit, both row orders), pixel-verified gradient; PNG + wallpaper-set integration TODO
 - [ ] **B6.2 Calculator (v1 exists) → keyboard input + history**
 - [ ] **B6.3 Process manager + sysmon merged into one Task Manager w/ graphs**
 - [ ] **B6.4 App Store (v1 exists) → real package install from repo into /sd, launcher integration**
