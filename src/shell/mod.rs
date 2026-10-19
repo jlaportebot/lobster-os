@@ -1082,6 +1082,18 @@ fn run_builtin_out(
             }
             0
         }
+        "edit" => {
+            #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
+            {
+                if argc >= 2 {
+                    let id = crate::apps::editor::open_file(args[1]);
+                    crate::println!("edit: opened {} (win {})", args[1], id);
+                } else {
+                    crate::println!("edit: usage: edit <path>");
+                }
+            }
+            0
+        }
         "alttab" => {
             #[cfg(target_arch = "aarch64")]
             {

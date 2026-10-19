@@ -82,6 +82,7 @@ pub fn tick() {
             crate::apps::file_manager::render_to_windows(&fb);
             crate::apps::process_manager::render_to_windows(&fb);
             crate::apps::browser::render_to_windows(&fb);
+            crate::apps::editor::render_to_windows(&fb);
         }
     }
 
