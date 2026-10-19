@@ -159,6 +159,10 @@ pub fn transition_to_desktop() {
     unsafe {
         SPLASH_STATE = SplashState::Done;
     }
+
+    // Paint the wallpaper directly to the framebuffer (QEMU path skips the
+    // compositor's back-buffer blit, so the engine writes the FB itself).
+    crate::wm::wallpaper::paint_to_screen();
 }
 
 /// Check if splash is still active

@@ -623,7 +623,7 @@ impl FbConsole {
             let ptr = info.virt_addr as *mut u32;
             let total_pixels = (info.size / 4) as usize;
             for i in 0..total_pixels.min((info.width * info.height) as usize) {
-                core::ptr::write_volatile(ptr.add(i), self.bg_color);
+                core::ptr::write_volatile(ptr.add(i), crate::display::graphics::fx(self.bg_color));
             }
         }
         self.cursor_x = 0;
@@ -665,7 +665,7 @@ impl FbConsole {
                 let offset = (pixel_y * (info.pitch / 4) + pixel_x) as usize;
                 unsafe {
                     let ptr = (info.virt_addr as *mut u32).add(offset);
-                    core::ptr::write_volatile(ptr, color);
+                    core::ptr::write_volatile(ptr, crate::display::graphics::fx(color));
                 }
             }
         }
@@ -761,7 +761,7 @@ impl FbConsole {
             for y in (info.height - pixels_per_line)..info.height {
                 let offset = (y * pitch_words) as usize;
                 for x in 0..info.width as usize {
-                    core::ptr::write_volatile(ptr.add(offset + x), self.bg_color);
+                    core::ptr::write_volatile(ptr.add(offset + x), crate::display::graphics::fx(self.bg_color));
                 }
             }
         }

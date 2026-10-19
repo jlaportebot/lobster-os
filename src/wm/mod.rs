@@ -16,6 +16,7 @@ pub mod context_menu;
 pub mod desktop_icons;
 pub mod start_menu;
 pub mod notifications;
+pub mod wallpaper;
 pub mod input;
 pub mod launcher;
 pub mod panel;

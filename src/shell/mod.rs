@@ -1031,6 +1031,30 @@ fn run_builtin_out(
             0
         }
         "gh" => cmd_gh(args, argc),
+        "theme" => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                if argc >= 2 {
+                    crate::wm::theme::toggle();
+                } else {
+                    crate::println!("theme: {} (run 'theme toggle' to switch)", crate::wm::theme::current_name());
+                }
+            }
+            0
+        }
+        "wallpaper" => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                if argc >= 2 {
+                    let ok = crate::wm::wallpaper::set_by_name(args[1]);
+                    crate::println!("wallpaper: {}", if ok { args[1] } else { "not found" });
+                } else {
+                    crate::wm::wallpaper::next();
+                    crate::println!("wallpaper: {}", crate::wm::wallpaper::active().name);
+                }
+            }
+            0
+        }
         "notify" => {
             #[cfg(target_arch = "aarch64")]
             {

@@ -284,10 +284,14 @@ static mut ACTIVE_THEME: ThemeId = ThemeId::Dark;
 
 /// Initialize the theme engine
 pub fn init() {
+    // Default to Dark; if a persisted theme was restored earlier (the /sd
+    // mount happens before WM init in QEMU builds), keep it.
     unsafe {
-        ACTIVE_THEME = ThemeId::Dark;
+        if ACTIVE_THEME != ThemeId::Dark && ACTIVE_THEME != ThemeId::Light {
+            ACTIVE_THEME = ThemeId::Dark;
+        }
     }
-    println!("[theme] Loaded: Dark");
+    println!("[theme] Loaded: {}", current_name());
 }
 
 /// Get the current active theme
@@ -324,6 +328,56 @@ pub fn current_name() -> &'static str {
         ThemeId::Dark => "Dark",
         ThemeId::Light => "Light",
     }
+}
+
+/// Toggle between the Dark and Light themes (with a toast + redraw).
+pub fn toggle() {
+    let next_id = match active_id() {
+        ThemeId::Dark => ThemeId::Light,
+        ThemeId::Light => ThemeId::Dark,
+    };
+    set(next_id);
+    persist();
+    crate::wm::notifications::info(
+        "Theme",
+        &alloc::format!("Switched to {} mode", current_name()),
+    );
+}
+
+/// Persist the active theme to /sd/etc/theme.conf (best effort).
+fn persist() {
+    let conf = alloc::format!("theme={}
+", current_name());
+    if crate::fs::vfs::write_file("/sd/etc/theme.conf", conf.as_bytes()).is_ok() {
+        crate::println!("[theme] Saved to /sd");
+    }
+}
+
+/// Restore the persisted theme from /sd/etc/theme.conf (best effort).
+pub fn load_persisted() {
+    let data = match crate::fs::vfs::read_file("/sd/etc/theme.conf") {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let text = core::str::from_utf8(&data).unwrap_or("");
+    for line in text.lines() {
+        if let Some(val) = line.strip_prefix("theme=") {
+            let name = val.trim();
+            let id = match name {
+                "Light" => ThemeId::Light,
+                "Dark" => ThemeId::Dark,
+                _ => continue,
+            };
+            set(id);
+            crate::println!("[theme] Restored '{}' from /sd", name);
+            return;
+        }
+    }
+}
+
+/// Cycle through all available themes.
+pub fn cycle() {
+    toggle();
 }
 
 /// Get the desktop background color (convenience accessor)

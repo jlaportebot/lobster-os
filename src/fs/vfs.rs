@@ -812,7 +812,12 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<usize, VfsError> {
         return Err(VfsError::OutOfMemory);
     }
     let inode_id = match resolve_path(path) {
-        Ok(id) => id,
+        Ok(id) => {
+            // Hydrate ext2-backed files first so truncation applies to the
+            // real content.
+            let _ = hydrate_node(id);
+            id
+        }
         Err(VfsError::NotFound) => {
             // Create the file
             let parent_path = parent_dir(path);
@@ -822,11 +827,17 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<usize, VfsError> {
         }
         Err(e) => return Err(e),
     };
-    let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
-    node.data_len = 0;
-    let written = node.write(0, data)?;
-    node.metadata.size = written as u64;
-    Ok(written)
+    {
+        let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
+        node.data_len = 0;
+        let written = node.write(0, data)?;
+        node.metadata.size = written as u64;
+    }
+    // Write through to the ext2 backing store so kernel-side writes
+    // (settings persistence etc.) actually land on disk.
+    writeback_node(inode_id)?;
+    // Re-resolve: writeback may have tagged the node with its new ext2 inode.
+    Ok(data.len())
 }
 
 /// Extract parent directory from a path

@@ -33,6 +33,7 @@ const TAG_ALLOCATE_BUFFER: u32 = 0x00040001;
 const TAG_SET_PHYSICAL_SIZE: u32 = 0x00048003;
 const TAG_SET_VIRTUAL_SIZE: u32 = 0x00048004;
 const TAG_SET_DEPTH: u32 = 0x00048005;
+const TAG_SET_PIXEL_ORDER: u32 = 0x00048006;
 const TAG_GET_PHYSICAL_SIZE: u32 = 0x00040003;
 const TAG_GET_VIRTUAL_SIZE: u32 = 0x00040004;
 const TAG_GET_DEPTH: u32 = 0x00040005;
@@ -217,6 +218,17 @@ pub fn init(width: u32, height: u32, bpp: u32) -> Result<FramebufferInfo, FbErro
         buf[idx] = 0;
         idx += 1;
         buf[idx] = bpp;
+        idx += 1;
+
+        // Tag: Set pixel order = RGB (1). Without this the firmware defaults
+        // to BGR (pixo=0) and every 0xFFRRGGBB color renders channel-swapped.
+        buf[idx] = TAG_SET_PIXEL_ORDER;
+        idx += 1;
+        buf[idx] = 4;
+        idx += 1;
+        buf[idx] = 0;
+        idx += 1;
+        buf[idx] = 1; // RGB
         idx += 1;
 
         // Tag: Allocate buffer

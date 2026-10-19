@@ -1132,23 +1132,23 @@ fn fill_back_buffer_rect_with_wallpaper(
     h: u32,
 ) {
     unsafe {
-        let color = WALLPAPER.solid_color;
         let pitch = fb.width;
         for dy in 0..h {
             let py = y + dy;
             if py >= fb.height {
                 break;
             }
-            for dx in 0..w {
-                let px = x + dx;
-                if px >= fb.width {
-                    break;
-                }
-                let idx = (py * pitch + px) as usize;
-                let back_buf_size = *BACK_BUF_SIZE.lock();
-                if idx < back_buf_size / 4 {
-                    core::ptr::write_volatile(back_buf.add(idx), color);
-                }
+            // Build the wallpaper row segment once, then bulk-copy it.
+            let seg_w = w.min(fb.width.saturating_sub(x)) as usize;
+            if seg_w == 0 {
+                continue;
+            }
+            let mut seg: [u32; 1920] = [0; 1920];
+            crate::wm::wallpaper::paint_row(&fb, py, &mut seg[..seg_w]);
+            let idx = (py * pitch + x) as usize;
+            let back_buf_size = *BACK_BUF_SIZE.lock();
+            if idx + seg_w <= back_buf_size / 4 {
+                core::ptr::copy_nonoverlapping(seg.as_ptr(), back_buf.add(idx), seg_w);
             }
         }
     }
@@ -1841,7 +1841,10 @@ fn draw_software_cursor(fb: FramebufferInfo, back_buf: *mut u32) {
 
 /// Draw the wallpaper to the back buffer
 fn draw_wallpaper(fb: FramebufferInfo, back_buf: *mut u32) {
-    // Draw desktop background with a subtle vertical gradient
+    // Wallpapers come from the wallpaper engine (gradient presets, persisted).
+    crate::wm::wallpaper::paint(&fb, back_buf);
+    if false {
+    // (kept for reference below)
     let theme = crate::wm::theme::current();
     let base_color = theme.desktop_bg;
 
@@ -1878,6 +1881,7 @@ fn draw_wallpaper(fb: FramebufferInfo, back_buf: *mut u32) {
                 count,
             );
         }
+    }
     }
 }
 

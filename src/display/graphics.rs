@@ -12,11 +12,22 @@ pub fn draw_pixel(fb: &FramebufferInfo, x: u32, y: u32, color: u32) {
     let offset = (y * (fb.pitch / 4) + x) as usize;
     unsafe {
         let ptr = (fb.virt_addr as *mut u32).add(offset);
-        core::ptr::write_volatile(ptr, color);
+        core::ptr::write_volatile(ptr, fx(color));
     }
 }
 
 /// Draw a filled rectangle
+/// Swizzle a human-authored ARGB color (0xAARRGGBB) into the framebuffer's
+/// native 32-bit layout. The emulated display reads byte0 as RED, so the
+/// value stored in memory must be 0xAABBGGRR.
+#[inline]
+pub fn fx(argb: u32) -> u32 {
+    let r = (argb >> 16) & 0xFF;
+    let g = (argb >> 8) & 0xFF;
+    let b = argb & 0xFF;
+    0xFF000000 | (b << 16) | (g << 8) | r
+}
+
 pub fn draw_rect(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
     for dy in 0..h {
         let py = y + dy;
@@ -160,7 +171,7 @@ pub fn fill_region(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: 
                 if px >= fb.width {
                     break;
                 }
-                core::ptr::write_volatile(base.add(row_offset + px as usize), color);
+                core::ptr::write_volatile(base.add(row_offset + px as usize), fx(color));
             }
         }
     }

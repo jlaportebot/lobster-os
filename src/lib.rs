@@ -723,6 +723,9 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
                                     "Storage",
                                     "Persistent disk mounted at /sd",
                                 );
+                                // Restore persisted desktop preferences.
+                                crate::wm::wallpaper::load_persisted();
+                                crate::wm::theme::load_persisted();
                             }
                             Err(e) => crate::println!("[ext2] /sd mount failed: {:?}", e),
                         }
