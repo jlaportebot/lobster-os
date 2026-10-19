@@ -382,6 +382,113 @@ pub fn create_backing_file(parent_ino: u32, name: &str, data: &[u8]) -> Result<u
     }
 }
 
+/// Remove a file (or empty dir) from the ext2 backing store: zero its dir
+/// entry in the parent (keeping rec_len so the block stays traversable)
+/// and mark the inode free in the bitmap.
+pub fn remove_backing_file(parent_ino: u32, name: &str) -> Result<(), VfsError> {
+    unsafe {
+        let fs = EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)?;
+        let entries = fs.read_dir(parent_ino)?;
+        // Find the entry's inode by name
+        let mut target_ino = 0u32;
+        for e in entries.iter() {
+            if e.name_len == 0 {
+                break;
+            }
+            if e.name_str() == name {
+                target_ino = e.inode_id as u32;
+                break;
+            }
+        }
+        if target_ino == 0 {
+            return Err(VfsError::NotFound);
+        }
+
+        // Rewrite the parent dir block(s), zeroing the matching entry's inode
+        // and name while preserving rec_len.
+        let parent = fs.read_inode(parent_ino)?;
+        let dir_size = u32::from_le(parent.i_size) as usize;
+        let total_blocks = (dir_size + fs.block_size as usize - 1) / fs.block_size as usize;
+        for block_idx in 0..total_blocks {
+            let bn = fs.resolve_block(&parent, block_idx as u64)?;
+            if bn == 0 {
+                continue;
+            }
+            let mut block_buf = [0u8; 4096];
+            read_block(fs, bn, &mut block_buf[..fs.block_size as usize])?;
+            let bs = fs.block_size as usize;
+            let mut pos = 0usize;
+            let mut changed = false;
+            while pos + 12 <= bs {
+                let rec_len = u16::from_le(unsafe { *(block_buf.as_ptr().add(pos + 4) as *const u16) }) as usize;
+                if rec_len < 12 {
+                    break;
+                }
+                let name_len = block_buf[pos + 6] as usize;
+                let ino_le = u32::from_le(unsafe { *(block_buf.as_ptr().add(pos) as *const u32) });
+                if ino_le == target_ino && name_len > 0 && name_len <= 255 && pos + 8 + name_len <= bs {
+                    let existing = core::str::from_utf8(&block_buf[pos + 8..pos + 8 + name_len]).unwrap_or("");
+                    if existing == name {
+                        // Zero the entry (inode 0 = unused) but keep rec_len.
+                        for b in block_buf[pos..pos + 8 + name_len].iter_mut() {
+                            *b = 0;
+                        }
+                        // restore rec_len
+                        block_buf[pos + 4] = (rec_len & 0xFF) as u8;
+                        block_buf[pos + 5] = (rec_len >> 8) as u8;
+                        changed = true;
+                        break;
+                    }
+                }
+                pos += rec_len;
+            }
+            if changed {
+                write_block(fs, bn, &block_buf[..bs])?;
+                break;
+            }
+        }
+
+        // Free the inode in the bitmap
+        fs.free_inode(target_ino)?;
+        fs.journal_commit()?;
+        Ok(())
+    }
+}
+
+/// Rename in the backing store = remove old dir entry + add new one with
+/// the same inode. Same-parent rename only (fm renames within the cwd).
+pub fn rename_backing_file(parent_ino: u32, old_name: &str, new_name: &str) -> Result<(), VfsError> {
+    unsafe {
+        let fs = EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)?;
+        let entries = fs.read_dir(parent_ino)?;
+        let mut target_ino = 0u32;
+        for e in entries.iter() {
+            if e.name_len == 0 {
+                break;
+            }
+            if e.name_str() == old_name {
+                target_ino = e.inode_id as u32;
+                break;
+            }
+        }
+        if target_ino == 0 {
+            return Err(VfsError::NotFound);
+        }
+
+        let ft = {
+            let inode = fs.read_inode(target_ino)?;
+            let mode = u16::from_le(inode.i_mode);
+            if mode & EXT2_S_IFDIR != 0 { EXT2_FT_DIR } else { EXT2_FT_REG_FILE }
+        };
+
+        // Remove the old entry, then link the same inode under the new name.
+        remove_backing_file(parent_ino, old_name)?;
+        fs.add_dir_entry(parent_ino, target_ino, new_name, ft)?;
+        fs.journal_commit()?;
+        Ok(())
+    }
+}
+
 /// Create a directory in the ext2 backing store under `parent_ino`.
 pub fn create_backing_dir(parent_ino: u32, name: &str) -> Result<u32, VfsError> {
     unsafe {
@@ -1017,11 +1124,18 @@ impl Ext2FileSystem {
         let gdesc = self.group_descs[group];
         let bitmap_block = u32::from_le(gdesc.bg_inode_bitmap);
         let bitmap_offset = bitmap_block as u64 * self.block_size as u64;
+        // Bitmap caches are 512 bytes max (see load_inode_bitmap).
+        let bitmap_len = self.block_size as usize;
+        let bitmap_bytes: &[u8] = if bitmap_len >= 512 {
+            &self.inode_bitmaps[group][..512]
+        } else {
+            &self.inode_bitmaps[group][..bitmap_len]
+        };
         dev_write(
             self.device_index,
             self.partition_start,
             bitmap_offset,
-            &self.inode_bitmaps[group][..self.block_size as usize],
+            bitmap_bytes,
         )?;
 
         self.superblock.s_free_inodes_count =

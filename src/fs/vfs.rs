@@ -909,6 +909,28 @@ pub fn remove(path: &str) -> Result<(), VfsError> {
     node.name_len = 0;
     node.metadata.file_type = FileType::RegularFile;
     node.data_len = 0;
+
+    // Write-through: unlink in the ext2 backing store when the parent is
+    // ext2-backed, so deletes persist across reboots.
+    {
+        let (p_ino, p_fs, name_str): (u32, u32, alloc::string::String) = {
+            let pid = node.parent_id;
+            let pname = get_node(pid).map(|p| alloc::string::String::from(p.name_str()))
+                .unwrap_or_default();
+            let pino = get_node(pid).map(|p| p.backing_ino).unwrap_or(0);
+            let pfs = get_node(pid).map(|p| p.backing_fs).unwrap_or(0);
+            (pino, pfs, pname)
+        };
+        // The node's name was zeroed above — reconstruct from the path.
+        let name_from_path = path.rsplit('/').next().unwrap_or("");
+        let _ = name_str;
+        if p_ino != 0 && p_fs != 0 && !name_from_path.is_empty() {
+            match crate::fs::ext2::remove_backing_file(p_ino, name_from_path) {
+                Ok(()) => {}
+                Err(e) => println!("[vfs] ext2 unlink failed: {:?}", e),
+            }
+        }
+    }
     Ok(())
 }
 
@@ -928,7 +950,9 @@ pub fn rename(src_path: &str, dst_path: &str) -> Result<(), VfsError> {
     // Remove from old parent
     let src_node = get_node(src_id).ok_or(VfsError::NotFound)?;
     let old_parent_id = src_node.parent_id;
-    let src_name = src_node.name_str();
+    // Own a copy — the node's name buffer mutates below and a borrowed
+    // &str would alias the NEW name.
+    let src_name = alloc::string::String::from(src_node.name_str());
     if old_parent_id < unsafe { VFS_NODE_COUNT } as u64 {
         let old_parent = unsafe { &mut VFS_NODES[old_parent_id as usize] };
         let mut shift = false;
@@ -955,6 +979,20 @@ pub fn rename(src_path: &str, dst_path: &str) -> Result<(), VfsError> {
         entry.file_type = src.metadata.file_type;
         entry.inode_id = src_id;
         let _ = new_parent.add_dir_entry(entry);
+    }
+
+    // Write-through: same-parent rename in the ext2 backing store.
+    if old_parent_id == dst_parent_id {
+        let (p_ino, p_fs): (u32, u32) = {
+            let p = get_node(old_parent_id).ok_or(VfsError::NotFound)?;
+            (p.backing_ino, p.backing_fs)
+        };
+        if p_ino != 0 && p_fs != 0 {
+            match crate::fs::ext2::rename_backing_file(p_ino, &src_name, dst_name) {
+                Ok(()) => {}
+                Err(e) => println!("[vfs] ext2 rename failed: {:?}", e),
+            }
+        }
     }
     Ok(())
 }
