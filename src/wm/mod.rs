@@ -12,6 +12,7 @@
 //! All rendering goes through `display::graphics` primitives.
 
 pub mod compositor;
+pub mod alt_tab;
 pub mod context_menu;
 pub mod desktop_icons;
 pub mod start_menu;
@@ -106,6 +107,9 @@ pub fn tick() {
 
     // Tray popups (above windows, below toasts)
     tray_popups::draw(&fb);
+
+    // Alt-Tab switcher overlay (above nearly everything)
+    alt_tab::draw(&fb);
 
     // Toasts (above windows, top-right)
     notifications::draw(&fb);

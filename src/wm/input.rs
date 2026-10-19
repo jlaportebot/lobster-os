@@ -91,11 +91,19 @@ fn handle_key_press(scancode: u8, _extended: bool) {
     let shift = hid::shift_held();
     let ch = hid::scancode_to_ascii(scancode, shift);
 
-    // Alt+Tab: cycle window focus
+    // Alt+Tab: window switcher overlay
     if hid::alt_held() && scancode == 0x2B {
-        // Tab scancode in USB HID = 0x2B
-        crate::wm::window::cycle_focus();
+        if crate::wm::alt_tab::is_visible() {
+            crate::wm::alt_tab::advance(hid::shift_held());
+        } else {
+            crate::wm::alt_tab::open();
+        }
         return;
+    }
+
+    // Any keypress with the switcher open while Alt released: close + activate
+    if crate::wm::alt_tab::is_visible() && !hid::alt_held() {
+        crate::wm::alt_tab::close(true);
     }
 
     // Start menu keyboard handling (Esc closes, arrows navigate, Enter opens)
@@ -121,7 +129,10 @@ fn handle_key_press(scancode: u8, _extended: bool) {
 }
 /// Handle a key release event
 fn handle_key_release(_scancode: u8) {
-    // Forward to window module for potential key-up tracking
+    // Alt released: if the Alt-Tab switcher is open, activate the selection.
+    if crate::wm::alt_tab::is_visible() && !hid::alt_held() {
+        crate::wm::alt_tab::close(true);
+    }
 }
 
 // ─── Mouse Dispatch ────────────────────────────────────────────────

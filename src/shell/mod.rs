@@ -1082,6 +1082,19 @@ fn run_builtin_out(
             }
             0
         }
+        "alttab" => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                if !crate::wm::alt_tab::is_visible() {
+                    crate::wm::alt_tab::open();
+                    crate::println!("alttab: switcher open");
+                } else {
+                    crate::wm::alt_tab::close(true);
+                    crate::println!("alttab: switcher closed, focused");
+                }
+            }
+            0
+        }
         "tray" => {
             #[cfg(target_arch = "aarch64")]
             {
