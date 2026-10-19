@@ -67,11 +67,11 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 - [x] **D1. Dirty-rect rendering** — DONE: dirty-gating render architecture (50× steady-state speedup)
 - [x] **D2. Snapshot/resume** — DONE: BlockBackend lobster-disk + vm.sh (snap/boot --resume/list/del), savevm/loadvm verified
 - [x] **D3. Shared folder** — DONE: lobster-share MMIO device + guest driver + share/cat/cp shell cmds (GUI FM integration next)
-- [ ] **D4. Resize: display size property + guest reinit framebuffer**
+- [x] **D4. Live resolution change** — DONE: guest `resolution <w> <h>` (mailbox re-negotiation, console resize verified 1280x720, panel re-anchors). QEMU surface resizes live.
 - [ ] **D5. Audio passthrough device** (ties C4)
 
 ## E. Testing & Release
-- [ ] **E1. Automated GUI test: script drives HID events via QEMU monitor → screenshots → assertions (a11y of the desktop)**
+- [x] **E1. Automated GUI harness** — DONE: tools/gui_test.py 4/4 (start menu, clock, apps, resolution) with HMP lmouse/lclick/lkey injection.
 - [ ] **E2. Boot-to-desktop time budget ≤ 5s in emulator**
 - [ ] **E3. Nightly build + release notes per merged feature (already doing manual r-notes)**
 
