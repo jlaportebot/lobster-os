@@ -557,17 +557,58 @@ pub fn get_file_manager() -> &'static mut FileManager {
 impl FileManager {
     pub fn render(&self, x: u32, y: u32, width: u32, height: u32) {
         let info = crate::display::fb::get_info();
+        let theme = crate::wm::theme::current();
+        use crate::display::graphics as g;
 
-        // Title bar area (already drawn by compositor)
-        // Path display
-        let path_y = y + 4;
-        let path_text = alloc::format!("{}", self.current_path);
-        crate::display::graphics::draw_text(&info, x + 8, path_y, &path_text, 0xCCCCCC, 0x1E1E1E);
+        // === Sidebar (places) ===
+        let sidebar_w = 140u32;
+        let sidebar_h = height.saturating_sub(24);
+        g::fill_rounded_rect(&info, x, y, sidebar_w, sidebar_h, 0, theme.menu_bg);
+        g::draw_text(&info, x + 10, y + 6, "Places", theme.label_text_dim, theme.menu_bg);
+        g::draw_rect(&info, x + 6, y + 22, sidebar_w - 12, 1, theme.menu_border);
 
-        // File list
-        let list_y = y + 24;
-        let row_h = 20;
-        let max_rows = height.saturating_sub(30) / row_h;
+        let places: [(&str, &str); 5] = [
+            ("Home", "/sd/home/user"),
+            ("Storage", "/sd"),
+            ("System", "/sd/etc"),
+            ("Temp", "/tmp"),
+            ("Root", "/"),
+        ];
+        let mut py = y + 30;
+        for (label, path) in places {
+            let active = self.current_path == path;
+            let bg = if active { theme.menu_item_hover } else { theme.menu_bg };
+            g::fill_rounded_rect(&info, x + 4, py, sidebar_w - 8, 20, 4, bg);
+            g::draw_text(&info, x + 10, py + 4, label,
+                if active { theme.label_text } else { theme.label_text_dim }, bg);
+            py += 24;
+        }
+
+        // === Toolbar (up / refresh / path) ===
+        let main_x = x + sidebar_w;
+        let main_w = width.saturating_sub(sidebar_w);
+        let tool_h = 26u32;
+        g::draw_rect(&info, main_x, y, main_w, tool_h, theme.win_bg);
+
+        g::fill_rounded_rect(&info, main_x + 4, y + 3, 26, 20, 5, theme.btn_bg);
+        g::draw_text(&info, main_x + 12, y + 7, "Up", theme.btn_text, theme.btn_bg);
+        g::fill_rounded_rect(&info, main_x + 34, y + 3, 44, 20, 5, theme.btn_bg);
+        g::draw_text(&info, main_x + 40, y + 7, "Re", theme.btn_text, theme.btn_bg);
+
+        let path_w = main_w.saturating_sub(90);
+        g::fill_rounded_rect(&info, main_x + 84, y + 3, path_w, 20, 10, theme.input_bg);
+        let path_text: alloc::string::String =
+            self.current_path.chars().take((path_w / 8) as usize).collect();
+        g::draw_text(&info, main_x + 92, y + 7, &path_text, theme.input_text, theme.input_bg);
+        g::draw_rect(&info, main_x, y + tool_h, main_w, 1, theme.menu_border);
+
+        // === File list (zebra + selection + icons) ===
+        let list_y = y + tool_h + 2;
+        let list_h = height.saturating_sub(tool_h + 26);
+        let row_h = 24u32;
+        let max_rows = list_h / row_h;
+
+        g::draw_rect(&info, main_x, list_y, main_w, list_h, 0xFFF6F8FA);
 
         for row_idx in 0..max_rows as usize {
             let entry_idx = row_idx;
@@ -578,36 +619,40 @@ impl FileManager {
             let entry = &self.entries[entry_idx];
 
             let is_selected = entry_idx == self.selected_index;
-            let bg = if is_selected { 0x3A4A6A } else if row_idx % 2 == 0 { 0x1E1E2E } else { 0x1A1A2A };
+            let bg = if is_selected { 0xFFCFE3F5 } else { 0xFFF6F8FA };
 
-            crate::display::graphics::draw_rect(&info, x, row_y, width, row_h, bg);
+            g::draw_rect(&info, main_x, row_y, main_w, row_h, bg);
 
-            let icon = if entry.is_dir { "[DIR] " } else { "[FILE] " };
-            let name_text = alloc::format!("{}{}", icon, entry.name);
-            crate::display::graphics::draw_text(&info, x + 8, row_y + 4, &name_text, 0xCCCCCC, bg);
+            let marker = if entry.is_dir { "[D]" } else { "[F]" };
+            g::draw_text(&info, main_x + 6, row_y + 4, marker,
+                if entry.is_dir { 0xFFD08770 } else { 0xFF7B88A1 }, bg);
+
+            let name_text: alloc::string::String = entry.name.chars().take(24).collect();
+            g::draw_text(&info, main_x + 34, row_y + 4, &name_text,
+                if entry.is_dir { 0xFF2E3440 } else { 0xFF4C566A }, bg);
 
             if !entry.is_dir {
-                let size_text = alloc::format!("{} B", entry.size);
-                crate::display::graphics::draw_text(
-                    &info,
-                    x + width - 80,
-                    row_y + 4,
-                    &size_text,
-                    0x8888AA,
-                    bg,
-                );
+                let size_kb = entry.size / 1024;
+                let size_text = if size_kb > 0 {
+                    alloc::format!("{} KB", size_kb)
+                } else {
+                    alloc::format!("{} B", entry.size)
+                };
+                g::draw_text(&info, main_x + main_w.saturating_sub(90), row_y + 4,
+                    &size_text, 0xFF7B88A1, bg);
             }
         }
 
-        // Status bar
+        // === Status bar ===
         let status_y = y + height.saturating_sub(20);
         let status = alloc::format!(
-            "{} items | {} selected",
+            "{} items | selection {} | /sd persistent",
             self.entries.len(),
             self.selected_index
         );
-        crate::display::graphics::draw_rect(&info, x, status_y, width, 20, 0x1A1A2A);
-        crate::display::graphics::draw_text(&info, x + 8, status_y + 4, &status, 0x666688, 0x1A1A2A);
+        g::draw_rect(&info, main_x, status_y, main_w, 20, theme.menu_bg);
+        g::draw_rect(&info, main_x, status_y, main_w, 1, theme.menu_border);
+        g::draw_text(&info, main_x + 8, status_y + 4, &status, theme.label_text_dim, theme.menu_bg);
     }
 }
 
