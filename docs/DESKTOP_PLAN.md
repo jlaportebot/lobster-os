@@ -8,8 +8,8 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 ### A1. Desktop surface
 - [x] Full-screen framebuffer with compositor (2237-line compositor)
 - [x] Desktop icons (launcher + files)
-- [~] **A1.1 Wallpaper system**: gradient exists in compositor; bitmap + /sd persistence TODO
-- [ ] **A1.2 Desktop right-click menu**: New File/Folder, Open Terminal, Display Settings, Refresh
+- [x] **A1.1 Wallpaper system** — DONE 09c2285: 7 gradient presets, live repaint, /sd persistence + restore (incl. system-wide FB color-order fix)
+- [x] **A1.2 Desktop right-click menu** — DONE 09c2285: New File/Folder (with collision-safe names), Open Terminal, File Manager, Display Settings, Change Wallpaper, Toggle Dark/Light, Refresh
 - [ ] **A1.3 Icon selection + rubber-band multi-select + drag-to-arrange (grid snap)**
 ### A2. Panel (taskbar)
 - [x] Panel with clock + task list + launcher button
@@ -25,7 +25,7 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 - [ ] **A3.4 Per-app "dirty" state dot + close confirmation for unsaved docs**
 ### A4. Theme engine
 - [x] Theme struct + palette + fonts
-- [ ] **A4.1 Light/Dark mode toggle** (Settings + tray), animated transition
+- [x] **A4.1 Light/Dark toggle** — DONE 09c2285: theme::toggle + /sd persistence + restore (toast on switch)
 - [ ] **A4.2 Accent color picker** (persisted), rounded-corner radius control
 - [ ] **A4.3 Custom cursor** bitmaps (default, resize, text I-beam, busy)
 - [ ] **A4.4 Theme file format on /sd** (/sd/etc/theme.conf) + live reload
