@@ -1090,6 +1090,41 @@ fn run_builtin_out(
             }
             0
         }
+        "beep" => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                let freq = if argc >= 2 { args[1].parse::<u64>().unwrap_or(440_000) } else { 440_000 };
+                let ms = if argc >= 3 { args[2].parse::<u64>().unwrap_or(300) } else { 300 };
+                if !crate::drivers::lobster_audio::detect() {
+                    crate::println!("beep: audio device absent");
+                } else {
+                    let n = crate::drivers::lobster_audio::beep(freq, ms);
+                    crate::println!("beep: played {} bytes of PCM", n);
+                }
+            }
+            0
+        }
+        "play" => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                if argc < 2 {
+                    crate::println!("usage: play <16-bit mono 8kHz raw pcm file>");
+                    return 0;
+                }
+                if !crate::drivers::lobster_audio::detect() {
+                    crate::println!("play: audio device absent");
+                    return 0;
+                }
+                match crate::fs::vfs::read_file(args[1]) {
+                    Ok(data) => {
+                        let n = crate::drivers::lobster_audio::play_pcm(&data);
+                        crate::println!("play: {} bytes", n);
+                    }
+                    Err(e) => crate::println!("play: read {} failed: {:?}", args[1], e),
+                }
+            }
+            0
+        }
         "share" => {
             match if argc >= 2 { Some(args[1]) } else { None } {
                 None => {
