@@ -37,7 +37,7 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 - [ ] **B1.2 Shell-in-a-window**: interactive shell drives a per-window VT session
 ### B2. Files (file manager v1 exists)
 - [x] Tree browse, /sd integration
-- [ ] **B2.1 Sidebar (Home/Storage/etc), toolbar (up/refresh/new/view toggle), status bar (item count + free space)**
+- [x] **B2.1 File manager shell** — DONE: Places sidebar, Up/Re toolbar + path pill, zebra list w/ type markers + sizes, status bar (visual-verified)
 - [ ] **B2.2 Icon/list views, selection, rename, delete, drag-drop move, properties dialog**
 - [ ] **B2.3 Create/copy/move/delete with undo toast; persistent across reboot**
 ### B3. Settings (v1 exists)
