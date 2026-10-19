@@ -14,8 +14,8 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 ### A2. Panel (taskbar)
 - [x] Panel with clock + task list + launcher button
 - [x] **A2.1 Start-menu style app launcher** — DONE 39afe4b: scrollable app tiles w/ colored icons, hover+keyboard nav, focus-or-create, Esc/outside-click close. (Search + power row still TODO)
-- [ ] **A2.2 System tray**: network state icon, CPU/RAM mini-graph, volume, battery/clock popup
-- [~] **A2.3 Notification center**: toasts + history DONE 571079f (verified live); tray center popup TODO
+- [~] **A2.2 System tray**: popups DONE (clock/notifications, network, volume, battery); CPU/RAM mini-graph in panel TODO
+- [x] **A2.3 Notification center**: toasts + history + clock-popup center DONE (verified live)
 - [ ] **A2.4 Window list previews** (hover peek), pinning apps, grouping by workspace
 ### A3. Window management
 - [x] create/destroy/move/resize/focus/minimize/maximize/snap/workspaces
