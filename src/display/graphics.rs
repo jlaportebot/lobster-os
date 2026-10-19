@@ -29,13 +29,26 @@ pub fn fx(argb: u32) -> u32 {
 }
 
 pub fn draw_rect(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
-    for dy in 0..h {
-        let py = y + dy;
-        if py >= fb.height {
-            break;
-        }
-        for dx in 0..w {
-            draw_pixel(fb, x + dx, py, color);
+    // Fast path: clip once, then write raw scanlines with a hoisted swizzle.
+    // Avoids the per-pixel bounds check + fx() of draw_pixel, cutting large
+    // fills (window bodies, terminals, panels) by an order of magnitude.
+    if x >= fb.width || y >= fb.height || w == 0 || h == 0 {
+        return;
+    }
+    let x_end = (x + w).min(fb.width);
+    let y_end = (y + h).min(fb.height);
+    let stride = fb.pitch / 4;
+    let pixel = fx(color);
+    unsafe {
+        let base = (fb.virt_addr as *mut u32).add((y * stride + x) as usize);
+        let mut row = base;
+        for _py in y..y_end {
+            let mut px = row;
+            for _px in x..x_end {
+                core::ptr::write_volatile(px, pixel);
+                px = px.add(1);
+            }
+            row = row.add(stride as usize);
         }
     }
 }
@@ -228,20 +241,39 @@ pub fn blit(fb: &FramebufferInfo, x: u32, y: u32, src: &[u32], src_w: u32, src_h
 
 /// Draw a text string using the baked-in font
 pub fn draw_text(fb: &FramebufferInfo, x: u32, y: u32, text: &str, fg: u32, bg: u32) {
+    // Transparent background: pass bg == 0 to skip background pixels
+    // entirely (caller guarantees the surface is already painted). Hoisted
+    // swizzles + direct row writes keep glyph rendering cheap.
+    let transparent_bg = bg == 0;
+    let fg_px = fx(fg);
+    let bg_px = fx(bg);
+    let stride = fb.pitch / 4;
     let mut cx = x;
     for c in text.chars() {
         let code = c as usize;
         if code < 128 {
             let glyph = &FONT[code];
             for row in 0..CHAR_HEIGHT {
+                let py = y + row;
+                if py >= fb.height {
+                    break;
+                }
                 let row_bits = glyph[row as usize];
+                let base = unsafe {
+                    (fb.virt_addr as *mut u32).add(((py * stride + cx) as usize))
+                };
                 for col in 0..CHAR_WIDTH {
-                    let color = if (row_bits >> (7 - col)) & 1 != 0 {
-                        fg
-                    } else {
-                        bg
-                    };
-                    draw_pixel(fb, cx + col, y + row, color);
+                    let px = cx + col;
+                    if px >= fb.width {
+                        break;
+                    }
+                    let is_fg = (row_bits >> (7 - col)) & 1 != 0;
+                    let value = if is_fg { fg_px } else { bg_px };
+                    if is_fg || !transparent_bg {
+                        unsafe {
+                            core::ptr::write_volatile(base.add(col as usize), value);
+                        }
+                    }
                 }
             }
         }

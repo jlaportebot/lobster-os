@@ -810,6 +810,8 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
             crate::println!("[apps] Terminal window created (id={:?})", win_id);
 
             // System Monitor window
+            // Boot windows: tidy two-column grid, leaving the center free for
+            // session-restored windows.
             let _sysmon_id = crate::wm::window::create(800, 50, 420, 280, "System Monitor");
             crate::println!("[apps] System Monitor window created");
 
@@ -985,9 +987,17 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::arch::cpu::wfe();
         #[cfg(feature = "qemu_raspi5b")]
         {
-            // On QEMU, timer interrupts may not fire, so don't wait for interrupt
-            // Just yield to allow other cores/tasks to run
-            crate::arch::cpu::relax();
+            // Frame limiter: hold ~33ms between WM ticks (~30fps). This keeps
+            // frames coherent (the desktop is fully redrawn each tick), lowers
+            // CPU burn in the emulator, and lets tools like QEMU screendump
+            // catch complete frames instead of mid-redraw states.
+            const FRAME_INTERVAL_US: u64 = 33_000;
+            let frame_start_us = crate::arch::timer::Timer::system_time_us();
+            let mut now_us = frame_start_us;
+            while now_us.saturating_sub(frame_start_us) < FRAME_INTERVAL_US {
+                crate::arch::cpu::relax();
+                now_us = crate::arch::timer::Timer::system_time_us();
+            }
         }
     }
 }

@@ -1094,7 +1094,7 @@ fn run_builtin_out(
             #[cfg(target_arch = "aarch64")]
             {
                 let count = crate::wm::window::count();
-                crate::println!("wins: {} windows", count);
+                crate::println!("wins: {} windows (focused id={})", count, crate::wm::window::focused_id());
                 for id in 1..=count as u32 {
                     if crate::wm::window::exists(id) {
                         if let Some((x, y, w, h)) = crate::wm::window::get_info(id) {

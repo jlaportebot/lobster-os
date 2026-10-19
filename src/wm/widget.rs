@@ -767,19 +767,9 @@ impl WidgetTable {
 
 /// Fill a rectangle with a solid color
 pub fn fill_rect(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
-    for dy in 0..h {
-        let py = y + dy;
-        if py >= fb.height {
-            break;
-        }
-        for dx in 0..w {
-            let px = x + dx;
-            if px >= fb.width {
-                break;
-            }
-            graphics::draw_pixel(fb, px, py, color);
-        }
-    }
+    // Delegate to the fast scanline fill (hoisted swizzle, no per-pixel
+    // bounds checks) — same semantics, an order of magnitude faster.
+    graphics::draw_rect(fb, x, y, w, h, color);
 }
 
 /// Draw a rectangle outline

@@ -319,6 +319,7 @@ pub fn destroy(id: u32) {
 
 /// Focus a window (bring to top, highlight title bar)
 pub fn focus(id: u32) {
+    crate::wm::dirty::mark();
     let mut windows = WINDOWS.lock();
     let mut focused_id = FOCUSED_ID.lock();
 
@@ -346,6 +347,7 @@ pub fn focused_id() -> u32 {
 
 /// Move a window to a new position
 pub fn move_window(id: u32, x: u32, y: u32) {
+    crate::wm::dirty::mark();
     let mut windows = WINDOWS.lock();
 
     for i in 0..MAX_WINDOWS {
@@ -758,6 +760,7 @@ fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
 
 /// Cycle focus to the next window
 pub fn cycle_focus() {
+    crate::wm::dirty::mark();
     let windows = WINDOWS.lock();
     let current = *FOCUSED_ID.lock();
     let mut found_current = false;

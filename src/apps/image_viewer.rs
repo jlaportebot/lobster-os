@@ -249,7 +249,7 @@ pub mod bmp_view {
                 Ok(())
             }
             None => {
-                window::create(400, 200, 640, 520, "Image Viewer")
+                window::create(820, 540, 640, 520, "Image Viewer")
                     .map(|_| ())
                     .ok_or("window create failed")
             }
@@ -284,8 +284,7 @@ pub mod bmp_view {
                             let sy = py * img.height / dh.max(1);
                             let argb = img.pixels[(sy * img.width + sx) as usize];
                             crate::display::graphics::draw_pixel(
-                                fb, dx + px, dy + py,
-                                crate::display::graphics::fx(argb),
+                                fb, dx + px, dy + py, argb,
                             );
                         }
                     }

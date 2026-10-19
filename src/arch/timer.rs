@@ -108,14 +108,30 @@ impl Timer {
 
     /// Get uptime in milliseconds
     pub fn uptime_ms() -> u64 {
-        // In cooperative QEMU mode the 1ms hardware tick never runs, so
-        // UPTIME_MS stays 0. Derive from the free-running system timer
-        // counter instead — it advances in real time on both paths.
+        // The ARMv8 architectural counter (CNTVCT/CNTFRQ) is always
+        // available on Cortex-A76 — including under QEMU, where the
+        // BCM2711-style MMIO system timer is not implemented on raspi5b.
+        // Prefer the architectural counter; fall back to the MMIO timer
+        // on real hardware where the 1ms tick already runs.
         let hw = UPTIME_MS.load(Ordering::Relaxed);
         if hw > 0 {
             return hw;
         }
-        Self::system_time_us() / 1000
+        Self::generic_timer_ms()
+    }
+
+    /// Milliseconds from the ARMv8 generic virtual counter.
+    fn generic_timer_ms() -> u64 {
+        let freq: u64;
+        let count: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+            core::arch::asm!("mrs {}, cntvct_el0", out(reg) count);
+        }
+        if freq == 0 {
+            return Self::system_time_us() / 1000;
+        }
+        count / (freq / 1000)
     }
 
     /// Get high-resolution timestamp from BCM2835 system timer (microseconds)

@@ -44,10 +44,22 @@ pub fn init() {
 
 /// Poll HID devices and dispatch all pending events to the WM
 /// Call this once per scheduler tick or main loop iteration
+/// Number of events the previous pump consumed — non-zero means the UI
+/// must re-render (input → interaction).
+pub fn poll_count() -> u32 {
+    PUMPED.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+static PUMPED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 pub fn pump_events() {
     // Drain up to 8 events per pump to stay responsive
+    PUMPED.store(0, core::sync::atomic::Ordering::Relaxed);
     for _ in 0..8 {
         let event = hid::poll();
+        if event.is_some() {
+            PUMPED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
         match event {
             Some(HidEvent::KeyPress { scancode, extended }) => {
                 handle_key_press(scancode, extended);

@@ -15,6 +15,7 @@ pub mod compositor;
 pub mod alt_tab;
 pub mod context_menu;
 pub mod desktop_icons;
+pub mod dirty;
 pub mod gui_files;
 pub mod gui_shell;
 pub mod start_menu;
@@ -66,8 +67,13 @@ pub fn init() {
 
 /// Run one frame of the window manager: poll input, update, composite
 pub fn tick() {
-    // Poll HID events and dispatch through the input bridge
+    // Poll HID events and dispatch through the input bridge.
+    // Any event invalidates the static render cache.
+    let had_events = input::poll_count();
     input::pump_events();
+    if had_events > 0 {
+        dirty::mark();
+    }
 
     // Composite all windows (draws frames, wallpaper, blits content buffers)
     compositor::composite();
@@ -77,18 +83,32 @@ pub fn tick() {
     {
         let fb = get_info();
         if fb.width > 0 {
-            crate::apps::terminal::render_to_windows(&fb);
-            // Render other apps directly to their window client areas
-            crate::apps::sysmon::render_to_windows(&fb);
-            crate::apps::calculator::render_to_windows(&fb);
-            crate::apps::file_manager::render_to_windows(&fb);
-            crate::apps::process_manager::render_to_windows(&fb);
-            crate::apps::browser::render_to_windows(&fb);
-            crate::apps::editor::render_to_windows(&fb);
-            crate::apps::notes::render_to_windows(&fb);
-            crate::apps::settings::render_settings_window(&fb);
-            crate::apps::image_viewer::bmp_view::render_to_windows(&fb);
-        }
+            // Terminal: redraw on input/new output (dirty) or slow blink cadence.
+            // The terminal is FIRST in draw order, so any render it makes can
+            // damage windows above it — mark dirty to cascade the redraw.
+            let terminal_dirty = dirty::should_render_static() || dirty::frame() % 8 == 0;
+            if terminal_dirty {
+                crate::apps::terminal::render_to_windows(&fb);
+                dirty::mark();
+            }
+            // Monitors: 2Hz is plenty for graphs. sysmon sits early in the
+            // draw order, so it also cascades; PM is late and self-contained.
+            if dirty::should_render_static() || dirty::frame() % 15 == 0 {
+                crate::apps::sysmon::render_to_windows(&fb);
+                dirty::mark();
+                crate::apps::process_manager::render_to_windows(&fb);
+            }
+            // Everything else is fully static between interactions
+            if dirty::should_render_static() {
+                crate::apps::calculator::render_to_windows(&fb);
+                crate::apps::file_manager::render_to_windows(&fb);
+                crate::apps::browser::render_to_windows(&fb);
+                crate::apps::editor::render_to_windows(&fb);
+                crate::apps::notes::render_to_windows(&fb);
+                crate::apps::settings::render_settings_window(&fb);
+                crate::apps::image_viewer::bmp_view::render_to_windows(&fb);
+            }
+                }
     }
 
     // Draw desktop icons (after windows, before panel)
