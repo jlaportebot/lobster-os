@@ -39,7 +39,7 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 - [x] Tree browse, /sd integration
 - [x] **B2.1 File manager shell** — DONE: Places sidebar, Up/Re toolbar + path pill, zebra list w/ type markers + sizes, status bar (visual-verified)
 - [~] **B2.2**: selection + rename + delete DONE (GUI keys + fm shell, persisted across reboots); drag-drop + properties dialog TODO
-- [~] **B2.3**: delete + rename persist across reboots DONE (verified); copy/move + undo toast TODO
+- [x] **B2.3 Create/copy/move/delete** — DONE: all four ops persist across reboots (files + recursive dirs); undo toast TODO
 ### B3. Settings (v1 exists)
 - [x] **B3.1 Settings app pages** — DONE: Appearance/Display/Network/Storage/About with live data (visual-verified); Users page TODO
 - [ ] **B3.2 Live-apply every setting + persist all to /sd/etc/**
