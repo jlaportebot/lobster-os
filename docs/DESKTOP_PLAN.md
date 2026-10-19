@@ -56,7 +56,7 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 - [~] **B6.5**: Notes app DONE (persisted to /sd, verified); clock/timer + Minesweeper TODO
 
 ## C. System Services (kernel-level)
-- [ ] **C1. Per-app processes**: GUI apps as user processes (EL0) not kernel threads — spawn from panel/launcher via sched, IPC events to compositor (in-window content via shared pages)**
+- [x] **C1. Per-app processes (v1)** — DONE: EL0 apps draw + receive clicks via SYS_WIN_* (110-114); demo /sd/guiapp pixel-verified interactive. v2 (shared-page zero-copy, launcher spawn, preemption) next.
 - [ ] **C2. Compositor event loop**: input routing table, click-through, focus follows window z-order, drag threshold**
 - [ ] **C3. Storage UX: /sd → user home overlay (/home/user on disk), /sd/etc as persistent /etc**
 - [ ] **C4. Audio device** (QEMU: lobster-audio MMIO window + host audio) + volume tray + per-app streams (stretch)
