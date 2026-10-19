@@ -392,10 +392,14 @@ pub struct Bookmark {
 }
 
 /// Default bookmarks
-pub static DEFAULT_BOOKMARKS: [Bookmark; 6] = [
+pub static DEFAULT_BOOKMARKS: [Bookmark; 7] = [
     Bookmark {
         label: "Home",
         path: "/home",
+    },
+    Bookmark {
+        label: "Share",
+        path: "/share",
     },
     Bookmark {
         label: "Root",

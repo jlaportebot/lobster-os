@@ -780,7 +780,39 @@ pub fn seek(fd: usize, offset: i64, whence: u32) -> Result<u64, VfsError> {
 }
 
 /// List directory contents
+
+/// If `path` is inside the host shared folder (/share or /share/...),
+/// return the share-relative remainder ("" for the root).
+fn share_rel_path(path: &str) -> Option<&str> {
+    if path == "/share" {
+        return Some("");
+    }
+    path.strip_prefix("/share/")
+}
+
 pub fn list_dir(path: &str) -> Result<alloc::vec::Vec<DirEntry>, VfsError> {
+    // Host shared folder (lobster-share device): /share[/<rel>]
+    if let Some(rel) = share_rel_path(path) {
+        if !crate::drivers::lobster_share::detect() {
+            return Err(VfsError::NotFound);
+        }
+        let mut entries = alloc::vec::Vec::new();
+        crate::drivers::lobster_share::list_dir(rel, |name| {
+            let child_rel = if rel.is_empty() {
+                alloc::format!("{}", name)
+            } else {
+                alloc::format!("{}/{}", rel, name)
+            };
+            let size = crate::drivers::lobster_share::stat(&child_rel).unwrap_or(0);
+            let mut de = DirEntry::empty();
+            de.set_name(name);
+            de.size = size;
+            entries.push(de);
+        })
+        .map_err(|_| VfsError::NotFound)?;
+        return Ok(entries);
+    }
+
     let inode_id = resolve_path(path)?;
     let node = get_node(inode_id).ok_or(VfsError::NotFound)?;
     if node.metadata.file_type != FileType::Directory {
@@ -811,6 +843,11 @@ pub fn list_dir(path: &str) -> Result<alloc::vec::Vec<DirEntry>, VfsError> {
 
 /// Read entire file contents into a Vec
 pub fn read_file(path: &str) -> Result<alloc::vec::Vec<u8>, VfsError> {
+    // Host shared folder
+    if let Some(rel) = share_rel_path(path) {
+        return crate::drivers::lobster_share::read_file(rel)
+            .ok_or(VfsError::NotFound);
+    }
     let inode_id = resolve_path(path)?;
     // Materialize ext2-backed content before reading the inline buffer.
     let _ = hydrate_node(inode_id);
