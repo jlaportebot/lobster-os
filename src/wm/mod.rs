@@ -14,6 +14,7 @@
 pub mod compositor;
 pub mod context_menu;
 pub mod desktop_icons;
+pub mod start_menu;
 pub mod input;
 pub mod launcher;
 pub mod panel;
@@ -89,6 +90,9 @@ pub fn tick() {
     if fb.width > 0 {
         panel::draw(&fb);
     }
+    // Start menu (above windows, below context menu)
+    start_menu::draw(&fb);
+
     // Draw context menu on top of everything (if visible)
     context_menu::draw();
 }

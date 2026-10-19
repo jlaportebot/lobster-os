@@ -1031,6 +1031,29 @@ fn run_builtin_out(
             0
         }
         "gh" => cmd_gh(args, argc),
+        "app" => {
+            if argc >= 2 {
+                if crate::wm::start_menu::launch_by_name(args[1]) {
+                    crate::println!("app: launched {}", args[1]);
+                } else {
+                    crate::println!("app: no such app: {}", args[1]);
+                }
+            } else {
+                crate::println!("app: usage: app <name> (terminal|files|editor|calculator|...)");
+            }
+            0
+        }
+        "menu" => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                crate::wm::start_menu::toggle();
+                let state = if crate::wm::start_menu::is_open() { "open" } else { "closed" };
+                crate::println!("menu: {}", state);
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            crate::println!("menu: aarch64 only");
+            0
+        }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "panel" => {
             cmd_panel(args, argc);

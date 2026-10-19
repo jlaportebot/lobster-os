@@ -98,6 +98,11 @@ fn handle_key_press(scancode: u8, _extended: bool) {
         return;
     }
 
+    // Start menu keyboard handling (Esc closes, arrows navigate, Enter opens)
+    if crate::wm::start_menu::handle_key(scancode) {
+        return;
+    }
+
     // WM keyboard shortcuts (Super+arrow, Super+D, Alt+F4, Alt+1-4)
     crate::wm::handle_shortcut(scancode);
 
@@ -146,6 +151,12 @@ fn handle_mouse_move(dx: i16, dy: i16) {
 
     // Update hardware cursor position
     compositor::set_hardware_cursor_pos(unsafe { CURSOR_X }, unsafe { CURSOR_Y });
+
+    // Start-menu hover tracking (consumes nothing)
+    {
+        let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+        crate::wm::start_menu::handle_move(cx, cy);
+    }
 
     // Delegate to window module's existing handle_event
     crate::wm::window::handle_event(HidEvent::MouseMove { dx, dy });
@@ -207,6 +218,12 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
             return;
         }
 
+        // Start menu: consume clicks inside its surface (launch/close),
+        // and any outside click closes it.
+        if crate::wm::start_menu::handle_click(cx, cy) {
+            return;
+        }
+
         // Check if click is on a desktop icon
         if let Some(icon_idx) = crate::wm::desktop_icons::hit_test(cx, cy) {
             crate::wm::desktop_icons::handle_click(icon_idx);
@@ -235,9 +252,8 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
 fn handle_panel_action(action: u32) {
     match action {
         0xFFFFFFFF => {
-            // Launcher button clicked - toggle app launcher
-            println!("[wm::input] Launcher button clicked");
-            // TODO: Open app launcher UI
+            // Launcher button clicked - toggle the start menu
+            crate::wm::start_menu::toggle();
         }
         0xFFFFFFFE => {
             // Network tray clicked

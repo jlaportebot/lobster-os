@@ -30,6 +30,44 @@ pub fn draw_rect(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u3
 }
 
 /// Draw a rectangle outline
+/// Fill a rounded rectangle (corner radius clamped to half of w/h).
+pub fn fill_rounded_rect(
+    fb: &FramebufferInfo,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    radius: u32,
+    color: u32,
+) {
+    let r = radius.min(w / 2).min(h / 2);
+    // Body: everything between the corner bands
+    draw_rect(fb, x, y + r, w, h - 2 * r, color);
+    // Top band: two corner cutouts — draw full rows then carve by drawing
+    // nothing; instead draw the full band and let corners overwrite later.
+    // Simpler correct approach: scanline the rounded region.
+    for dy in 0..r {
+        // For each row in the top band, horizontal inset follows the circle
+        let inset = corner_inset(r, dy);
+        draw_rect(fb, x + inset, y + dy, w - 2 * inset, 1, color);
+        draw_rect(fb, x + inset, y + h - 1 - dy, w - 2 * inset, 1, color);
+    }
+}
+
+/// Horizontal inset for a rounded-corner scanline: distance from the corner
+/// box edge to the circle at row `dy` (0..r). Uses integer circle math.
+fn corner_inset(r: u32, dy: u32) -> u32 {
+    // (r-dy)^2 + inset^2 = r^2  =>  inset = sqrt(r^2 - (r-dy)^2)
+    let a = r - dy;
+    let val = (r * r).saturating_sub(a * a);
+    // integer sqrt (r <= 1024 keeps this cheap)
+    let mut s = 0u32;
+    while s * s < val {
+        s += 1;
+    }
+    s
+}
+
 pub fn draw_rect_outline(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
     // Top edge
     for dx in 0..w {

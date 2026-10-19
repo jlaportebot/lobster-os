@@ -340,6 +340,11 @@ pub fn set_task_title(window_id: u32, title: &str) {
 
 // ─── Panel Visibility ─────────────────────────────────────────────────
 
+/// Panel height (public for other WM components)
+pub fn panel_height() -> u32 {
+    PANEL_HEIGHT
+}
+
 /// Toggle panel visibility
 pub fn toggle() {
     unsafe {
