@@ -15,6 +15,7 @@ pub mod compositor;
 pub mod alt_tab;
 pub mod context_menu;
 pub mod desktop_icons;
+pub mod gui_shell;
 pub mod start_menu;
 pub mod notifications;
 pub mod wallpaper;

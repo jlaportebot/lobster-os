@@ -114,6 +114,12 @@ fn handle_key_press(scancode: u8, _extended: bool) {
     // WM keyboard shortcuts (Super+arrow, Super+D, Alt+F4, Alt+1-4)
     crate::wm::handle_shortcut(scancode);
 
+    // GUI shell: capture typing when the Terminal window is focused.
+    // Echoed chars + command output mirror into the window's VT.
+    if crate::wm::gui_shell::handle_key(scancode, ch) {
+        return;
+    }
+
     // Route to focused window via existing handle_event
     crate::wm::window::handle_event(HidEvent::KeyPress {
         scancode,

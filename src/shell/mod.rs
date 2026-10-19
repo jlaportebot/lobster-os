@@ -629,6 +629,14 @@ pub fn print_initial_prompt() {
 }
 
 /// Parse and execute a command string (advanced: pipes, redirects, env vars)
+/// Public GUI entry: execute a command line from the GUI shell input.
+/// Output flows through println! (UART), which mirrors into the terminal
+/// window's VT screen.
+pub fn execute_for_gui(line: &str) -> i32 {
+    let _ = execute_command(line);
+    0
+}
+
 fn execute_command(line: &str) -> CmdResult {
     if line.is_empty() {
         return CmdResult::Ok;
@@ -1078,6 +1086,25 @@ fn run_builtin_out(
                         "up" => crate::apps::browser::scroll(false),
                         _ => {}
                     }
+                }
+            }
+            0
+        }
+        "gkey" => {
+            #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
+            {
+                if argc >= 2 {
+                    // Route as if typed: chars, or special names enter/back
+                    let arg = args[1];
+                    if arg == "enter" {
+                        crate::wm::gui_shell::handle_key(0x28, None);
+                    } else if arg == "back" {
+                        crate::wm::gui_shell::handle_key(0x2A, None);
+                    } else {
+                        let c = arg.chars().next().unwrap_or(' ');
+                        crate::wm::gui_shell::handle_key(0x04, Some(c));
+                    }
+                    crate::println!("gkey: fed '{}'", arg);
                 }
             }
             0
