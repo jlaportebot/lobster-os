@@ -15,6 +15,28 @@ use crate::display::fb::FramebufferInfo;
 const MAX_USER_WINDOWS: usize = 4;
 const MAX_TITLE: usize = 32;
 
+const MAX_WIN_EVENTS: usize = 16;
+
+/// Packed input event word delivered to EL0 apps:
+///   bits  0..7   kind   (1 = press, 2 = release)
+///   bits  8..15  button (1 = left, 2 = right, 4 = middle)
+///   bits 16..31  window-relative x
+///   bits 32..47  window-relative y
+#[derive(Clone, Copy)]
+struct WinEvent(u64);
+
+impl WinEvent {
+    const fn none() -> Self {
+        Self(0)
+    }
+    const fn press(btn: u8, x: u32, y: u32) -> Self {
+        Self(1 | ((btn as u64) << 8) | ((x as u64) << 16) | ((y as u64) << 32))
+    }
+    const fn release(btn: u8, x: u32, y: u32) -> Self {
+        Self(2 | ((btn as u64) << 8) | ((x as u64) << 16) | ((y as u64) << 32))
+    }
+}
+
 #[derive(Clone, Copy)]
 struct UserWindow {
     active: bool,
@@ -27,6 +49,9 @@ struct UserWindow {
     title: [u8; MAX_TITLE],
     title_len: usize,
     dirty: bool,
+    events: [WinEvent; MAX_WIN_EVENTS],
+    ev_head: u32,
+    ev_tail: u32,
 }
 
 static mut WINDOWS: [UserWindow; MAX_USER_WINDOWS] = [UserWindow {
@@ -40,6 +65,9 @@ static mut WINDOWS: [UserWindow; MAX_USER_WINDOWS] = [UserWindow {
     title: [0; MAX_TITLE],
     title_len: 0,
     dirty: false,
+    events: [WinEvent::none(); MAX_WIN_EVENTS],
+    ev_head: 0,
+    ev_tail: 0,
 }; MAX_USER_WINDOWS];
 
 fn alloc_buffer(w: u32, h: u32) -> (usize, *mut u32) {
@@ -186,6 +214,96 @@ pub fn sys_win_close(win_id: u64) -> u64 {
         slot.buf = core::ptr::null_mut();
         crate::wm::dirty::mark();
         0
+    }
+}
+
+fn push_win_event(slot: &mut UserWindow, ev: WinEvent) {
+    let next_tail = (slot.ev_tail + 1) % MAX_WIN_EVENTS as u32;
+    if next_tail == slot.ev_head {
+        // Full — drop the oldest.
+        slot.ev_head = (slot.ev_head + 1) % MAX_WIN_EVENTS as u32;
+    }
+    slot.events[slot.ev_tail as usize] = ev;
+    slot.ev_tail = next_tail;
+}
+
+/// Hit-test a screen coordinate against user windows. Returns the
+/// (window id, window-relative x, y) of the topmost hit, or None.
+/// `screen` coordinates are converted using each window's live WM rect.
+pub fn hit_test(sx: u32, sy: u32) -> Option<(u64, u32, u32)> {
+    unsafe {
+        for (i, slot) in WINDOWS.iter().enumerate() {
+            if !slot.active {
+                continue;
+            }
+            let Some(wm_id) = slot.wm_id else { continue };
+            let Some((wx, wy, ww, wh)) = crate::wm::window::get_info(wm_id) else {
+                continue;
+            };
+            if sx < wx || sy < wy || sx >= wx + ww || sy >= wy + wh {
+                continue;
+            }
+            // Frame chrome: border (2px) + title bar (24px)
+            let cx = sx.saturating_sub(wx + 2);
+            let cy = sy.saturating_sub(wy + 26);
+            if cx >= slot.buf_w || cy >= slot.buf_h {
+                // On the frame, not the content — still counts as a hit
+                // for focus purposes, but no content coordinate.
+                return Some(((i + 1) as u64, 0, 0));
+            }
+            return Some(((i + 1) as u64, cx, cy));
+        }
+    }
+    None
+}
+
+/// Focus the WM window of a user window (on click).
+pub fn focus_window(win_id: u64) {
+    unsafe {
+        let idx = (win_id as usize).saturating_sub(1);
+        if idx >= MAX_USER_WINDOWS {
+            return;
+        }
+        let slot = &WINDOWS[idx];
+        if !slot.active {
+            return;
+        }
+        if let Some(wm_id) = slot.wm_id {
+            crate::wm::window::focus(wm_id);
+        }
+    }
+}
+
+/// Deliver a mouse click into a user window's event queue.
+pub fn click_event(win_id: u64, btn: u8, press: bool, x: u32, y: u32) {
+    unsafe {
+        let idx = (win_id as usize).saturating_sub(1);
+        if idx >= MAX_USER_WINDOWS {
+            return;
+        }
+        let slot = &mut WINDOWS[idx];
+        if !slot.active {
+            return;
+        }
+        let ev = if press {
+            WinEvent::press(btn, x, y)
+        } else {
+            WinEvent::release(btn, x, y)
+        };
+        push_win_event(slot, ev);
+    }
+}
+
+/// Syscall: poll the next event for a user window. 0 = none.
+pub fn sys_win_poll(win_id: u64) -> u64 {
+    unsafe {
+        let Some(slot) = slot_by_id(win_id) else { return u64::MAX };
+        if slot.ev_head == slot.ev_tail {
+            return 0;
+        }
+        let ev = slot.events[slot.ev_head as usize].0;
+        slot.ev_head = (slot.ev_head + 1) % MAX_WIN_EVENTS as u32;
+        ev
     }
 }
 

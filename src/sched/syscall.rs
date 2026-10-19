@@ -153,13 +153,15 @@ pub const SYS_FTRUNCATE: u64 = 92;
 pub const SYS_DLOPEN: u64 = 93;
 pub const SYS_DLSYM: u64 = 94;
 pub const SYS_DLCLOSE: u64 = 95;
+// Verify no collision: 110-114 unused elsewhere (grep SYS_ consts)
 pub const SYS_WIN_CREATE: u64 = 110;
 pub const SYS_WIN_FILL: u64 = 111;
 pub const SYS_WIN_FLUSH: u64 = 112;
 pub const SYS_WIN_CLOSE: u64 = 113;
+pub const SYS_WIN_POLL: u64 = 114;
 
 /// Maximum syscall number
-const MAX_SYSCALL: u64 = 113;
+const MAX_SYSCALL: u64 = 114;
 
 // Global pointer to current trap frame during syscall handling (for sigreturn)
 static mut CURRENT_TRAP_FRAME: *mut TrapFrame = core::ptr::null_mut();
@@ -578,6 +580,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_WIN_FILL => crate::wm::user_windows::sys_win_fill(args[0], args[1], args[2], args[3], args[4], args[5]),
         SYS_WIN_FLUSH => crate::wm::user_windows::sys_win_flush(args[0]),
         SYS_WIN_CLOSE => crate::wm::user_windows::sys_win_close(args[0]),
+        SYS_WIN_POLL => crate::wm::user_windows::sys_win_poll(args[0]),
         _ => {
             // Try Linux ABI compatibility layer for unrecognized syscalls
             linux_compat::dispatch_linux(syscall_num, args)
