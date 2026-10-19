@@ -41,7 +41,7 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 - [ ] **B2.2 Icon/list views, selection, rename, delete, drag-drop move, properties dialog**
 - [ ] **B2.3 Create/copy/move/delete with undo toast; persistent across reboot**
 ### B3. Settings (v1 exists)
-- [ ] **B3.1 Settings app pages**: Appearance (A4), Display (res/theme), Network, Users, Storage, About**
+- [x] **B3.1 Settings app pages** — DONE: Appearance/Display/Network/Storage/About with live data (visual-verified); Users page TODO
 - [ ] **B3.2 Live-apply every setting + persist all to /sd/etc/**
 ### B4. Text editor (v1 exists)
 - [ ] **B4.1 Multi-buffer tabs, save-as, unsaved indicator, find**
