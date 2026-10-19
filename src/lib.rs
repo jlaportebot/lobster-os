@@ -717,7 +717,13 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
                         // Mount persistent filesystem: whole-disk ext2 (no partition
                         // table in the emulator image).
                         match crate::fs::ext2::mount(idx, 0, "/sd") {
-                            Ok(()) => crate::println!("[ext2] persistent /sd mounted from lobster-vd0"),
+                            Ok(()) => {
+                                crate::println!("[ext2] persistent /sd mounted from lobster-vd0");
+                                crate::wm::notifications::success(
+                                    "Storage",
+                                    "Persistent disk mounted at /sd",
+                                );
+                            }
                             Err(e) => crate::println!("[ext2] /sd mount failed: {:?}", e),
                         }
                     }

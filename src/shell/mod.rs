@@ -1031,6 +1031,18 @@ fn run_builtin_out(
             0
         }
         "gh" => cmd_gh(args, argc),
+        "notify" => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                let title = if argc >= 2 { args[1] } else { "Test" };
+                let body = if argc >= 3 { args[2] } else { "Notification from the shell" };
+                crate::wm::notifications::info(title, body);
+                crate::println!("notify: posted '{}'", title);
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            crate::println!("notify: aarch64 only");
+            0
+        }
         "app" => {
             if argc >= 2 {
                 if crate::wm::start_menu::launch_by_name(args[1]) {

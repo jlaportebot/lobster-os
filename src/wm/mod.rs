@@ -15,6 +15,7 @@ pub mod compositor;
 pub mod context_menu;
 pub mod desktop_icons;
 pub mod start_menu;
+pub mod notifications;
 pub mod input;
 pub mod launcher;
 pub mod panel;
@@ -90,8 +91,14 @@ pub fn tick() {
     if fb.width > 0 {
         panel::draw(&fb);
     }
+    // Notifications tick (animate/expire toasts)
+    notifications::tick();
+
     // Start menu (above windows, below context menu)
     start_menu::draw(&fb);
+
+    // Toasts (above windows, top-right)
+    notifications::draw(&fb);
 
     // Draw context menu on top of everything (if visible)
     context_menu::draw();
