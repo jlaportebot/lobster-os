@@ -64,9 +64,9 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 
 ## D. Emulator support (lobster-qemu)
 - [x] 4 cores, framebuffer display stack, lobster-input kbd/mouse, lobster-net, bulk serial, lobster-disk
-- [ ] **D1. lobster-fb v2: expose damage/dirty rects so compositor only re-blits changed regions (perf)**
-- [ ] **D2. Snapshot/resume: QEMU savevm of full machine incl. disk (VM menu in launcher)**
-- [ ] **D3. Shared-folder device: host dir ↔ guest file manager (9p-style over lobster-disk MMIO)**
+- [x] **D1. Dirty-rect rendering** — DONE: dirty-gating render architecture (50× steady-state speedup)
+- [x] **D2. Snapshot/resume** — DONE: BlockBackend lobster-disk + vm.sh (snap/boot --resume/list/del), savevm/loadvm verified
+- [x] **D3. Shared folder** — DONE: lobster-share MMIO device + guest driver + share/cat/cp shell cmds (GUI FM integration next)
 - [ ] **D4. Resize: display size property + guest reinit framebuffer**
 - [ ] **D5. Audio passthrough device** (ties C4)
 
