@@ -26,8 +26,9 @@ pub fn handle_key(scancode: u8, ch: Option<char>) -> bool {
         return false;
     }
 
-    // Enter → execute the buffered line
-    if scancode == 0x28 {
+    // Enter → execute the buffered line (set-1 scancode, matching
+    // input.rs and hid::scancode_to_ascii)
+    if scancode == 0x1C {
         unsafe {
             let line = core::str::from_utf8(&LINE[..LINE_LEN]).unwrap_or("");
             LINE_LEN = 0;
@@ -43,8 +44,8 @@ pub fn handle_key(scancode: u8, ch: Option<char>) -> bool {
         return true;
     }
 
-    // Backspace
-    if scancode == 0x2A {
+    // Backspace (set-1)
+    if scancode == 0x0E {
         unsafe {
             if LINE_LEN > 0 {
                 LINE_LEN -= 1;

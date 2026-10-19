@@ -1090,6 +1090,49 @@ fn run_builtin_out(
             }
             0
         }
+        "resolution" => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                let (w, h) = if argc >= 3 {
+                    (args[1].parse::<u32>().unwrap_or(0), args[2].parse::<u32>().unwrap_or(0))
+                } else {
+                    (0, 0)
+                };
+                const MIN_W: u32 = 640;
+                const MIN_H: u32 = 480;
+                const MAX_W: u32 = 2560;
+                const MAX_H: u32 = 1600;
+                if w < MIN_W || h < MIN_H || w > MAX_W || h > MAX_H {
+                    crate::println!("usage: resolution <{}-{}> <{}-{}>", MIN_W, MAX_W, MIN_H, MAX_H);
+                    return 0;
+                }
+                match crate::display::fb::init(w, h, 32) {
+                    Ok(info) => {
+                        crate::display::console::init(info);
+                        // Repaint the desktop onto the new surface and
+                        // pull all windows back on-screen.
+                        crate::wm::wallpaper::paint_to_screen();
+                        let count = crate::wm::window::count();
+                        for id in 1..=count as u32 {
+                            if !crate::wm::window::exists(id) {
+                                continue;
+                            }
+                            if let Some((x, y, ww, hh)) = crate::wm::window::get_info(id) {
+                                let nx = x.min(info.width.saturating_sub(64));
+                                let ny = y.min(info.height.saturating_sub(64));
+                                if nx != x || ny != y {
+                                    crate::wm::window::move_window(id, nx, ny);
+                                }
+                            }
+                        }
+                        crate::wm::dirty::mark();
+                        crate::println!("resolution: now {}x{}", info.width, info.height);
+                    }
+                    Err(e) => crate::println!("resolution: failed: {:?}", e),
+                }
+            }
+            0
+        }
         "beep" => {
             #[cfg(target_arch = "aarch64")]
             {
