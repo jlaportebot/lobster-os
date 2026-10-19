@@ -1090,6 +1090,56 @@ fn run_builtin_out(
             }
             0
         }
+        "fm" => {
+            #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
+            {
+                let fm = crate::apps::file_manager::get_file_manager();
+                if argc >= 2 {
+                    match args[1] {
+                        "nav" if argc >= 3 => {
+                            fm.cd(args[2]);
+                            crate::println!("fm: cwd {}", fm.current_path());
+                        }
+                        "up" => {
+                            fm.cd_up();
+                            crate::println!("fm: cwd {}", fm.current_path());
+                        }
+                        "refresh" => {
+                            fm.refresh();
+                            crate::println!("fm: {} entries", fm.entry_count());
+                        }
+                        "sel" if argc >= 3 => {
+                            match args[2].parse::<usize>() {
+                                Ok(n) => {
+                                    fm.selected_index = n;
+                                    crate::println!("fm: selected {}", n);
+                                }
+                                Err(_) => crate::println!("fm: bad index"),
+                            }
+                        }
+                        "del" => {
+                            match fm.delete_selected() {
+                                Ok(()) => crate::println!("fm: deleted (persisted)"),
+                                Err(e) => crate::println!("fm: {}", e),
+                            }
+                        }
+                        "rename" if argc >= 3 => {
+                            match fm.rename_selected(args[2]) {
+                                Ok(()) => crate::println!("fm: renamed to {}", args[2]),
+                                Err(e) => crate::println!("fm: {}", e),
+                            }
+                        }
+                        "ls" => {
+                            crate::println!("fm: cwd {} ({} entries)", fm.current_path(), fm.entry_count());
+                        }
+                        _ => crate::println!("fm: unknown subcommand"),
+                    }
+                } else {
+                    crate::println!("fm: usage: fm <nav|up|refresh|sel|del|rename|ls> [...]");
+                }
+            }
+            0
+        }
         "iconsel" => {
             #[cfg(target_arch = "aarch64")]
             {

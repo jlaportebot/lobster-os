@@ -120,6 +120,11 @@ fn handle_key_press(scancode: u8, _extended: bool) {
         return;
     }
 
+    // GUI file manager: keyboard shortcuts when the Files window is focused.
+    if crate::wm::gui_files::handle_key(scancode) {
+        return;
+    }
+
     // Route to focused window via existing handle_event
     crate::wm::window::handle_event(HidEvent::KeyPress {
         scancode,
