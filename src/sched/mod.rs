@@ -1066,6 +1066,13 @@ static mut COOPERATIVE_EXIT_REQUESTED: bool = false;
 /// returns to the kernel code that called run_user_process().
 static mut KERNEL_RETURN_ADDR: u64 = 0;
 
+/// True while a cooperative run_and_wait trampoline owns the current
+/// task — used by syscalls (e.g. sleep) to run in "blocking" style
+/// while keeping the rest of the system alive.
+pub fn coop_active() -> bool {
+    unsafe { KERNEL_RETURN_ADDR != 0 }
+}
+
 /// Exit code of the most recently cooperatively-exited user process —
 /// the exception handler copies it into the trap frame's x0 so the resume
 /// trampoline returns it to run_and_wait's caller.

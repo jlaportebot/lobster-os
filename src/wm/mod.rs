@@ -16,6 +16,7 @@ pub mod alt_tab;
 pub mod context_menu;
 pub mod desktop_icons;
 pub mod dirty;
+pub mod user_windows;
 pub mod gui_files;
 pub mod gui_shell;
 pub mod start_menu;
@@ -67,6 +68,30 @@ pub fn init() {
 
 /// Run one frame of the window manager: poll input, update, composite
 pub fn tick() {
+    // Reentrancy guard: sys_sleep pumps ticks from inside a syscall that
+    // was itself called from a tick-driven shell path. Nested ticks would
+    // re-render mid-frame and corrupt the dirty flags — skip them.
+    static IN_TICK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    static PUMPED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    if IN_TICK.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        // Pumped from a syscall inside an outer tick (e.g. sys_sleep in a
+        // cooperative EL0 GUI app). Run only the render pass so user
+        // windows composite without re-processing input or animations.
+        let fb = get_info();
+        if fb.width > 0 {
+            crate::apps::sysmon::render_to_windows(&fb);
+            crate::apps::calculator::render_to_windows(&fb);
+            crate::apps::file_manager::render_to_windows(&fb);
+            crate::apps::process_manager::render_to_windows(&fb);
+            crate::apps::browser::render_to_windows(&fb);
+            crate::apps::editor::render_to_windows(&fb);
+            crate::apps::notes::render_to_windows(&fb);
+            crate::apps::settings::render_settings_window(&fb);
+            crate::apps::image_viewer::bmp_view::render_to_windows(&fb);
+            crate::wm::user_windows::render_to_windows(&fb);
+        }
+        return;
+    }
     // Poll HID events and dispatch through the input bridge.
     // Any event invalidates the static render cache.
     let had_events = input::poll_count();
@@ -107,6 +132,9 @@ pub fn tick() {
                 crate::apps::notes::render_to_windows(&fb);
                 crate::apps::settings::render_settings_window(&fb);
                 crate::apps::image_viewer::bmp_view::render_to_windows(&fb);
+                // EL0 user-process windows (C1) — composite last so user
+                // content lands on top of the static apps.
+                crate::wm::user_windows::render_to_windows(&fb);
             }
                 }
     }
@@ -142,6 +170,9 @@ pub fn tick() {
 
     // Draw context menu on top of everything (if visible)
     context_menu::draw();
+
+    // Release the reentrancy guard.
+    IN_TICK.swap(false, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// Handle keyboard shortcuts (called from input module)

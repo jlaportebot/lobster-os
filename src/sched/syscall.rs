@@ -153,9 +153,13 @@ pub const SYS_FTRUNCATE: u64 = 92;
 pub const SYS_DLOPEN: u64 = 93;
 pub const SYS_DLSYM: u64 = 94;
 pub const SYS_DLCLOSE: u64 = 95;
+pub const SYS_WIN_CREATE: u64 = 110;
+pub const SYS_WIN_FILL: u64 = 111;
+pub const SYS_WIN_FLUSH: u64 = 112;
+pub const SYS_WIN_CLOSE: u64 = 113;
 
 /// Maximum syscall number
-const MAX_SYSCALL: u64 = 95;
+const MAX_SYSCALL: u64 = 113;
 
 // Global pointer to current trap frame during syscall handling (for sigreturn)
 static mut CURRENT_TRAP_FRAME: *mut TrapFrame = core::ptr::null_mut();
@@ -570,6 +574,10 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_DLOPEN => sys_dlopen(args[0], args[1] as u32),
         SYS_DLSYM => sys_dlsym(args[0] as u64, args[1]),
         SYS_DLCLOSE => sys_dlclose(args[0] as u64),
+        SYS_WIN_CREATE => crate::wm::user_windows::sys_win_create(args[0], args[1], args[2], args[3], args[4]),
+        SYS_WIN_FILL => crate::wm::user_windows::sys_win_fill(args[0], args[1], args[2], args[3], args[4], args[5]),
+        SYS_WIN_FLUSH => crate::wm::user_windows::sys_win_flush(args[0]),
+        SYS_WIN_CLOSE => crate::wm::user_windows::sys_win_close(args[0]),
         _ => {
             // Try Linux ABI compatibility layer for unrecognized syscalls
             linux_compat::dispatch_linux(syscall_num, args)
@@ -1168,6 +1176,26 @@ fn sys_getpid() -> u64 {
 
 /// sys_sleep(ms) — sleep for N milliseconds
 fn sys_sleep(ms: u64) {
+    // Cooperative mode (run_and_wait): the caller blocks, so make the
+    // wait REAL — advance the CNTVCT clock while keeping the desktop
+    // alive with WM ticks (~60fps). Preemptive mode falls back to a
+    // yield. KERNEL_RETURN_ADDR is only set while a cooperative
+    // run_and_wait trampoline owns the current task.
+    if sched::coop_active() {
+        let start = crate::arch::ArchTimer::uptime_ms();
+        let mut now = start;
+        let mut last_tick_ms = start;
+        while now.saturating_sub(start) < ms {
+            if now.saturating_sub(last_tick_ms) >= 16 {
+                #[cfg(feature = "qemu_raspi5b")]
+                crate::wm::tick();
+                last_tick_ms = now;
+            }
+            crate::arch::cpu::relax();
+            now = crate::arch::ArchTimer::uptime_ms();
+        }
+        return;
+    }
     let target_tick = sched::tick_count() + (ms / sched::TICK_MS);
     let _ = target_tick;
     sched::yield_task();

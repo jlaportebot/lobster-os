@@ -424,18 +424,30 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
                 }
             }
 
-            // Copy file data into this page
-            let page_offset = (va - phdr.p_vaddr) as usize;
+            // Copy file data into this page.
+            // NOTE: when p_vaddr is not page-aligned, `va` starts BELOW
+            // p_vaddr — handle with signed offsets so the first page
+            // copies from the correct file offset (and unaligned vaddr
+            // segments load correctly).
+            let vaddr_delta = (va as i64) - (phdr.p_vaddr as i64);
+            let seg_start_in_page = if vaddr_delta >= 0 {
+                // Page fully inside the segment — copy to page start.
+                0
+            } else {
+                // First page holds the segment start at (p_vaddr - va).
+                (phdr.p_vaddr - va) as usize
+            };
+            let page_offset = if vaddr_delta >= 0 { vaddr_delta as usize } else { 0 };
             let copy_start = file_offset as usize;
             let copy_in_page = if page_offset < phdr.p_filesz as usize {
                 let remaining = phdr.p_filesz as usize - page_offset;
-                let avail = PAGE_SIZE as usize;
+                let avail = (PAGE_SIZE as usize).saturating_sub(seg_start_in_page);
                 let n = remaining.min(avail);
                 if copy_start + n <= elf_data.len() {
                     unsafe {
                         core::ptr::copy_nonoverlapping(
                             elf_data.as_ptr().add(copy_start),
-                            page_ptr,
+                            page_ptr.add(seg_start_in_page),
                             n,
                         );
                     }
