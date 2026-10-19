@@ -10,7 +10,7 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 - [x] Desktop icons (launcher + files)
 - [x] **A1.1 Wallpaper system** — DONE 09c2285: 7 gradient presets, live repaint, /sd persistence + restore (incl. system-wide FB color-order fix)
 - [x] **A1.2 Desktop right-click menu** — DONE 09c2285: New File/Folder (with collision-safe names), Open Terminal, File Manager, Display Settings, Change Wallpaper, Toggle Dark/Light, Refresh
-- [ ] **A1.3 Icon selection + rubber-band multi-select + drag-to-arrange (grid snap)**
+- [~] **A1.3**: single-selection + hover DONE (visual-verified); rubber-band multi-select + drag-arrange TODO
 ### A2. Panel (taskbar)
 - [x] Panel with clock + task list + launcher button
 - [x] **A2.1 Start-menu style app launcher** — DONE 39afe4b: scrollable app tiles w/ colored icons, hover+keyboard nav, focus-or-create, Esc/outside-click close. (Search + power row still TODO)
