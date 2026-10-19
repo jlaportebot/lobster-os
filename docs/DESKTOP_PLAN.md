@@ -47,7 +47,7 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 - [ ] **B4.1 Multi-buffer tabs, save-as, unsaved indicator, find**
 ### B5. Browser (new)
 - [x] **B5.1 Text-mode browser** — DONE: URL bar + back/forward + HTML-strip rendering via lobster-net, visual-verified (B5.2 history/bookmarks persist TODO)
-- [ ] **B5.2 History + bookmarks persisted to /sd**
+- [x] **B5.2 History + bookmarks persisted to /sd** — DONE (verified round trip)
 ### B6. Media & extras
 - [ ] **B6.1 Image viewer from disk (BMP/PNG)**, wallpaper setter integration
 - [ ] **B6.2 Calculator (v1 exists) → keyboard input + history**
