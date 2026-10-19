@@ -1090,6 +1090,35 @@ fn run_builtin_out(
             }
             0
         }
+        "wins" => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                let count = crate::wm::window::count();
+                crate::println!("wins: {} windows", count);
+                for id in 1..=count as u32 {
+                    if crate::wm::window::exists(id) {
+                        if let Some((x, y, w, h)) = crate::wm::window::get_info(id) {
+                            crate::println!("wins: id={} '{}' at ({},{}) {}x{}", id, crate::wm::window::get_title(id), x, y, w, h);
+                        }
+                    }
+                }
+            }
+            0
+        }
+        "image" => {
+            #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
+            {
+                if argc >= 2 {
+                    match crate::apps::image_viewer::open_image(args[1]) {
+                        Ok(()) => crate::println!("image: loaded {}", args[1]),
+                        Err(e) => crate::println!("image: {}: {}", args[1], e),
+                    }
+                } else {
+                    crate::println!("image: usage: image <bmp-path>");
+                }
+            }
+            0
+        }
         "accent" => {
             #[cfg(target_arch = "aarch64")]
             {

@@ -897,6 +897,25 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::sched::enable();
     crate::println!("[boot] Scheduler enabled");
 
+    // Session restore: open apps listed in /sd/etc/boot_open (one per line).
+    // Enables "reopen on boot" for the desktop's everyday windows.
+    if let Ok(data) = crate::fs::vfs::read_file("/sd/etc/boot_open") {
+        if let Ok(text) = core::str::from_utf8(&data) {
+            for line in text.lines() {
+                let cmd = line.trim();
+                if cmd.is_empty() {
+                    continue;
+                }
+                crate::println!("[boot] session restore: {}", cmd);
+                if let Some(rest) = cmd.strip_prefix("image ") {
+                    let _ = crate::apps::image_viewer::open_image(rest.trim());
+                } else {
+                    let _ = crate::wm::start_menu::launch_by_name(cmd);
+                }
+            }
+        }
+    }
+
     // Boot is complete. On real hardware, enable hardware timer ticks now.
     // On QEMU raspi5b, hardware tick delivery hits a PSTATE.IL-class UNDEF at
     // IRQ-vector handler entry (under investigation) — the cooperative main

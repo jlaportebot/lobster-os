@@ -176,3 +176,135 @@ impl Default for ImageViewer {
 pub fn init() {
     crate::println!("[apps] Image Viewer initialized");
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Real BMP image rendering (B6.1) — QEMU direct-FB path
+// ═══════════════════════════════════════════════════════════════════════
+
+#[cfg(feature = "qemu_raspi5b")]
+pub mod bmp_view {
+    use crate::wm::window;
+
+    /// Decoded BMP (24/32-bit, bottom-up or top-down)
+    pub struct BmpImage {
+        pub width: u32,
+        pub height: u32,
+        /// ARGB pixels, row-major, top-down
+        pub pixels: alloc::vec::Vec<u32>,
+    }
+
+    /// Parse a BMP file body. Returns None on unsupported formats.
+    pub fn parse_bmp(data: &[u8]) -> Option<BmpImage> {
+        if data.len() < 54 || &data[0..2] != b"BM" {
+            return None;
+        }
+        let pixel_offset = u32::from_le_bytes([data[10], data[11], data[12], data[13]]) as usize;
+        let width = i32::from_le_bytes([data[18], data[19], data[20], data[21]]);
+        let height_raw = i32::from_le_bytes([data[22], data[23], data[24], data[25]]);
+        let bpp = u16::from_le_bytes([data[28], data[29]]);
+        if width <= 0 || height_raw == 0 || bpp < 24 || bpp > 32 {
+            return None;
+        }
+        let top_down = height_raw < 0;
+        let height = height_raw.unsigned_abs();
+        let w = width as u32;
+        let h = height as u32;
+        let bytes_pp = (bpp / 8) as usize;
+        let row_size = ((w as usize * bytes_pp) + 3) & !3; // 4-byte aligned
+
+        let mut pixels = alloc::vec::Vec::with_capacity((w * h) as usize);
+        for row in 0..h {
+            let src_row = if top_down { row } else { h - 1 - row };
+            let base = pixel_offset + src_row as usize * row_size;
+            if base + row_size > data.len() {
+                return None;
+            }
+            for col in 0..w {
+                let o = base + col as usize * bytes_pp;
+                let b = data[o] as u32;
+                let g = data[o + 1] as u32;
+                let r = data[o + 2] as u32;
+                let a = if bytes_pp == 4 { data[o + 3] as u32 } else { 0xFF };
+                // Store as ARGB; the fb swizzle happens at draw time via fx().
+                pixels.push((a << 24) | (r << 16) | (g << 8) | b);
+            }
+        }
+        Some(BmpImage { width: w, height: h, pixels })
+    }
+
+    static mut IMAGE: Option<BmpImage> = None;
+    static mut SOURCE: alloc::string::String = alloc::string::String::new();
+
+    /// Load a BMP from disk into the viewer (creates the window if needed).
+    pub fn open(path: &str) -> Result<(), &'static str> {
+        let data = crate::fs::vfs::read_file(path).map_err(|_| "cannot read file")?;
+        let img = parse_bmp(&data).ok_or("unsupported format (need 24/32-bit BMP)")?;
+        unsafe {
+            IMAGE = Some(img);
+            SOURCE = alloc::string::String::from(path);
+        }
+        match window::find_by_title("Image Viewer") {
+            Some(id) => {
+                window::focus(id);
+                Ok(())
+            }
+            None => {
+                window::create(400, 200, 640, 520, "Image Viewer")
+                    .map(|_| ())
+                    .ok_or("window create failed")
+            }
+        }
+    }
+
+    /// Render into the Image Viewer window (called from wm::tick).
+    pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
+        let Some(win_id) = window::find_by_title("Image Viewer") else { return };
+        let Some((x, y, w, h)) = window::get_info(win_id) else { return };
+        let focused = window::focused_id() == win_id;
+        let (cx, cy, cw, ch) = crate::wm::window_frame::draw_frame(
+            fb, win_id, x, y, w, h, "Image Viewer", focused,
+        );
+
+        let theme = crate::wm::theme::current();
+        unsafe {
+            match IMAGE.as_ref() {
+                Some(img) => {
+                    // Center + fit-scale the image into the client area
+                    let scale_x = cw as u32 * 100 / img.width.max(1);
+                    let scale_y = ch as u32 * 100 / img.height.max(1);
+                    let scale = scale_x.min(scale_y).min(100); // never upscale > 1:1
+                    let dw = img.width * scale / 100;
+                    let dh = img.height * scale / 100;
+                    let dx = cx + (cw.saturating_sub(dw)) / 2;
+                    let dy = cy + (ch.saturating_sub(dh)) / 2;
+
+                    for py in 0..dh {
+                        for px in 0..dw {
+                            let sx = px * img.width / dw.max(1);
+                            let sy = py * img.height / dh.max(1);
+                            let argb = img.pixels[(sy * img.width + sx) as usize];
+                            crate::display::graphics::draw_pixel(
+                                fb, dx + px, dy + py,
+                                crate::display::graphics::fx(argb),
+                            );
+                        }
+                    }
+                }
+                None => {
+                    crate::display::graphics::draw_rect(fb, cx, cy, cw, ch, theme.win_bg);
+                    crate::display::graphics::draw_text(
+                        fb, cx + 12, cy + 14,
+                        "No image loaded — 'image <path-to-bmp>'",
+                        theme.label_text_dim, theme.win_bg,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Shell: load a BMP into the viewer.
+#[cfg(feature = "qemu_raspi5b")]
+pub fn open_image(path: &str) -> Result<(), &'static str> {
+    bmp_view::open(path)
+}
