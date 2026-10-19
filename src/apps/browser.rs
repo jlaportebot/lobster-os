@@ -26,6 +26,8 @@ pub struct Browser {
     history: alloc::vec::Vec<alloc::string::String>,
     history_idx: usize,
     status: alloc::string::String,
+    /// Persisted bookmark list (one URL per line, /sd/etc/browser/bookmarks)
+    bookmarks: alloc::vec::Vec<alloc::string::String>,
 }
 
 impl Browser {
@@ -40,7 +42,66 @@ impl Browser {
             history: alloc::vec::Vec::new(),
             history_idx: 0,
             status: alloc::string::String::new(),
+            bookmarks: alloc::vec::Vec::new(),
         }
+    }
+
+    /// Load bookmarks from /sd/etc/browser/bookmarks (best effort).
+    pub fn load_bookmarks(&mut self) {
+        self.bookmarks.clear();
+        if let Ok(data) = crate::fs::vfs::read_file("/sd/etc/browser/bookmarks") {
+            if let Ok(text) = core::str::from_utf8(&data) {
+                for line in text.lines() {
+                    let t = line.trim();
+                    if !t.is_empty() {
+                        self.bookmarks.push(alloc::string::String::from(t));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Save bookmarks to /sd/etc/browser/bookmarks (best effort).
+    pub fn save_bookmarks(&self) {
+        // Ensure the parent directory exists (persisted via mkdir write-through)
+        let _ = crate::fs::vfs::create_dir("/sd/etc/browser");
+        let mut body = alloc::string::String::new();
+        for b in &self.bookmarks {
+            body.push_str(b);
+            body.push('\n');
+        }
+        match crate::fs::vfs::write_file("/sd/etc/browser/bookmarks", body.as_bytes()) {
+            Ok(_) => {}
+            Err(e) => crate::println!("[browser] bookmark save failed: {:?}", e),
+        }
+    }
+
+    /// Toggle a bookmark for the current URL.
+    pub fn toggle_bookmark(&mut self) {
+        let url = self.url.clone();
+        if let Some(pos) = self.bookmarks.iter().position(|b| *b == url) {
+            self.bookmarks.remove(pos);
+            self.status = alloc::format!("Bookmark removed: {}", url);
+        } else {
+            self.bookmarks.push(url.clone());
+            self.status = alloc::format!("Bookmarked: {}", url);
+        }
+        self.save_bookmarks();
+    }
+
+    pub fn bookmark_count(&self) -> usize {
+        self.bookmarks.len()
+    }
+
+    /// Persist the browsing history to /sd/etc/browser/history (last 20).
+    fn persist_history(&self) {
+        let mut body = alloc::string::String::new();
+        let start = self.history.len().saturating_sub(20);
+        for h in &self.history[start..] {
+            body.push_str(h);
+            body.push('\n');
+        }
+        let _ = crate::fs::vfs::write_file("/sd/etc/browser/history", body.as_bytes());
     }
 
     /// Fetch and render the current URL.
@@ -60,6 +121,7 @@ impl Browser {
                 self.history.truncate(self.history_idx);
                 self.history.push(alloc::string::String::from(url));
                 self.history_idx = self.history.len();
+                self.persist_history();
             }
             None => {
                 self.loading = false;
@@ -240,8 +302,10 @@ impl Browser {
             bx += w + 6;
         }
 
-        // Status line
+        // Status line + bookmark count
         graphics::draw_text(&fb, cx + 8, cy + 34, &self.status, theme.label_text_dim, theme.win_bg);
+        let bm = alloc::format!("\u{2605} {}", self.bookmarks.len());
+        graphics::draw_text(&fb, cx + cw.saturating_sub(120), cy + 34, &bm, 0xFFD08770, theme.win_bg);
         graphics::draw_rect(&fb, cx, cy + chrome_h, cw, 1, theme.menu_border);
 
         // Page area
@@ -300,10 +364,26 @@ pub static mut INSTANCE: Option<Browser> = None;
 pub fn init() {
     unsafe {
         if INSTANCE.is_none() {
-            INSTANCE = Some(Browser::new());
+            let mut b = Browser::new();
+            b.load_bookmarks();
+            INSTANCE = Some(b);
         }
     }
     crate::println!("[browser] Browser application initialized");
+}
+
+/// Toggle a bookmark for the current URL.
+pub fn toggle_bookmark() {
+    unsafe {
+        if let Some(b) = INSTANCE.as_mut() {
+            b.toggle_bookmark();
+        }
+    }
+}
+
+/// Bookmark count (for the shell/tests).
+pub fn bookmark_count() -> usize {
+    unsafe { INSTANCE.as_ref().map(|b| b.bookmark_count()).unwrap_or(0) }
 }
 
 pub fn open(url: &str) -> u32 {

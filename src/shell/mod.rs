@@ -1090,6 +1090,16 @@ fn run_builtin_out(
             }
             0
         }
+        "bookmark" => {
+            #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
+            {
+                crate::apps::browser::init();
+                crate::apps::browser::toggle_bookmark();
+                crate::println!("bookmark: {} bookmarks (current URL toggled)",
+                    crate::apps::browser::bookmark_count());
+            }
+            0
+        }
         "fm" => {
             #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
             {
