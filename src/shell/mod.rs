@@ -1127,6 +1127,18 @@ fn run_builtin_out(
                                 Err(_) => crate::println!("fm: bad index"),
                             }
                         }
+                        "copy" if argc >= 3 => {
+                            match fm.copy_selected(args[2]) {
+                                Ok(()) => crate::println!("fm: copied to {}", args[2]),
+                                Err(e) => crate::println!("fm: {}", e),
+                            }
+                        }
+                        "move" if argc >= 3 => {
+                            match fm.move_selected(args[2]) {
+                                Ok(()) => crate::println!("fm: moved to {}", args[2]),
+                                Err(e) => crate::println!("fm: {}", e),
+                            }
+                        }
                         "del" => {
                             match fm.delete_selected() {
                                 Ok(()) => crate::println!("fm: deleted (persisted)"),

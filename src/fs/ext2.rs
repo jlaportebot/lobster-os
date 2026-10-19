@@ -1054,15 +1054,26 @@ impl Ext2FileSystem {
         for group in 0..self.num_groups as usize {
             self.load_inode_bitmap(group as u32)?;
 
-            let bitmap = &mut self.inode_bitmaps[group];
+            // Copy the bitmap row locally so the &mut self borrow ends before
+            // read_inode (which needs &mut self) is called.
+            let mut bitmap = self.inode_bitmaps[group];
             for byte_idx in 0..512 {
                 if bitmap[byte_idx] != 0xFF {
                     for bit in 0..8 {
                         if bitmap[byte_idx] & (1 << bit) == 0 {
-                            bitmap[byte_idx] |= 1 << bit;
                             let inode_offset = (byte_idx * 8 + bit) as u32;
                             let global_inode =
                                 group as u32 * self.inodes_per_group + inode_offset + 1;
+                            // Guard against stale free-bitmap state (past
+                            // free/relink races): never hand out an inode
+                            // that still has links — mark it used instead.
+                            if let Ok(ino) = self.read_inode(global_inode) {
+                                if u16::from_le(ino.i_links_count) > 0 {
+                                    bitmap[byte_idx] |= 1 << bit;
+                                    continue;
+                                }
+                            }
+                            bitmap[byte_idx] |= 1 << bit;
 
                             // Write bitmap back
                             let gdesc = self.group_descs[group];
@@ -1087,6 +1098,7 @@ impl Ext2FileSystem {
                                     .saturating_sub(1)
                                     .to_le();
 
+                            self.inode_bitmaps[group] = bitmap;
                             println!("[ext2] Allocated inode {}", global_inode);
                             return Ok(global_inode);
                         }

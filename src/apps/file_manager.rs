@@ -253,14 +253,11 @@ impl FileManager {
                 // Recursively copy directory contents
                 self.copy_dir_recursive(&src_path, &dest_path)?;
             } else {
-                // Copy file
+                // Copy file via the known-good write_file path (hydrate read +
+                // write-through create/update — no fd lifetime issues).
                 let content = read_file(&src_path).map_err(|_| "Failed to read source file")?;
-                let _ = create(&dest_path);
-                let fd = match open(&dest_path, 1) {
-                    Ok(fd) => fd,
-                    Err(_) => return Err("Failed to create destination file"),
-                };
-                let _ = write(fd, &content);
+                crate::fs::vfs::write_file(&dest_path, &content)
+                    .map_err(|_| "Failed to write destination file")?;
             }
             Ok(())
         } else {
@@ -298,6 +295,7 @@ impl FileManager {
                     Err(_) => return Err("Failed to create destination file"),
                 };
                 let _ = write(fd, &content);
+                let _ = crate::fs::vfs::close(fd);
             }
         }
         Ok(())
