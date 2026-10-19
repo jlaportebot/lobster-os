@@ -382,6 +382,30 @@ pub fn create_backing_file(parent_ino: u32, name: &str, data: &[u8]) -> Result<u
     }
 }
 
+/// Create a directory in the ext2 backing store under `parent_ino`.
+pub fn create_backing_dir(parent_ino: u32, name: &str) -> Result<u32, VfsError> {
+    unsafe {
+        let fs = EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)?;
+
+        let ino = fs.alloc_inode()?;
+        {
+            let mut inode = fs.read_inode(ino)?;
+            inode.i_mode = (EXT2_S_IFDIR | 0o755).to_le();
+            inode.i_size = 0u32.to_le();
+            inode.i_blocks = 0u32.to_le();
+            inode.i_links_count = 2u16.to_le(); // . + parent
+            for bi in 0..15usize {
+                inode.i_block[bi] = 0u32.to_le();
+            }
+            fs.write_inode(ino, &inode)?;
+        }
+
+        fs.add_dir_entry(parent_ino, ino, name, EXT2_FT_DIR)?;
+        fs.journal_commit()?;
+        Ok(ino)
+    }
+}
+
 /// Write a file's full contents back through the mounted ext2 instance.
 pub fn write_backing_file(ino: u32, data: &[u8]) -> Result<(), VfsError> {
     unsafe {
@@ -1371,6 +1395,9 @@ impl Ext2FileSystem {
                 return Ok(bn as u64);
             }
             let new_block = self.alloc_block()?;
+            // Zero the fresh block so directory scans see valid (empty) entries
+            let zeroes = [0u8; 4096];
+            write_block(self, new_block, &zeroes[..self.block_size as usize])?;
             inode.i_block[logical_block as usize] = (new_block as u32).to_le();
             return Ok(new_block);
         }

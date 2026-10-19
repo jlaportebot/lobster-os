@@ -133,6 +133,17 @@ pub static APPS: &[AppEntry] = &[
         },
     },
     AppEntry {
+        name: "Notes",
+        icon: "\u{1F4AC}",
+        color: 0xFFEBCB8B,
+        launch: || {
+            focus_or_create("Notes", 700, 480, || {
+                crate::apps::notes::init();
+                let _ = window::create(260, 140, 700, 480, "Notes");
+            });
+        },
+    },
+    AppEntry {
         name: "About",
         icon: "\u{1F99E}",
         color: 0xFFFF6B6B,

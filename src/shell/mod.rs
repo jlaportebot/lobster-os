@@ -1082,6 +1082,29 @@ fn run_builtin_out(
             }
             0
         }
+        "notes" => {
+            #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
+            {
+                match argc {
+                    1 => {
+                        crate::apps::notes::init();
+                        let id = crate::wm::window::find_by_title("Notes")
+                            .unwrap_or_else(|| crate::wm::window::create(260, 140, 700, 480, "Notes").unwrap_or(0));
+                        crate::println!("notes: {} notes (win {})", crate::apps::notes::note_count(), id);
+                    }
+                    _ => match args[1] {
+                        "new" => { crate::apps::notes::init(); crate::apps::notes::new_note(); crate::println!("notes: created"); }
+                        "type" if argc >= 3 => {
+                            crate::apps::notes::init();
+                            crate::apps::notes::type_char(args[2].chars().next().unwrap_or(' '));
+                            crate::println!("notes: typed");
+                        }
+                        _ => {}
+                    },
+                }
+            }
+            0
+        }
         "edit" => {
             #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
             {

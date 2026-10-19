@@ -7,6 +7,7 @@ pub mod editor;
 pub mod file_manager;
 pub mod image_viewer;
 pub mod network_manager;
+pub mod notes;
 pub mod process_manager;
 pub mod settings;
 pub mod setup_wizard;
@@ -28,5 +29,6 @@ pub fn init() {
     network_manager::init();
     app_store::init();
     browser::init();
-    println!("[apps] Core desktop applications initialized (11 apps)");
+    notes::init();
+    println!("[apps] Core desktop applications initialized (12 apps)");
 }

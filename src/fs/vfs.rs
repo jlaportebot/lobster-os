@@ -554,7 +554,27 @@ pub fn mkdir(path: &str) -> Result<u64, VfsError> {
         resolve_path(parent_path)?
     };
 
-    alloc_node(name, FileType::Directory, parent_id)
+    let node_id = alloc_node(name, FileType::Directory, parent_id)?;
+
+    // Persist into the ext2 backing store when the parent dir is ext2-backed
+    // (so directories survive reboots, matching file write-through).
+    unsafe {
+        if let Some(parent) = get_node(parent_id) {
+            let (p_ino, p_fs) = (parent.backing_ino, parent.backing_fs);
+            if p_ino != 0 && p_fs != 0 {
+                match crate::fs::ext2::create_backing_dir(p_ino, name) {
+                    Ok(new_ino) => {
+                        set_node_backing(node_id, p_fs, new_ino);
+                    }
+                    Err(e) => {
+                        println!("[vfs] ext2 mkdir '{}' failed: {:?}", name, e);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(node_id)
 }
 
 /// Create a file
