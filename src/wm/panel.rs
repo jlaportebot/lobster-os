@@ -444,8 +444,11 @@ pub fn handle_click(px: u32, py: u32) -> Option<u32> {
             return None; // Click not on panel
         }
 
-        // Check launcher button
-        if PANEL_STATE.launcher_btn.hit_test(px, py) {
+        // Check launcher button — live coords (the button's stored
+        // position predates the framebuffer, like the clock labels).
+        if px >= 4 && px < 4 + LAUNCHER_WIDTH
+            && py >= panel_y + 4 && py < panel_y + PANEL_HEIGHT - 4
+        {
             return Some(0xFFFFFFFF);
         }
 

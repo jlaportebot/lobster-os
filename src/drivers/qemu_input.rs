@@ -142,11 +142,19 @@ pub fn poll() -> Option<HidEvent> {
                 // QEMU sends absolute x/y; compute delta for the WM
                 let cur_x = x as i32;
                 let cur_y = y as i32;
+                // The QEMU device reports ABSOLUTE positions. On the first
+                // event, jump the cursor to the absolute position (the WM
+                // cursor starts at screen center, which would otherwise
+                // eat the first coordinate as a zero-delta baseline).
                 let (dx, dy) = if FIRST_MOVE {
                     FIRST_MOVE = false;
                     PREV_X = cur_x;
                     PREV_Y = cur_y;
-                    (0, 0)
+                    // The WM cursor starts at screen center — compute a
+                    // REAL delta so absolute positions take effect from the
+                    // very first event.
+                    let (wx, wy) = crate::wm::input::cursor_pos();
+                    ((cur_x - wx as i32) as i16, (cur_y - wy as i32) as i16)
                 } else {
                     let dx = cur_x - PREV_X;
                     let dy = cur_y - PREV_Y;
@@ -154,22 +162,9 @@ pub fn poll() -> Option<HidEvent> {
                     PREV_Y = cur_y;
                     (dx as i16, dy as i16)
                 };
-                crate::println!(
-                    "[qemu-input] Mouse move: x={} y={} dx={} dy={}",
-                    x,
-                    y,
-                    dx,
-                    dy
-                );
                 Some(HidEvent::MouseMove { dx, dy })
             }
             EV_MOUSE_BTN => {
-                crate::println!(
-                    "[qemu-input] Mouse btn: left={} right={} middle={}",
-                    (btn & 0x01) != 0,
-                    (btn & 0x02) != 0,
-                    (btn & 0x04) != 0
-                );
                 Some(HidEvent::MouseButton {
                     left: (btn & 0x01) != 0,
                     right: (btn & 0x02) != 0,
@@ -177,14 +172,12 @@ pub fn poll() -> Option<HidEvent> {
                 })
             }
             EV_KEY_PRESS => {
-                crate::println!("[qemu-input] Key press: scancode=0x{:02x}", key);
                 Some(HidEvent::KeyPress {
                     scancode: key,
                     extended: false,
                 })
             }
             EV_KEY_RELEASE => {
-                crate::println!("[qemu-input] Key release: scancode=0x{:02x}", key);
                 Some(HidEvent::KeyRelease {
                     scancode: key,
                     extended: false,
