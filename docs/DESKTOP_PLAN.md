@@ -53,7 +53,7 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 - [ ] **B6.2 Calculator (v1 exists) → keyboard input + history**
 - [ ] **B6.3 Process manager + sysmon merged into one Task Manager w/ graphs**
 - [ ] **B6.4 App Store (v1 exists) → real package install from repo into /sd, launcher integration**
-- [ ] **B6.5 Clock/timer, Notes app (persisted), Minesweeper (fun proof of polish)**
+- [~] **B6.5**: Notes app DONE (persisted to /sd, verified); clock/timer + Minesweeper TODO
 
 ## C. System Services (kernel-level)
 - [ ] **C1. Per-app processes**: GUI apps as user processes (EL0) not kernel threads — spawn from panel/launcher via sched, IPC events to compositor (in-window content via shared pages)**
