@@ -34,7 +34,7 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 ### B1. Terminal (v1 exists)
 - [x] VT100 parser + screen buffer + window render
 - [ ] **B1.1 Tabbed terminal + font size shortcuts + copy/paste via mouse**
-- [ ] **B1.2 Shell-in-a-window**: interactive shell drives a per-window VT session
+- [x] **B1.2 Shell-in-a-window** — DONE: GUI-typed commands execute and render inside the Terminal window (visual-verified via gkey automation)
 ### B2. Files (file manager v1 exists)
 - [x] Tree browse, /sd integration
 - [x] **B2.1 File manager shell** — DONE: Places sidebar, Up/Re toolbar + path pill, zebra list w/ type markers + sizes, status bar (visual-verified)
