@@ -1082,6 +1082,19 @@ fn run_builtin_out(
             }
             0
         }
+        "settings" => {
+            #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
+            {
+                if argc >= 2 && args[1] == "next" {
+                    crate::apps::settings::cycle_page();
+                    crate::println!("settings: page cycled");
+                } else {
+                    let id = crate::apps::settings::open_window();
+                    crate::println!("settings: window {}", id);
+                }
+            }
+            0
+        }
         "notes" => {
             #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
             {
