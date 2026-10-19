@@ -1090,6 +1090,24 @@ fn run_builtin_out(
             }
             0
         }
+        "accent" => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                if argc >= 2 {
+                    if args[1] == "next" {
+                        crate::wm::theme::cycle_accent_name();
+                        crate::println!("accent: {:#010x}", crate::wm::theme::accent_color());
+                    } else if crate::wm::theme::set_accent_name(args[1]) {
+                        crate::println!("accent: {} set", args[1]);
+                    } else {
+                        crate::println!("accent: unknown '{}'", args[1]);
+                    }
+                } else {
+                    crate::println!("accent: {:#010x} (try next or a preset name)", crate::wm::theme::accent_color());
+                }
+            }
+            0
+        }
         "bookmark" => {
             #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
             {

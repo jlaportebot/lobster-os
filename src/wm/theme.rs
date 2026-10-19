@@ -330,6 +330,51 @@ pub fn current_name() -> &'static str {
     }
 }
 
+/// User-selected accent color (ARGB), persisted in theme.conf.
+static mut ACCENT: u32 = 0xFF5E81AC; // Nord blue default
+
+/// Accent presets for the picker (name → ARGB)
+pub static ACCENTS: &[(&str, u32)] = &[
+    ("Nord Blue", 0xFF5E81AC),
+    ("Coral", 0xFFBF616A),
+    ("Amber", 0xFFEBCB8B),
+    ("Mint", 0xFFA3BE8C),
+    ("Violet", 0xFFB48EAD),
+    ("Cyan", 0xFF88C0D0),
+];
+
+pub fn accent_color() -> u32 {
+    unsafe { ACCENT }
+}
+
+/// Alias matching the legacy accent() name but returning raw ARGB.
+pub fn accent_argb() -> u32 {
+    accent_color()
+}
+
+/// Set + persist the accent color by preset name. Returns true if found.
+pub fn set_accent_name(name: &str) -> bool {
+    for (n, c) in ACCENTS {
+        if n.eq_ignore_ascii_case(name) {
+            unsafe { ACCENT = *c; }
+            persist();
+            crate::wm::compositor::mark_full_redraw();
+            return true;
+        }
+    }
+    false
+}
+
+/// Cycle to the next accent preset + persist.
+pub fn cycle_accent_name() {
+    let current = accent_color();
+    let idx = ACCENTS.iter().position(|(_, c)| *c == current).unwrap_or(0);
+    let next = ACCENTS[(idx + 1) % ACCENTS.len()];
+    unsafe { ACCENT = next.1; }
+    persist();
+    crate::wm::compositor::mark_full_redraw();
+}
+
 /// Toggle between the Dark and Light themes (with a toast + redraw).
 pub fn toggle() {
     let next_id = match active_id() {
@@ -346,8 +391,7 @@ pub fn toggle() {
 
 /// Persist the active theme to /sd/etc/theme.conf (best effort).
 fn persist() {
-    let conf = alloc::format!("theme={}
-", current_name());
+    let conf = alloc::format!("theme={}\naccent={:#010x}\n", current_name(), accent_color());
     if crate::fs::vfs::write_file("/sd/etc/theme.conf", conf.as_bytes()).is_ok() {
         crate::println!("[theme] Saved to /sd");
     }
@@ -370,7 +414,12 @@ pub fn load_persisted() {
             };
             set(id);
             crate::println!("[theme] Restored '{}' from /sd", name);
-            return;
+        }
+        if let Some(val) = line.strip_prefix("accent=") {
+            if let Ok(c) = u32::from_str_radix(val.trim().trim_start_matches("0x"), 16) {
+                unsafe { ACCENT = c; }
+                crate::println!("[theme] Restored accent {:#010x} from /sd", c);
+            }
         }
     }
 }

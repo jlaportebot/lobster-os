@@ -164,7 +164,7 @@ fn bar(fb: &crate::display::fb::FramebufferInfo, theme: &crate::wm::theme::Theme
     let bar_w = POPUP_W - 2 * PAD - 4;
     draw_rect(fb, x0 + PAD + 2, y + 22, bar_w, 10, theme.menu_border);
     let fill = bar_w * pct / 100;
-    draw_rect(fb, x0 + PAD + 2, y + 22, fill, 10, theme.btn_bg_hover);
+    draw_rect(fb, x0 + PAD + 2, y + 22, fill, 10, crate::wm::theme::accent_color());
     draw_text(fb, x0 + PAD + 2, y + 40, &alloc::format!("{}%", pct), theme.label_text_dim, theme.menu_bg);
 }
 

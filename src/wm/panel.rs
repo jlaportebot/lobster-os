@@ -276,14 +276,7 @@ fn draw_cpu_graph(fb: &FramebufferInfo, panel_y: u32) {
             }
             let bar_h = gh * v / 100;
             let x = gx + i as u32 * (gw / n as u32);
-            let color = if v < 50 {
-                0xFFA3BE8C
-            } else if v < 80 {
-                0xFFEBCB8B
-            } else {
-                0xFFBF616A
-            };
-            draw_rect(fb, x, gy + gh - bar_h, gw / n as u32, bar_h, color);
+            draw_rect(fb, x, gy + gh - bar_h, gw / n as u32, bar_h, crate::wm::theme::accent_color());
         }
     }
 }
