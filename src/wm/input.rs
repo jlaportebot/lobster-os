@@ -173,6 +173,7 @@ fn handle_mouse_move(dx: i16, dy: i16) {
     {
         let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
         crate::wm::start_menu::handle_move(cx, cy);
+        crate::wm::desktop_icons::update_hover(cx, cy);
     }
 
     // Delegate to window module's existing handle_event
@@ -252,7 +253,9 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
             return;
         }
 
-        // Not on panel or icon - check which window the cursor is over and focus it
+        // Not on panel or icon - clear icon selection, then focus the window
+        // under the cursor.
+        crate::wm::desktop_icons::select(None);
         crate::wm::window::handle_event(HidEvent::MouseButton {
             left,
             right,

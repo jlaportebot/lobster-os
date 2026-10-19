@@ -65,6 +65,25 @@ impl DesktopIcon {
 use crate::sync::spinlock::Spinlock;
 static ICONS: Spinlock<[DesktopIcon; MAX_ICONS]> = Spinlock::new([DesktopIcon::ZERO; MAX_ICONS]);
 static ICON_COUNT: Spinlock<usize> = Spinlock::new(0);
+/// Currently selected icon (single selection; None = none)
+static SELECTED: Spinlock<Option<usize>> = Spinlock::new(None);
+/// Icon under the cursor (hover)
+static HOVERED: Spinlock<Option<usize>> = Spinlock::new(None);
+
+/// Select an icon (single selection).
+pub fn select(idx: Option<usize>) {
+    *SELECTED.lock() = idx;
+}
+
+/// Currently selected icon index.
+pub fn selected() -> Option<usize> {
+    *SELECTED.lock()
+}
+
+/// Update hover state from cursor movement.
+pub fn update_hover(cx: u32, cy: u32) {
+    *HOVERED.lock() = hit_test(cx, cy);
+}
 
 /// Initialize desktop icons
 pub fn init() {
@@ -112,10 +131,37 @@ pub fn draw(fb: &fb::FramebufferInfo) {
     let count = *ICON_COUNT.lock();
     let theme = theme::current();
 
+    let sel = *SELECTED.lock();
+    let hov = *HOVERED.lock();
+
     for i in 0..count {
         let icon = &icons[i];
         let x = icon.x;
         let y = icon.y;
+
+        // Selection highlight (behind icon + label)
+        if sel == Some(i) {
+            graphics::fill_rounded_rect(
+                fb,
+                x.saturating_sub(4),
+                y.saturating_sub(4),
+                ICON_SIZE + 8,
+                ICON_SIZE + ICON_LABEL_H + 6,
+                6,
+                theme.input_border_focused,
+            );
+        } else if hov == Some(i) {
+            // Subtle hover tint
+            graphics::fill_rounded_rect(
+                fb,
+                x.saturating_sub(2),
+                y.saturating_sub(2),
+                ICON_SIZE + 4,
+                ICON_SIZE + ICON_LABEL_H + 2,
+                6,
+                0x3388C0D0,
+            );
+        }
 
         // Icon background: rounded rectangle effect (solid for now)
         // Draw border (slightly lighter)
@@ -162,6 +208,14 @@ pub fn handle_click(icon_idx: usize) {
         return;
     }
     let action = icons[icon_idx].action;
+
+    // Selection semantics: first click selects; clicking the already-selected
+    // icon opens it (single-click select + click-again to open).
+    let was_selected = *SELECTED.lock() == Some(icon_idx);
+    *SELECTED.lock() = Some(icon_idx);
+    if !was_selected {
+        return; // select only on first click
+    }
 
     match action {
         IconAction::Terminal => {

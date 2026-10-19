@@ -1090,6 +1090,18 @@ fn run_builtin_out(
             }
             0
         }
+        "iconsel" => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                if argc >= 2 {
+                    match args[1].parse::<usize>() {
+                        Ok(n) => { crate::wm::desktop_icons::select(Some(n)); crate::println!("iconsel: {}", n); }
+                        Err(_) => { crate::wm::desktop_icons::select(None); crate::println!("iconsel: cleared"); }
+                    }
+                }
+            }
+            0
+        }
         "gkey" => {
             #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
             {
