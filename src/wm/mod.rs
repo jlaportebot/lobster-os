@@ -24,6 +24,7 @@ pub mod theme;
 pub mod tray_popups;
 pub mod widget;
 pub mod window;
+pub mod window_frame;
 pub mod workspace;
 
 use crate::display::fb::get_info;
@@ -93,6 +94,9 @@ pub fn tick() {
     if fb.width > 0 {
         panel::draw(&fb);
     }
+    // Window animations tick
+    window_frame::tick_animations();
+
     // Notifications tick (animate/expire toasts)
     notifications::tick();
 

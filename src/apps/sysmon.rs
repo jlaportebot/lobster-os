@@ -39,12 +39,20 @@ impl SystemMonitor {
     }
 
     /// Render the system monitor
-    pub fn render(&self, x: u32, y: u32, width: u32, _height: u32) {
+    pub fn render(&self, x: u32, y: u32, width: u32, height: u32) {
         let info = fb::get_info();
 
-        // Title bar
-        graphics::draw_rect(&info, x, y, width, 24, 0x2D2D30);
-        graphics::draw_text(&info, x + 8, y + 6, APP_NAME, 0xFFFFFF, 0x2D2D30);
+        // Uniform themed window frame (replaces the per-app title bar)
+        let (_cx, _cy, _cw, _ch) = crate::wm::window_frame::draw_frame(
+            &info,
+            crate::wm::window::find_by_title(APP_NAME).unwrap_or(0),
+            x,
+            y,
+            width,
+            height,
+            APP_NAME,
+            true,
+        );
 
         // CPU usage section
         let cpu_y = y + 30;

@@ -239,6 +239,10 @@ pub fn create(x: u32, y: u32, w: u32, h: u32, title: &str) -> Option<u32> {
             // Focus the new window
             focus(id);
 
+            // Open animation
+            crate::wm::window_frame::mark_start();
+            crate::wm::window_frame::start(crate::wm::window_frame::Anim::Open, id);
+
             println!("[wm] Created window id={} '{}'", id, title);
             return Some(id);
         }
