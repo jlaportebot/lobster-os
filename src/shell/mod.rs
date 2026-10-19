@@ -1090,6 +1090,68 @@ fn run_builtin_out(
             }
             0
         }
+        "share" => {
+            match if argc >= 2 { Some(args[1]) } else { None } {
+                None => {
+                    if crate::drivers::lobster_share::detect() {
+                        crate::println!("share: device present (host LBST_SHARE)");
+                        let mut n = 0;
+                        let _ = crate::drivers::lobster_share::list_dir("", |name| {
+                            crate::println!("  {}", name);
+                            n += 1;
+                        });
+                        crate::println!("share: {} entries", n);
+                    } else {
+                        crate::println!("share: device absent");
+                    }
+                    0
+                }
+                Some("cat") if argc >= 3 => {
+                    let name = args[2];
+                    match crate::drivers::lobster_share::read_file(name) {
+                        Some(data) => {
+                            if let Ok(s) = core::str::from_utf8(&data) {
+                                crate::println!("{}", s.trim_end());
+                            } else {
+                                crate::println!("share: {} is binary ({} bytes)", name, data.len());
+                            }
+                            0
+                        }
+                        None => {
+                            crate::println!("share: not found: {}", name);
+                            0
+                        }
+                    }
+                }
+                Some("cp") if argc >= 4 => {
+                    let (from, to) = (args[2], args[3]);
+                    match crate::drivers::lobster_share::read_file(from) {
+                        Some(data) => {
+                            use crate::fs::vfs;
+                            let fd = match vfs::open(to, vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC) {
+                                Ok(fd) => fd,
+                                Err(e) => {
+                                    crate::println!("share: cannot create {}: {:?}", to, e);
+                                    return 0;
+                                }
+                            };
+                            let _ = vfs::write(fd, &data);
+                            vfs::close(fd);
+                            crate::println!("share: {} -> {} ({} bytes)", from, to, data.len());
+                            0
+                        }
+                        None => {
+                            crate::println!("share: not found: {}", from);
+                            0
+                        }
+                    }
+                }
+                Some(other) => {
+                    crate::println!("share: unknown subcommand '{}'", other);
+                    0
+                }
+            }
+        }
         "wins" => {
             #[cfg(target_arch = "aarch64")]
             {

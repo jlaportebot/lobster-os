@@ -35,6 +35,7 @@ pub mod fast_serial;
 
 #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
 pub mod lobster_storage;
+pub mod lobster_share;
 
 #[cfg(target_arch = "aarch64")]
 pub mod lobster_net;
