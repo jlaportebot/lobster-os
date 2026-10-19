@@ -21,6 +21,7 @@ pub mod input;
 pub mod launcher;
 pub mod panel;
 pub mod theme;
+pub mod tray_popups;
 pub mod widget;
 pub mod window;
 pub mod workspace;
@@ -97,6 +98,9 @@ pub fn tick() {
 
     // Start menu (above windows, below context menu)
     start_menu::draw(&fb);
+
+    // Tray popups (above windows, below toasts)
+    tray_popups::draw(&fb);
 
     // Toasts (above windows, top-right)
     notifications::draw(&fb);

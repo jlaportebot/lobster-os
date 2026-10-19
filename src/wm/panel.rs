@@ -401,6 +401,19 @@ pub fn handle_click(px: u32, py: u32) -> Option<u32> {
             }
         }
 
+        // Check clock (right-most; estimate bounds from its label position)
+        {
+            let (cx, cy) = (
+                PANEL_STATE.clock_label.x as i64,
+                PANEL_STATE.clock_label.y as i64,
+            );
+            let cw = 70i64;
+            let ch = PANEL_HEIGHT as i64;
+            if (px as i64) >= cx && (px as i64) < cx + cw && (py as i64) >= cy - 6 && (py as i64) < cy + 22 {
+                return Some(0xFFFFFFFB);
+            }
+        }
+
         // Check tray items
         if PANEL_STATE.tray_network.widget.hit_test(px, py) {
             return Some(0xFFFFFFFE);

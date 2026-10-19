@@ -218,6 +218,11 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
             return;
         }
 
+        // Tray popups: consume inside-clicks; outside click closes.
+        if crate::wm::tray_popups::handle_click(cx, cy) {
+            return;
+        }
+
         // Start menu: consume clicks inside its surface (launch/close),
         // and any outside click closes it.
         if crate::wm::start_menu::handle_click(cx, cy) {
@@ -256,16 +261,20 @@ fn handle_panel_action(action: u32) {
             crate::wm::start_menu::toggle();
         }
         0xFFFFFFFE => {
-            // Network tray clicked
-            println!("[wm::input] Network tray clicked");
+            // Network tray → popup
+            crate::wm::tray_popups::open(crate::wm::tray_popups::PopupKind::Network);
         }
         0xFFFFFFFD => {
-            // Volume tray clicked
-            println!("[wm::input] Volume tray clicked");
+            // Volume tray → popup
+            crate::wm::tray_popups::open(crate::wm::tray_popups::PopupKind::Volume);
         }
         0xFFFFFFFC => {
-            // Battery tray clicked
-            println!("[wm::input] Battery tray clicked");
+            // Battery tray → popup
+            crate::wm::tray_popups::open(crate::wm::tray_popups::PopupKind::Battery);
+        }
+        0xFFFFFFFB => {
+            // Clock → clock/notification-center popup
+            crate::wm::tray_popups::open(crate::wm::tray_popups::PopupKind::Clock);
         }
         window_id => {
             // Task button clicked - focus that window

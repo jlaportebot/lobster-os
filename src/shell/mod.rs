@@ -1055,6 +1055,31 @@ fn run_builtin_out(
             }
             0
         }
+        "tray" => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                use crate::wm::tray_popups::PopupKind;
+                let kind = match argc {
+                    2 => match args[1] {
+                        "clock" => PopupKind::Clock,
+                        "network" => PopupKind::Network,
+                        "volume" => PopupKind::Volume,
+                        "battery" => PopupKind::Battery,
+                        "close" => PopupKind::None,
+                        _ => PopupKind::Clock,
+                    },
+                    _ => PopupKind::None,
+                };
+                if kind == PopupKind::None {
+                    crate::wm::tray_popups::close();
+                    crate::println!("tray: closed");
+                } else {
+                    crate::wm::tray_popups::open(kind);
+                    crate::println!("tray: opened");
+                }
+            }
+            0
+        }
         "notify" => {
             #[cfg(target_arch = "aarch64")]
             {
