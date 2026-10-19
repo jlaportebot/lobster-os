@@ -1055,6 +1055,33 @@ fn run_builtin_out(
             }
             0
         }
+        "browser" => {
+            #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
+            {
+                if argc >= 2 {
+                    let id = crate::apps::browser::open(args[1]);
+                    crate::println!("browser: opened {} (win {})", args[1], id);
+                } else {
+                    crate::println!("browser: usage: browser <url>");
+                }
+            }
+            0
+        }
+        "browsecmd" => {
+            #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
+            {
+                if argc >= 2 {
+                    match args[1] {
+                        "back" => { unsafe { crate::apps::browser::INSTANCE.as_mut().map(|b| b.back()); }; }
+                        "fwd" => { unsafe { crate::apps::browser::INSTANCE.as_mut().map(|b| b.forward()); }; }
+                        "down" => crate::apps::browser::scroll(true),
+                        "up" => crate::apps::browser::scroll(false),
+                        _ => {}
+                    }
+                }
+            }
+            0
+        }
         "tray" => {
             #[cfg(target_arch = "aarch64")]
             {

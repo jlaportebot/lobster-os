@@ -1,6 +1,7 @@
 //! Core Desktop Applications for LobsterOS
 
 pub mod app_store;
+pub mod browser;
 pub mod calculator;
 pub mod editor;
 pub mod file_manager;
@@ -26,5 +27,6 @@ pub fn init() {
     process_manager::init();
     network_manager::init();
     app_store::init();
-    println!("[apps] Core desktop applications initialized (10 apps)");
+    browser::init();
+    println!("[apps] Core desktop applications initialized (11 apps)");
 }

@@ -80,6 +80,7 @@ pub fn tick() {
             crate::apps::calculator::render_to_windows(&fb);
             crate::apps::file_manager::render_to_windows(&fb);
             crate::apps::process_manager::render_to_windows(&fb);
+            crate::apps::browser::render_to_windows(&fb);
         }
     }
 

@@ -123,6 +123,16 @@ pub static APPS: &[AppEntry] = &[
         },
     },
     AppEntry {
+        name: "Browser",
+        icon: "\u{1F310}",
+        color: 0xFF5E81AC,
+        launch: || {
+            focus_or_create("Browser", 900, 620, || {
+                crate::apps::browser::open("http://example.com");
+            });
+        },
+    },
+    AppEntry {
         name: "About",
         icon: "\u{1F99E}",
         color: 0xFFFF6B6B,
