@@ -127,6 +127,14 @@ static WIN_COUNT: Spinlock<usize> = Spinlock::new(0);
 static NEXT_WIN_ID: Spinlock<u32> = Spinlock::new(1);
 static FOCUSED_ID: Spinlock<u32> = Spinlock::new(0);
 
+/// Double-click tracking for title-bar maximize
+static mut LAST_TITLE_CLICK_MS: u64 = 0;
+static mut LAST_TITLE_CLICK_WIN: u32 = 0;
+
+/// Drag-to-edge snap: when a drag ends with the window at a screen edge,
+/// snap it to that half (Windows-style).
+static mut SNAP_PREVIEW: Option<(u32, u32, u32, u32)> = None; // (x,y,w,h) preview rect
+
 /// Drag state for window moving
 static DRAG_WIN_ID: Spinlock<u32> = Spinlock::new(0);
 static DRAG_START_CURSOR_X: Spinlock<i32> = Spinlock::new(0);
@@ -686,6 +694,23 @@ fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
             // Check title bar for dragging
             if is_on_title_bar(cy, win_y) {
                 focus(win_id);
+
+                // Double-click on title bar → toggle maximize
+                unsafe {
+                    let now = crate::arch::ArchTimer::uptime_ms();
+                    if LAST_TITLE_CLICK_WIN == win_id
+                        && now.saturating_sub(LAST_TITLE_CLICK_MS) < 400
+                    {
+                        // Double-click: toggle maximize, no drag start
+                        LAST_TITLE_CLICK_MS = 0;
+                        LAST_TITLE_CLICK_WIN = 0;
+                        maximize(win_id);
+                        return;
+                    }
+                    LAST_TITLE_CLICK_MS = now;
+                    LAST_TITLE_CLICK_WIN = win_id;
+                }
+
                 *DRAG_WIN_ID.lock() = win_id;
                 *DRAG_START_CURSOR_X.lock() = cx as i32;
                 *DRAG_START_CURSOR_Y.lock() = cy as i32;
@@ -700,6 +725,30 @@ fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
         }
     } else {
         // Left button released — stop all drag/resize
+        let was_dragging = *DRAGGING.lock();
+        let drag_win = *DRAG_WIN_ID.lock();
+
+        // Drag-to-edge snap: if the cursor is within 24px of a screen edge
+        // at release, snap the window to that half (or full for top).
+        if was_dragging && drag_win != 0 {
+            if let Some(fb) = compositor::fb_info() {
+                let (cx, cy) = crate::wm::input::cursor_pos();
+                let edge_zone = 24u32;
+                use crate::wm::window::SnapPosition;
+                if cx <= edge_zone {
+                    resize(drag_win, fb.width / 2, fb.height);
+                    move_window(drag_win, 0, 0);
+                } else if cx >= fb.width.saturating_sub(edge_zone) {
+                    resize(drag_win, fb.width / 2, fb.height);
+                    move_window(drag_win, fb.width / 2, 0);
+                } else if cy <= edge_zone {
+                    // Top edge → maximize
+                    maximize(drag_win);
+                }
+                unsafe { SNAP_PREVIEW = None; }
+            }
+        }
+
         *DRAGGING.lock() = false;
         *DRAG_WIN_ID.lock() = 0;
         *RESIZING.lock() = false;

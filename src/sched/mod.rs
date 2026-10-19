@@ -271,6 +271,28 @@ pub fn tick_count() -> u64 {
     unsafe { TICK_COUNT }
 }
 
+/// Rough CPU load estimate (0..100): fraction of scheduler tasks that are
+/// actively Running (vs Ready/Blocked) across the table, scaled to feel
+/// right for the panel graph.
+pub fn current_cpu_load() -> u32 {
+    unsafe {
+        let mut running = 0u32;
+        let mut total = 0u32;
+        for i in 0..MAX_TASKS {
+            if let Some(ref task) = TASK_TABLE[i] {
+                total += 1;
+                if task.state == TaskState::Running {
+                    running += 1;
+                }
+            }
+        }
+        if total == 0 {
+            return 0;
+        }
+        (running * 100 / total).min(100)
+    }
+}
+
 /// Get current PID
 pub fn current_pid() -> Pid {
     unsafe { CURRENT_PID }

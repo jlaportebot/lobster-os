@@ -28,6 +28,10 @@ struct PanelState {
     tray_battery: TrayItem,
     workspace_label: Label,
     last_clock_update: u64,
+    /// CPU load history for the panel mini-graph (0..=100 each)
+    cpu_hist: [u8; 60],
+    cpu_idx: usize,
+    last_graph_update: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -70,6 +74,9 @@ static mut PANEL_STATE: PanelState = PanelState {
     },
     workspace_label: Label::ZERO,
     last_clock_update: 0,
+    cpu_hist: [0; 60],
+    cpu_idx: 0,
+    last_graph_update: 0,
 };
 
 // ─── Initialization ────────────────────────────────────────────────────
@@ -192,6 +199,9 @@ pub fn draw(fb: &FramebufferInfo) {
             theme.taskbar_bg,
         );
 
+        // CPU mini-graph (right of workspace label)
+        draw_cpu_graph(fb, panel_y);
+
         // Draw system tray items
         draw_button(fb, &PANEL_STATE.tray_network.widget, 0, panel_y);
         draw_button(fb, &PANEL_STATE.tray_volume.widget, 0, panel_y);
@@ -232,6 +242,49 @@ fn draw_button(fb: &FramebufferInfo, btn: &Button, offset_x: u32, offset_y: u32)
         let text_x = px + (btn.w.saturating_sub(text_w)) / 2;
         let text_y = py + (btn.h.saturating_sub(theme.font_size)) / 2;
         draw_text(fb, text_x, text_y, text, theme.btn_text, bg);
+    }
+}
+
+/// Panel CPU mini-graph: 60-sample sparkline of scheduler load.
+fn draw_cpu_graph(fb: &FramebufferInfo, panel_y: u32) {
+    unsafe {
+        // Sample once per second (from the scheduler's runtime accounting)
+        let now = crate::arch::ArchTimer::uptime_ms();
+        if now - PANEL_STATE.last_graph_update >= 1000 {
+            PANEL_STATE.last_graph_update = now;
+            let load = crate::sched::current_cpu_load().min(100);
+            PANEL_STATE.cpu_hist[PANEL_STATE.cpu_idx] = load as u8;
+            PANEL_STATE.cpu_idx = (PANEL_STATE.cpu_idx + 1) % 60;
+        }
+
+        // Position: right of the workspace label
+        let gx = PANEL_STATE.workspace_label.x + 110;
+        let gy = panel_y + 10;
+        let gw = 60u32;
+        let gh = 16u32;
+        let theme = theme::current();
+
+        // Track
+        draw_rect(fb, gx, gy, gw, gh, theme.taskbar_border);
+
+        // Samples
+        let n = PANEL_STATE.cpu_hist.len();
+        for i in 0..n {
+            let v = PANEL_STATE.cpu_hist[(PANEL_STATE.cpu_idx + i) % n] as u32;
+            if v == 0 {
+                continue;
+            }
+            let bar_h = gh * v / 100;
+            let x = gx + i as u32 * (gw / n as u32);
+            let color = if v < 50 {
+                0xFFA3BE8C
+            } else if v < 80 {
+                0xFFEBCB8B
+            } else {
+                0xFFBF616A
+            };
+            draw_rect(fb, x, gy + gh - bar_h, gw / n as u32, bar_h, color);
+        }
     }
 }
 
