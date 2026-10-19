@@ -166,6 +166,24 @@ pub fn draw(fb: &FramebufferInfo) {
         let panel_y = fb.height.saturating_sub(PANEL_HEIGHT);
         let theme = theme::current();
 
+        // Right-anchored widgets were positioned at init when the
+        // framebuffer size may still be unknown (x underflowed to
+        // 0xFFFF…). Re-anchor them from the live fb each draw.
+        unsafe {
+            let tray_x_start = fb
+                .width
+                .saturating_sub(CLOCK_WIDTH + 8 + 3 * (TRAY_ITEM_WIDTH + 4));
+            PANEL_STATE.clock_label.x = fb.width.saturating_sub(CLOCK_WIDTH + 8);
+            PANEL_STATE.clock_label.y = panel_y + 8;
+            PANEL_STATE.tray_network.widget.x = tray_x_start;
+            PANEL_STATE.tray_network.widget.y = panel_y + 4;
+            PANEL_STATE.tray_volume.widget.x = tray_x_start + (TRAY_ITEM_WIDTH + 4);
+            PANEL_STATE.tray_volume.widget.y = panel_y + 4;
+            PANEL_STATE.tray_battery.widget.x =
+                tray_x_start + 2 * (TRAY_ITEM_WIDTH + 4);
+            PANEL_STATE.tray_battery.widget.y = panel_y + 4;
+        }
+
         // Panel background
         draw_rect(fb, 0, panel_y, fb.width, PANEL_HEIGHT, theme.taskbar_bg);
 
