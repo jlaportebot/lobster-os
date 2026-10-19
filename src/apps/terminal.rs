@@ -495,11 +495,11 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
             None => continue,
         };
 
-        // Client area: inset by border (2px) + title bar (24px)
-        let client_x = wx + 2;
-        let client_y = wy + 24;
-        let client_w = ww.saturating_sub(4);
-        let client_h = wh.saturating_sub(26);
+        // Uniform themed frame; render the VT into the returned client rect
+        let focused = window::focused_id() == id;
+        let (client_x, client_y, client_w, client_h) = crate::wm::window_frame::draw_frame(
+            fb, id, wx, wy, ww, wh, "Terminal", focused,
+        );
 
         if client_w < 8 || client_h < 16 {
             continue;

@@ -255,16 +255,15 @@ fn get_calculator() -> &'static mut Calculator {
 /// Render Calculator to its window (QEMU direct-to-framebuffer mode)
 #[cfg(feature = "qemu_raspi5b")]
 pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
-    // Find the Calculator window by title
     if let Some(win_id) = crate::wm::window::find_by_title("Calculator") {
         if let Some(win) = crate::wm::window::get(win_id) {
             if win.active {
+                let focused = crate::wm::window::focused_id() == win_id;
+                // Uniform themed frame, then the calculator UI in the client area
+                let (cx, cy, cw, ch) = crate::wm::window_frame::draw_frame(
+                    fb, win_id, win.x, win.y, win.w, win.h, "Calculator", focused,
+                );
                 let calc = get_calculator();
-                // Client area: x+2, y+24, w-4, h-26
-                let cx = win.x + 2;
-                let cy = win.y + 24;
-                let cw = win.w.saturating_sub(4);
-                let ch = win.h.saturating_sub(26);
                 calc.render(cx, cy, cw, ch);
             }
         }

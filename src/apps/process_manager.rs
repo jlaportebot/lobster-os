@@ -199,16 +199,14 @@ fn get_process_manager() -> &'static mut ProcessManager {
 /// Render Process Manager to its window (QEMU direct-to-framebuffer mode)
 #[cfg(feature = "qemu_raspi5b")]
 pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
-    // Find the Process Manager window by title
     if let Some(win_id) = crate::wm::window::find_by_title("Process Manager") {
         if let Some(win) = crate::wm::window::get(win_id) {
             if win.active {
+                let focused = crate::wm::window::focused_id() == win_id;
+                let (cx, cy, cw, ch) = crate::wm::window_frame::draw_frame(
+                    fb, win_id, win.x, win.y, win.w, win.h, "Process Manager", focused,
+                );
                 let pm = get_process_manager();
-                // Client area: x+2, y+24, w-4, h-26
-                let cx = win.x + 2;
-                let cy = win.y + 24;
-                let cw = win.w.saturating_sub(4);
-                let ch = win.h.saturating_sub(26);
                 pm.render(cx, cy, cw, ch);
             }
         }
