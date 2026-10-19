@@ -8,12 +8,12 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 ### A1. Desktop surface
 - [x] Full-screen framebuffer with compositor (2237-line compositor)
 - [x] Desktop icons (launcher + files)
-- [ ] **A1.1 Wallpaper system**: solid/gradient/bitmap, persisted to /sd (theme + user image)
+- [~] **A1.1 Wallpaper system**: gradient exists in compositor; bitmap + /sd persistence TODO
 - [ ] **A1.2 Desktop right-click menu**: New File/Folder, Open Terminal, Display Settings, Refresh
 - [ ] **A1.3 Icon selection + rubber-band multi-select + drag-to-arrange (grid snap)**
 ### A2. Panel (taskbar)
 - [x] Panel with clock + task list + launcher button
-- [ ] **A2.1 Start-menu style app launcher** (grid of apps w/ icons + search + categories + power row)
+- [x] **A2.1 Start-menu style app launcher** — DONE 39afe4b: scrollable app tiles w/ colored icons, hover+keyboard nav, focus-or-create, Esc/outside-click close. (Search + power row still TODO)
 - [ ] **A2.2 System tray**: network state icon, CPU/RAM mini-graph, volume, battery/clock popup
 - [ ] **A2.3 Notification center**: toasts + actionable notifications + history
 - [ ] **A2.4 Window list previews** (hover peek), pinning apps, grouping by workspace
