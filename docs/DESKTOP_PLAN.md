@@ -21,7 +21,7 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 - [x] create/destroy/move/resize/focus/minimize/maximize/snap/workspaces
 - [~] **A3.1 Window animations**: open/close/minimize scale+fade engine done (window_frame); per-app chrome conversion + snap transitions TODO
 - [ ] **A3.2 Double-click title maximize, drag-to-edge snap preview overlay, resize from all 8 edges**
-- [ ] **A3.3 Alt-Tab switcher overlay** with window thumbnails
+- [x] **A3.3 Alt-Tab switcher overlay** — DONE: tiles + selection + Alt-release activation (visual-verified)
 - [ ] **A3.4 Per-app "dirty" state dot + close confirmation for unsaved docs**
 ### A4. Theme engine
 - [x] Theme struct + palette + fonts
