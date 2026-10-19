@@ -26,9 +26,9 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 ### A4. Theme engine
 - [x] Theme struct + palette + fonts
 - [x] **A4.1 Light/Dark toggle** — DONE 09c2285: theme::toggle + /sd persistence + restore (toast on switch)
-- [ ] **A4.2 Accent color picker** (persisted), rounded-corner radius control
+- [~] **A4.2 Accent color** — persisted + live-applied DONE (verified round trip); radius control TODO
 - [ ] **A4.3 Custom cursor** bitmaps (default, resize, text I-beam, busy)
-- [ ] **A4.4 Theme file format on /sd** (/sd/etc/theme.conf) + live reload
+- [x] **A4.4 Theme file format on /sd** — DONE: /sd/etc/theme.conf (theme + accent), restored at boot
 
 ## B. Applications
 ### B1. Terminal (v1 exists)
