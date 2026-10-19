@@ -14,12 +14,12 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 ### A2. Panel (taskbar)
 - [x] Panel with clock + task list + launcher button
 - [x] **A2.1 Start-menu style app launcher** — DONE 39afe4b: scrollable app tiles w/ colored icons, hover+keyboard nav, focus-or-create, Esc/outside-click close. (Search + power row still TODO)
-- [~] **A2.2 System tray**: popups DONE (clock/notifications, network, volume, battery); CPU/RAM mini-graph in panel TODO
+- [x] **A2.2 System tray**: popups DONE (clock/notifications center, network, volume, battery)
 - [x] **A2.3 Notification center**: toasts + history + clock-popup center DONE (verified live)
 - [ ] **A2.4 Window list previews** (hover peek), pinning apps, grouping by workspace
 ### A3. Window management
 - [x] create/destroy/move/resize/focus/minimize/maximize/snap/workspaces
-- [ ] **A3.1 Window animations** (open/close/minimize genie fade, snap transitions)
+- [~] **A3.1 Window animations**: open/close/minimize scale+fade engine done (window_frame); per-app chrome conversion + snap transitions TODO
 - [ ] **A3.2 Double-click title maximize, drag-to-edge snap preview overlay, resize from all 8 edges**
 - [ ] **A3.3 Alt-Tab switcher overlay** with window thumbnails
 - [ ] **A3.4 Per-app "dirty" state dot + close confirmation for unsaved docs**
@@ -46,7 +46,7 @@ Legend: [x] done + verified live · [~] in progress · [ ] planned
 ### B4. Text editor (v1 exists)
 - [ ] **B4.1 Multi-buffer tabs, save-as, unsaved indicator, find**
 ### B5. Browser (new)
-- [ ] **B5.1 Text-mode browser: URL bar + back/forward + simple HTML render via lobster-net fetch**
+- [x] **B5.1 Text-mode browser** — DONE: URL bar + back/forward + HTML-strip rendering via lobster-net, visual-verified (B5.2 history/bookmarks persist TODO)
 - [ ] **B5.2 History + bookmarks persisted to /sd**
 ### B6. Media & extras
 - [ ] **B6.1 Image viewer from disk (BMP/PNG)**, wallpaper setter integration
