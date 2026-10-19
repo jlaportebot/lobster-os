@@ -850,8 +850,12 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<usize, VfsError> {
     {
         let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
         node.data_len = 0;
-        let written = node.write(0, data)?;
-        node.metadata.size = written as u64;
+        if !data.is_empty() {
+            let written = node.write(0, data)?;
+            node.metadata.size = written as u64;
+        } else {
+            node.metadata.size = 0;
+        }
     }
     // Write through to the ext2 backing store so kernel-side writes
     // (settings persistence etc.) actually land on disk.

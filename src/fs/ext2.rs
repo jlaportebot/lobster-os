@@ -1676,8 +1676,13 @@ impl Ext2FileSystem {
             current_offset += chunk as u64;
         }
 
-        // Update inode size
-        let new_size = current_offset.max(u32::from_le(inode.i_size) as u64);
+        // Update inode size — writes can grow OR shrink the file.
+        let new_size = if offset == 0 && bytes_written < u32::from_le(inode.i_size) as usize {
+            // Full rewrite from 0 shorter than the old file: truncate.
+            bytes_written as u64
+        } else {
+            current_offset.max(u32::from_le(inode.i_size) as u64)
+        };
         inode.i_size = (new_size as u32).to_le();
         // Update block count (in 512-byte sectors)
         let sectors = (new_size + 511) / 512;
