@@ -12,6 +12,7 @@ pub mod process_manager;
 pub mod settings;
 pub mod setup_wizard;
 pub mod sysmon;
+pub mod task_manager;
 pub mod terminal;
 
 use crate::println;

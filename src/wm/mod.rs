@@ -122,6 +122,7 @@ pub fn tick() {
                 crate::apps::sysmon::render_to_windows(&fb);
                 dirty::mark();
                 crate::apps::process_manager::render_to_windows(&fb);
+                crate::apps::task_manager::render_to_windows(&fb);
             }
             // Everything else is fully static between interactions
             if dirty::should_render_static() {

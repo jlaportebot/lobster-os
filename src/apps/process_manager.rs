@@ -96,17 +96,30 @@ impl ProcessManager {
     pub fn render(&self, x: u32, y: u32, width: u32, height: u32) {
         let info = fb::get_info();
 
-        // Title bar
+        // Title bar (legacy standalone chrome)
         graphics::draw_rect(&info, x, y, width, 28, 0x2D2D30);
         graphics::draw_text(&info, x + 8, y + 6, APP_NAME, 0xFFFFFF, 0x2D2D30);
+        self.render_pane(&info, x, y + 28, width, height.saturating_sub(28));
+    }
+
+    /// Render the process list into a client region (no chrome) — used by
+    /// the merged Task Manager.
+    pub fn render_pane(
+        &self,
+        info: &crate::display::fb::FramebufferInfo,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) {
 
         // Column headers
-        let header_y = y + 30;
-        graphics::draw_rect(&info, x, header_y, width, 20, 0x1A1A2A);
-        graphics::draw_text(&info, x + 8, header_y + 4, "PID", 0x8888CC, 0x1A1A2A);
-        graphics::draw_text(&info, x + 70, header_y + 4, "State", 0x8888CC, 0x1A1A2A);
-        graphics::draw_text(&info, x + 180, header_y + 4, "Runtime", 0x8888CC, 0x1A1A2A);
-        graphics::draw_text(&info, x + 300, header_y + 4, "Priority", 0x8888CC, 0x1A1A2A);
+        let header_y = y + 2;
+        graphics::draw_rect(info, x, header_y, width, 20, 0x1A1A2A);
+        graphics::draw_text(info, x + 8, header_y + 4, "PID", 0x8888CC, 0x1A1A2A);
+        graphics::draw_text(info, x + 70, header_y + 4, "State", 0x8888CC, 0x1A1A2A);
+        graphics::draw_text(info, x + 180, header_y + 4, "Runtime", 0x8888CC, 0x1A1A2A);
+        graphics::draw_text(info, x + 300, header_y + 4, "Priority", 0x8888CC, 0x1A1A2A);
 
         // Collect tasks
         let tasks = Self::collect_tasks();
@@ -133,12 +146,12 @@ impl ProcessManager {
             } else {
                 0x1A1A2A
             };
-            graphics::draw_rect(&info, x, row_y, width, ROW_HEIGHT, bg);
+            graphics::draw_rect(info, x, row_y, width, ROW_HEIGHT, bg);
 
             let pid_str = format!("{}", pid);
-            graphics::draw_text(&info, x + 8, row_y + 4, &pid_str, 0xCCCCCC, bg);
+            graphics::draw_text(info, x + 8, row_y + 4, &pid_str, 0xCCCCCC, bg);
             graphics::draw_text(
-                &info,
+                info,
                 x + 70,
                 row_y + 4,
                 Self::state_str(state),
@@ -146,20 +159,20 @@ impl ProcessManager {
                 bg,
             );
             let rt_str = format!("{} ticks", runtime);
-            graphics::draw_text(&info, x + 180, row_y + 4, &rt_str, 0xCCCCCC, bg);
+            graphics::draw_text(info, x + 180, row_y + 4, &rt_str, 0xCCCCCC, bg);
             let pri_str = match priority {
                 0 => "Low",
                 2 => "High",
                 _ => "Normal",
             };
-            graphics::draw_text(&info, x + 300, row_y + 4, pri_str, 0xCCCCCC, bg);
+            graphics::draw_text(info, x + 300, row_y + 4, pri_str, 0xCCCCCC, bg);
         }
 
         // Status bar
         let status_y = y + height.saturating_sub(20);
         let status = format!("{} processes | row {} selected", count, self.selected_idx);
-        graphics::draw_rect(&info, x, status_y, width, 20, 0x1A1A2A);
-        graphics::draw_text(&info, x + 8, status_y + 4, &status, 0x666688, 0x1A1A2A);
+        graphics::draw_rect(info, x, status_y, width, 20, 0x1A1A2A);
+        graphics::draw_text(info, x + 8, status_y + 4, &status, 0x666688, 0x1A1A2A);
     }
 
     pub fn is_running(&self) -> bool {

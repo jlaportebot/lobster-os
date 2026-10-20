@@ -63,23 +63,11 @@ pub static APPS: &[AppEntry] = &[
         },
     },
     AppEntry {
-        name: "Sys Monitor",
+        name: "Task Manager",
         icon: "\u{1F4CA}",
         color: 0xFFA3BE8C,
         launch: || {
-            focus_or_create("System Monitor", 420, 280, || {
-                let _ = window::create(180, 160, 420, 280, "System Monitor");
-            });
-        },
-    },
-    AppEntry {
-        name: "Processes",
-        icon: "\u{1F9E0}",
-        color: 0xFFB48EAD,
-        launch: || {
-            focus_or_create("Process Manager", 440, 280, || {
-                let _ = window::create(200, 180, 440, 280, "Process Manager");
-            });
+            crate::apps::task_manager::open();
         },
     },
     AppEntry {

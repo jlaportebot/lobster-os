@@ -812,7 +812,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
             // System Monitor window
             // Boot windows: tidy two-column grid, leaving the center free for
             // session-restored windows.
-            let _sysmon_id = crate::wm::window::create(800, 50, 420, 280, "System Monitor");
+            let _sysmon_id = crate::wm::window::create(800, 50, 420, 280, "Task Manager");
             crate::println!("[apps] System Monitor window created");
 
             // Calculator window
@@ -824,7 +824,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
             crate::println!("[apps] File Manager window created");
 
             // Process Manager window
-            let _pm_id = crate::wm::window::create(1120, 420, 440, 280, "Process Manager");
+            let _pm_id = None::<u32>; // merged into Task Manager (Processes tab)
             crate::println!("[apps] Process Manager window created");
 
             crate::println!("[apps] Desktop: 5 windows created (Terminal, SysMon, Calculator, FileManager, ProcessMgr)");

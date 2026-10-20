@@ -123,6 +123,11 @@ fn handle_key_press(scancode: u8, _extended: bool) {
         return;
     }
 
+    // Task Manager: Tab/arrows/K when its window is focused
+    if crate::apps::task_manager::handle_key(scancode) {
+        return;
+    }
+
     // WM keyboard shortcuts (Super+arrow, Super+D, Alt+F4, Alt+1-4)
     crate::wm::handle_shortcut(scancode);
 
@@ -197,6 +202,10 @@ fn handle_mouse_move(dx: i16, dy: i16) {
     crate::wm::window::handle_event(HidEvent::MouseMove { dx, dy });
 }
 
+/// Pending EL0 user-window click awaiting its release event.
+static mut USER_CLICK_PENDING: bool = false;
+static mut USER_CLICK_PENDING_WIN: u32 = 0;
+
 /// Handle mouse button changes
 fn handle_mouse_button(left: bool, right: bool, middle: bool) {
     let prev_left = unsafe { MOUSE_LEFT };
@@ -247,6 +256,24 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
     if left && !prev_left {
         let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
 
+        // Task Manager tab bar (before generic window focus routing)
+        if crate::apps::task_manager::handle_click(cx, cy) {
+            return;
+        }
+
+        // EL0 user windows get clicks before normal focus routing
+        if let Some((win_id, ux, uy)) =
+            crate::wm::user_windows::hit_test(cx, cy)
+        {
+            crate::wm::user_windows::focus_window(win_id);
+            crate::wm::user_windows::click_event(win_id, 1, true, ux, uy);
+            unsafe {
+                USER_CLICK_PENDING_WIN = win_id as u32;
+                USER_CLICK_PENDING = true;
+            }
+            return;
+        }
+
         // Check if click is on panel (launcher, task buttons, tray)
         if let Some(action) = panel::handle_click(cx, cy) {
             handle_panel_action(action);
@@ -282,6 +309,17 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
 
     // On left release: stop any drag
     if !left && prev_left {
+        // Deliver the release to a user window if a press was captured.
+        if unsafe { USER_CLICK_PENDING } {
+            unsafe {
+                USER_CLICK_PENDING = false;
+            }
+            let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+            let win_id = unsafe { USER_CLICK_PENDING_WIN } as u64;
+            let (_, ux, uy) =
+                crate::wm::user_windows::hit_test(cx, cy).unwrap_or((win_id, 0, 0));
+            crate::wm::user_windows::click_event(win_id, 1, false, ux, uy);
+        }
         crate::wm::window::handle_event(HidEvent::MouseButton {
             left,
             right,
