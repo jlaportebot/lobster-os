@@ -54,6 +54,14 @@ mod arm64 {
         unsafe { core::arch::asm!("wfe") }
     }
 
+    /// Wait For Interrupt — on QEMU TCG this traps to the host and
+    /// yields the vCPU to the emulator main loop, letting monitor
+    /// commands (screendump, HMP) run while the guest "busy-waits".
+    #[inline]
+    pub fn wfi() {
+        unsafe { core::arch::asm!("wfi") }
+    }
+
     /// Send Event (wake other cores)
     #[inline]
     #[allow(dead_code)]
