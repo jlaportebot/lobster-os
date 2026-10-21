@@ -45,7 +45,7 @@ QEMU_SERIAL := -nographic -serial mon:stdio
 all: $(IMG)
 
 # ─── Release build ─────────────────────────────────────────────────────
-$(BUILDDIR)/release/lobster-os: $(shell find src/ -name '*.rs') Cargo.toml
+$(BUILDDIR)/release/lobster-os: $(shell find src/ -name '*.rs' -o -name '*.S' -o -name '*.ld') Cargo.toml
 	cargo build --release --target $(TARGET) $(if $(FEATURES),--features $(FEATURES),)
 
 $(ELF): $(BUILDDIR)/release/lobster-os
