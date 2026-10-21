@@ -80,7 +80,10 @@ Everything else (App Store installs, multiple apps, shell while an app runs) unl
       (needs S2/S4: install then LAUNCH the installed app live)
 - [~] **B6.5** clock/timer + Minesweeper (notes done)
 - [ ] **B7. Code app**: editor panel wired to `cc` + `run` (write→compile→execute flow)
-- [ ] **B8. Package runtime**: `pkg install micropython` → run it from Terminal
+- [x] **B8. Package runtime** — DONE 550ea52: embedded MicroPython runs as an EL0
+      user process. First-class `python`/`python3` shell command (REPL verified live:
+      comprehensions, arithmetic, print output). Background `python &` works via S2.
+      Script-args pending argv wiring (C8).
 
 ## C. System Services (kernel-level)
 - [~] **C1** → S0 above
