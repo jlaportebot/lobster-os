@@ -737,6 +737,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         }
     }
 
+    // Home directory: ensure /sd/home/user, alias /home/user onto it, seed welcome.txt,
+    // and start the shell there.
+    crate::fs::vfs::bootstrap_home();
+    crate::shell::set_cwd(crate::fs::vfs::HOME_PATH);
+
     // 19. Initialize package manager repositories from /etc/pkg/repos.conf
     crate::println!("[pkg] Loading repository configuration...");
     {
