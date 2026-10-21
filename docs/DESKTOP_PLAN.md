@@ -31,8 +31,10 @@ Everything else (App Store installs, multiple apps, shell while an app runs) unl
       window's backing frames into the app's address space (0x4000_0000 + slot*16MB);
       apps write pixels directly, SYS_WIN_FLUSH composites; kernel reads via phys map.
       Live-verified: direct-write animation, clean close, suite 8/8.
-- [ ] **S6. App lifecycle**: kill on close button, zombie reap, crash containment
-      (exception → kill that process only, desktop survives).
+- [x] **S6. App lifecycle** — DONE b1a84df: close button kills the EL0 owner + tears
+      down immediately (wallpaper::erase_region repaints the exposed desktop — the
+      QEMU direct-FB path has no compositor repaint); reap_zombies now actually runs
+      (every 64 main-loop iters), freeing stacks + windows.
 
 ## A. Core Desktop Shell
 ### A1. Desktop surface
@@ -62,7 +64,9 @@ Everything else (App Store installs, multiple apps, shell while an app runs) unl
 ## B. Applications
 ### B1. Terminal
 - [x] VT100 parser + screen buffer; B1.2 shell-in-a-window (gkey-verified)
-- [ ] **B1.1** Tabbed terminal, font-size keys, mouse copy/paste
+- [x] **B1.1** Tabbed terminal + font-size keys — DONE (merge 05b1170): 4-tab bar
+      with parked VT screens swapped on switch; Ctrl+/- scales text 1x–2x.
+      (Mouse copy/paste deferred.)
 ### B2. Files
 - [x] tree browse + /sd; B2.1 shell UI; B2.3 create/copy/move/delete (persist verified)
 - [~] **B2.2** selection/rename/delete done; drag-drop + properties dialog TODO
