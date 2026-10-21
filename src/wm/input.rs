@@ -256,6 +256,16 @@ fn handle_key_press(scancode: u8, _extended: bool) {
         return;
     }
 
+    // Calculator: digits/ops/Enter/Backspace/Esc when focused (B6.2)
+    if crate::wm::window::get_title(crate::wm::window::focused_id()) == "Calculator" {
+        if let Some(calc) = crate::apps::calculator::instance() {
+            if calc.handle_key(scancode, ch) {
+                crate::wm::dirty::mark();
+                return;
+            }
+        }
+    }
+
     // WM keyboard shortcuts (Super+arrow, Super+D, Alt+F4, Alt+1-4)
     crate::wm::handle_shortcut(scancode);
 

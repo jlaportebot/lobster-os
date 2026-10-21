@@ -27,7 +27,13 @@ pub struct Calculator {
     waiting_for_operand: bool,
     running: bool,
     button_rects: [(u32, u32, u32, u32); NUM_BUTTONS],
+    /// Rolling tape of past evaluations (newest last), shown under the
+    /// display when non-empty. B6.2.
+    history: alloc::vec::Vec<alloc::string::String>,
 }
+
+/// Max tape entries kept.
+const HISTORY_CAP: usize = 8;
 
 impl Calculator {
     pub fn new() -> Self {
@@ -38,6 +44,7 @@ impl Calculator {
             waiting_for_operand: true,
             running: true,
             button_rects: [(0, 0, 0, 0); NUM_BUTTONS],
+            history: alloc::vec::Vec::new(),
         }
     }
 
@@ -108,10 +115,76 @@ impl Calculator {
 
     fn equals(&mut self) {
         if self.operator.is_some() {
+            let lhs = self.previous;
+            let op = self.operator.unwrap();
+            let rhs_display = self.display.clone();
             self.compute();
             self.operator = None;
             self.waiting_for_operand = true;
+            // Tape entry: "lhs op rhs = result"
+            let entry = alloc::format!(
+                "{} {} {} = {}",
+                lhs,
+                op,
+                rhs_display,
+                self.display
+            );
+            if self.history.len() == HISTORY_CAP {
+                self.history.remove(0);
+            }
+            self.history.push(entry);
         }
+    }
+
+    /// Keyboard input when the Calculator window is focused (B6.2).
+    /// Returns true if the key was consumed.
+    pub fn handle_key(&mut self, scancode: u8, ch: Option<char>) -> bool {
+        let consumed = match ch {
+            Some('0'..='9') => {
+                self.input_digit(ch.unwrap());
+                true
+            }
+            Some('.') => {
+                self.input_digit('.');
+                true
+            }
+            Some('+') => {
+                self.input_operator('+');
+                true
+            }
+            Some('-') => {
+                self.input_operator('-');
+                true
+            }
+            Some('*') => {
+                self.input_operator('*');
+                true
+            }
+            Some('/') => {
+                self.input_operator('/');
+                true
+            }
+            Some('%') => {
+                self.input_operator('%');
+                true
+            }
+            _ => match scancode {
+                0x1C => {
+                    self.equals();
+                    true
+                }
+                0x0E => {
+                    self.backspace();
+                    true
+                }
+                0x01 => {
+                    self.clear();
+                    true
+                }
+                _ => false,
+            },
+        };
+        consumed
     }
 
     /// Handle a button press
@@ -162,6 +235,23 @@ impl Calculator {
             0x4EC9B0,
             0x1E1E1E,
         );
+
+        // History tape (B6.2): latest entries under the display, dimmed.
+        if !self.history.is_empty() {
+            let tape_y = display_y + display_height;
+            let shown = self.history.len().min(3);
+            for (i, entry) in self.history[self.history.len() - shown..].iter().rev().enumerate() {
+                let line = if entry.len() > 24 { &entry[entry.len() - 24..] } else { &entry[..] };
+                graphics::draw_text(
+                    &info,
+                    x + 8,
+                    tape_y + 4 + (i as u32) * 14,
+                    line,
+                    0x808080,
+                    0x252526,
+                );
+            }
+        }
 
         // Buttons
         let btn_area_y = display_y + display_height;
@@ -243,6 +333,11 @@ pub fn init() {
 static mut CALCULATOR: Option<Calculator> = None;
 
 /// Get the global Calculator instance
+/// Access the singleton calculator (for the WM keyboard hook).
+pub fn instance() -> Option<&'static mut Calculator> {
+    unsafe { CALCULATOR.as_mut() }
+}
+
 fn get_calculator() -> &'static mut Calculator {
     unsafe {
         if CALCULATOR.is_none() {
