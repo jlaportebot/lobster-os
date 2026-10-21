@@ -584,6 +584,11 @@ fn handle_keypress(scancode: u8) {
         cycle_focus();
         return;
     }
+    // Editor: tabs / save-as / find / typing when its window is focused
+    #[cfg(feature = "qemu_raspi5b")]
+    if crate::apps::editor::handle_key(scancode) {
+        return;
+    }
     let focused_id = *FOCUSED_ID.lock();
     if focused_id != 0 {
         let windows = WINDOWS.lock();
