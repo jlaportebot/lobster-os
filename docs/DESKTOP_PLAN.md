@@ -12,9 +12,12 @@ supports dirty-rect, snapshots, shared folder, audio, live resolution.
 
 ## S0. C1 v2 — real multitasking (THE keystone for "download & run apps")
 Everything else (App Store installs, multiple apps, shell while an app runs) unlocks here.
-- [ ] **S1. Input during EL0 app run**: nested `wm::tick()` (IN_TICK guard, driven by
-      sys_sleep) must still pump HID events into user-window queues — restricted
-      dispatcher (no panel/desktop/shell routing mid-syscall). Verify: harness el0_app click.
+- [x] **S1. Input during EL0 app run** — DONE 0dcbe42: root cause was the QEMU
+      lobster-input ring — the guest's head-advance write hit the CLEAR handler and
+      wiped all unconsumed events (move+press+release bursts lost). New ADVANCE_HEAD
+      register (0x1C) QEMU-side; guest driver writes 0x1C. Plus deferred-event replay
+      ring, per-slot epochs, chrome-vs-content hit routing, pending-click lifecycle
+      fixes (Claude-reviewed). Harness el0_app click now passes 3/3 + full suite 5/5.
 - [ ] **S2. Non-blocking app launch**: `run` + launcher spawn WITHOUT run_and_wait —
       shell stays live; scheduler round-robins EL0 tasks at WM-frame boundaries.
 - [ ] **S3. QEMU timer IRQ**: fix the PSTATE.IL-class UNDEF at IRQ-vector entry so
