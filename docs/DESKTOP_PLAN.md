@@ -1,80 +1,111 @@
-# LobsterOS Desktop — Master Plan (v1)
-**Goal:** A polished, everyday-driver desktop OS (Windows/macOS-class UX) on the LobsterOS kernel +
-QEMU Pi 5 emulator. Every item ships with a live end-to-end test before it's marked done.
+# LobsterOS Desktop — Master Plan v2 (everyday-driver OS)
+**North star:** a Rust, Pi 5-native desktop OS you can *daily drive*: boot to desktop,
+browse, download/install apps (incl. interpreters like Python), write and run code,
+manage files, multi-task real user processes — Windows/macOS-class UX, Pi5-optimized,
+fast. Every item ships with a live end-to-end verification before it's marked done.
 
 Legend: [x] done + verified live · [~] in progress · [ ] planned
 
+Kernel today: 78K lines, EL0 processes + GUI syscalls work; ONE cooperative EL0 app at
+a time; input during app run is blocked by the nested-tick guard (→ S1). Emulator
+supports dirty-rect, snapshots, shared folder, audio, live resolution.
+
+## S0. C1 v2 — real multitasking (THE keystone for "download & run apps")
+Everything else (App Store installs, multiple apps, shell while an app runs) unlocks here.
+- [ ] **S1. Input during EL0 app run**: nested `wm::tick()` (IN_TICK guard, driven by
+      sys_sleep) must still pump HID events into user-window queues — restricted
+      dispatcher (no panel/desktop/shell routing mid-syscall). Verify: harness el0_app click.
+- [ ] **S2. Non-blocking app launch**: `run` + launcher spawn WITHOUT run_and_wait —
+      shell stays live; scheduler round-robins EL0 tasks at WM-frame boundaries.
+- [ ] **S3. QEMU timer IRQ**: fix the PSTATE.IL-class UNDEF at IRQ-vector entry so
+      hardware ticks fire → true preemption (removes the cooperative crutch).
+- [ ] **S4. Multiple concurrent EL0 apps**: N windows, per-task event rings, per-app
+      input focus (hit_test already topmost-first), per-app CPU slices.
+- [ ] **S5. Zero-copy shared framebuffer page**: SYS_WIN mmap'd shared page (removes
+      syscall-per-fill overhead) + flush-driven damage tracking.
+- [ ] **S6. App lifecycle**: kill on close button, zombie reap, crash containment
+      (exception → kill that process only, desktop survives).
+
 ## A. Core Desktop Shell
 ### A1. Desktop surface
-- [x] Full-screen framebuffer with compositor (2237-line compositor)
-- [x] Desktop icons (launcher + files)
-- [x] **A1.1 Wallpaper system** — DONE 09c2285: 7 gradient presets, live repaint, /sd persistence + restore (incl. system-wide FB color-order fix)
-- [x] **A1.2 Desktop right-click menu** — DONE 09c2285: New File/Folder (with collision-safe names), Open Terminal, File Manager, Display Settings, Change Wallpaper, Toggle Dark/Light, Refresh
-- [~] **A1.3**: single-selection + hover DONE (visual-verified); rubber-band multi-select + drag-arrange TODO
+- [x] Full-screen framebuffer + compositor (dirty-gated)
+- [x] Desktop icons (launcher + files); A1.1 wallpapers (7 presets, persisted); A1.2 right-click menu
+- [~] **A1.3** single-selection + hover done; rubber-band multi-select + drag-arrange TODO
+- [ ] **A1.4** Desktop widget layer (clock/weather sticky on wallpaper)
 ### A2. Panel (taskbar)
-- [x] Panel with clock + task list + launcher button
-- [x] **A2.1 Start-menu style app launcher** — DONE 39afe4b: scrollable app tiles w/ colored icons, hover+keyboard nav, focus-or-create, Esc/outside-click close. (Search + power row still TODO)
-- [x] **A2.2 System tray**: popups DONE (clock/notifications center, network, volume, battery)
-- [x] **A2.3 Notification center**: toasts + history + clock-popup center DONE (verified live)
-- [ ] **A2.4 Window list previews** (hover peek), pinning apps, grouping by workspace
+- [x] Panel, clock, task list, launcher button; A2.1 start menu (tiles, hover+kb nav);
+      A2.2 tray popups; A2.3 notification center + toasts
+- [ ] **A2.4** Window-list hover previews, pinning, workspace grouping
+- [ ] **A2.5** Quick-settings tiles (WiFi/BT/volume/brightness) in tray popup
+- [ ] **A2.6** Start-menu search + power row (logout/reboot/shutdown)
 ### A3. Window management
-- [x] create/destroy/move/resize/focus/minimize/maximize/snap/workspaces
-- [~] **A3.1 Window animations**: open/close/minimize scale+fade engine done (window_frame); per-app chrome conversion + snap transitions TODO
-- [~] **A3.2**: double-click maximize + drag-edge snap DONE; snap preview overlay TODO
-- [x] **A3.3 Alt-Tab switcher overlay** — DONE: tiles + selection + Alt-release activation (visual-verified)
-- [ ] **A3.4 Per-app "dirty" state dot + close confirmation for unsaved docs**
+- [x] create/destroy/move/resize/focus/min/max/snap/workspaces
+- [x] A3.3 Alt-Tab switcher overlay
+- [~] **A3.1** open/close/minimize animations done; per-app chrome + snap transitions TODO
+- [~] **A3.2** dbl-click maximize + edge-snap done; snap preview overlay TODO
+- [ ] **A3.4** dirty-state dot + unsaved-close confirmation (needs B4.1)
+- [ ] **A3.5** Per-app mute in volume tray (ties C4)
 ### A4. Theme engine
-- [x] Theme struct + palette + fonts
-- [x] **A4.1 Light/Dark toggle** — DONE 09c2285: theme::toggle + /sd persistence + restore (toast on switch)
-- [~] **A4.2 Accent color** — persisted + live-applied DONE (verified round trip); radius control TODO
-- [ ] **A4.3 Custom cursor** bitmaps (default, resize, text I-beam, busy)
-- [x] **A4.4 Theme file format on /sd** — DONE: /sd/etc/theme.conf (theme + accent), restored at boot
+- [x] theme struct, A4.1 light/dark, A4.2 accent (persisted), A4.4 /sd/etc/theme.conf
+- [~] **A4.2b** radius control TODO
+- [ ] **A4.3** cursor bitmaps (default/resize/I-beam/busy/hand)
+- [ ] **A4.5** Font engine v2: scalable PSF/TTF glyphs (beyond 8x16 bitmap)
 
 ## B. Applications
-### B1. Terminal (v1 exists)
-- [x] VT100 parser + screen buffer + window render
-- [ ] **B1.1 Tabbed terminal + font size shortcuts + copy/paste via mouse**
-- [x] **B1.2 Shell-in-a-window** — DONE: GUI-typed commands execute and render inside the Terminal window (visual-verified via gkey automation)
-### B2. Files (file manager v1 exists)
-- [x] Tree browse, /sd integration
-- [x] **B2.1 File manager shell** — DONE: Places sidebar, Up/Re toolbar + path pill, zebra list w/ type markers + sizes, status bar (visual-verified)
-- [~] **B2.2**: selection + rename + delete DONE (GUI keys + fm shell, persisted across reboots); drag-drop + properties dialog TODO
-- [x] **B2.3 Create/copy/move/delete** — DONE: all four ops persist across reboots (files + recursive dirs); undo toast TODO
-### B3. Settings (v1 exists)
-- [x] **B3.1 Settings app pages** — DONE: Appearance/Display/Network/Storage/About with live data (visual-verified); Users page TODO
-- [ ] **B3.2 Live-apply every setting + persist all to /sd/etc/**
-### B4. Text editor (v1 exists)
-- [ ] **B4.1 Multi-buffer tabs, save-as, unsaved indicator, find**
-### B5. Browser (new)
-- [x] **B5.1 Text-mode browser** — DONE: URL bar + back/forward + HTML-strip rendering via lobster-net, visual-verified (B5.2 history/bookmarks persist TODO)
-- [x] **B5.2 History + bookmarks persisted to /sd** — DONE (verified round trip)
+### B1. Terminal
+- [x] VT100 parser + screen buffer; B1.2 shell-in-a-window (gkey-verified)
+- [ ] **B1.1** Tabbed terminal, font-size keys, mouse copy/paste
+### B2. Files
+- [x] tree browse + /sd; B2.1 shell UI; B2.3 create/copy/move/delete (persist verified)
+- [~] **B2.2** selection/rename/delete done; drag-drop + properties dialog TODO
+### B3. Settings
+- [x] B3.1 pages (Appearance/Display/Network/Storage/About)
+- [ ] **B3.2** live-apply + persist every setting to /sd/etc/; Users page
+### B4. Editor
+- [ ] **B4.1** multi-buffer tabs, save-as, find, unsaved indicator
+- [ ] **B4.2** syntax highlight (keyword/comment/string tinting)
+### B5. Browser
+- [x] B5.1 text-mode browser; B5.2 persisted history/bookmarks
+- [ ] **B5.3** HTML-lite images + clickable links
 ### B6. Media & extras
-- [x] **B6.1 Image viewer from disk** — DONE: real BMP rendering (24/32-bit, both row orders), pixel-verified gradient; PNG + wallpaper-set integration TODO
-- [ ] **B6.2 Calculator (v1 exists) → keyboard input + history**
-- [ ] **B6.3 Process manager + sysmon merged into one Task Manager w/ graphs**
-- [ ] **B6.4 App Store (v1 exists) → real package install from repo into /sd, launcher integration**
-- [~] **B6.5**: Notes app DONE (persisted to /sd, verified); clock/timer + Minesweeper TODO
+- [x] B6.1 BMP image viewer; B6.3 Task Manager (SysMon+ProcMgr merged)
+- [ ] **B6.2** calculator keyboard + history
+- [ ] **B6.4** App Store: real package install from repo into /sd + launcher entry
+      (needs S2/S4: install then LAUNCH the installed app live)
+- [~] **B6.5** clock/timer + Minesweeper (notes done)
+- [ ] **B7. Code app**: editor panel wired to `cc` + `run` (write→compile→execute flow)
+- [ ] **B8. Package runtime**: `pkg install micropython` → run it from Terminal
 
 ## C. System Services (kernel-level)
-- [x] **C1. Per-app processes (v1)** — DONE: EL0 apps draw + receive clicks via SYS_WIN_* (110-114); demo /sd/guiapp pixel-verified interactive. v2 (shared-page zero-copy, launcher spawn, preemption) next.
-- [ ] **C2. Compositor event loop**: input routing table, click-through, focus follows window z-order, drag threshold**
-- [ ] **C3. Storage UX: /sd → user home overlay (/home/user on disk), /sd/etc as persistent /etc**
-- [ ] **C4. Audio device** (QEMU: lobster-audio MMIO window + host audio) + volume tray + per-app streams (stretch)
-- [ ] **C5. Multi-user login screen** (greeter + sessions + /home per user on /sd)**
+- [~] **C1** → S0 above
+- [ ] **C2. Compositor event loop**: formal input routing table, click-through,
+      drag threshold, focus-follows-z
+- [ ] **C3. Storage UX**: /sd → /home/user overlay, /sd/etc as persistent /etc
+- [x] **C4/D5. Audio device** — lobster-audio MMIO + host audio + guest mixer (beep/play)
+- [ ] **C5. Multi-user login**: greeter, sessions, per-user /home
+- [ ] **C6. Dynamic linker v2**: shared-lib resolution for EL0 apps
+- [ ] **C7. Signals for EL0**: SIGINT/SIGTERM delivery to user processes
+- [ ] **C8. exec/fork for GUI apps**: launcher uses fork+exec (ties S2)
+- [ ] **C9. USB stack on real Pi5** (xHCI exists; needs on-metal bring-up)
 
-## D. Emulator support (lobster-qemu)
-- [x] 4 cores, framebuffer display stack, lobster-input kbd/mouse, lobster-net, bulk serial, lobster-disk
-- [x] **D1. Dirty-rect rendering** — DONE: dirty-gating render architecture (50× steady-state speedup)
-- [x] **D2. Snapshot/resume** — DONE: BlockBackend lobster-disk + vm.sh (snap/boot --resume/list/del), savevm/loadvm verified
-- [x] **D3. Shared folder** — DONE: lobster-share MMIO device + guest driver + share/cat/cp shell cmds (GUI FM integration next)
-- [x] **D4. Live resolution change** — DONE: guest `resolution <w> <h>` (mailbox re-negotiation, console resize verified 1280x720, panel re-anchors). QEMU surface resizes live.
-- [ ] **D5. Audio passthrough device** (ties C4)
+## D. Emulator (lobster-qemu)
+- [x] 4 cores, fb, lobster-input, lobster-net, bulk serial, lobster-disk
+- [x] D1 dirty-rect, D2 snapshots, D3 shared folder, D4 live resolution, D5 audio
+- [ ] **D6. dt warnings cleanup** (bcm2712 disabled-node spam)
+- [ ] **D7. icount deterministic mode** for CI-stable GUI tests
+- [ ] **D8. Multi-EL0 debug view**: HMP task list + per-task backtrace
 
 ## E. Testing & Release
-- [x] **E1. Automated GUI harness** — DONE: tools/gui_test.py 4/4 (start menu, clock, apps, resolution) with HMP lmouse/lclick/lkey injection.
-- [ ] **E2. Boot-to-desktop time budget ≤ 5s in emulator**
-- [ ] **E3. Nightly build + release notes per merged feature (already doing manual r-notes)**
+- [x] E1 gui harness (5 tests) with HMP lmouse/lclick/lkey injection
+- [ ] **E2.** boot-to-desktop ≤ 5s (measure first, then optimize)
+- [ ] **E3.** nightly build + auto r-notes per merge
+- [ ] **E4.** perf budget suite: fps counter, syscall latency, boot time (logged)
 
 ## Ship order (dependencies):
-A1.1→A4.1→A4.2 (theme base) → A2.1 launcher → B2/B3 apps → A2.2/A2.3 tray+notifications →
-A3.x polish → B5 browser → C1/C3 process+home → D2 snapshots → E1 CI.
+S1 → S2 → S4 (multitask core) → B6.4/B8 (install & run apps — headline ask)
+→ S3 (true preemption) → C3/C5 (home + users) → B1/B4 app polish → E2/E4 perf → E3 nightly.
+
+## Perf principles (always active):
+- keep hot paths barrier-light (dirty gating, 30fps frame cap, opt-level=z + LTO)
+- zero-copy where possible (S5), batched MMIO, no per-pixel syscalls in steady state
+- boot: defer non-critical init until after first desktop frame
