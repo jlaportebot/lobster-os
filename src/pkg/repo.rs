@@ -256,6 +256,11 @@ impl RepositoryManager {
     }
 
     /// Find package across all repositories (returns latest version)
+    /// True if any repository index is cached (populated by update_index).
+    pub fn has_indices(&self) -> bool {
+        !self.indices.is_empty()
+    }
+
     pub fn find_package(&self, name: &str) -> Option<(&RepositoryIndex, &RepoPackage)> {
         for index in &self.indices {
             if let Some(pkg) = index.find_package(name) {

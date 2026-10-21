@@ -127,7 +127,10 @@ impl PackageDatabase {
     pub fn save(&self) -> Result<(), InstallError> {
         use crate::fs::vfs::{create, create_dir, open, write};
 
-        // Ensure parent directory exists
+        // Ensure the full parent chain exists (VFS mkdir is
+        // non-recursive; /var and /var/lib are not guaranteed).
+        let _ = create_dir("/var");
+        let _ = create_dir("/var/lib");
         let _ = create_dir("/var/lib/pkg");
 
         // Create or open the database file
@@ -219,9 +222,13 @@ pub struct Installer {
 impl Installer {
     pub fn new() -> Result<Self, InstallError> {
         let db = PackageDatabase::load()?;
+        let mut repo_manager = crate::pkg::repo::RepositoryManager::new();
+        // Load the persisted repository config so a fresh Installer knows
+        // which repos exist (boot init also seeds the default repo there).
+        let _ = repo_manager.load_config();
         Ok(Self {
             db,
-            repo_manager: crate::pkg::repo::RepositoryManager::new(),
+            repo_manager,
         })
     }
 
@@ -246,6 +253,15 @@ impl Installer {
         // Check if already installed
         if self.db.is_installed(name) {
             return Err(InstallError::AlreadyInstalled);
+        }
+
+        // Auto-refresh repository indices on demand: a fresh Installer has
+        // an empty index cache (only repo CONFIG persists), so fetch the
+        // index now if we don't have it. This makes `pkg install x` work
+        // even without a prior `pkg update` in the same session.
+        if !self.repo_manager.has_indices() {
+            crate::println!("[pkg] Index cache empty — updating repositories...");
+            let _ = self.update();
         }
 
         // Find package in repositories
@@ -899,27 +915,26 @@ fn extract_package(pkg: &Package) -> Result<(), InstallError> {
             }
         }
 
-        // Create the file
-        let fd = match create(path) {
-            Ok(fd) => fd,
-            Err(e) => {
-                crate::println!("[pkg] Failed to create file {}: {:?}", path, e);
-                return Err(InstallError::IoError);
-            }
-        };
-
-        // Extract file data from concatenated file_data
+        // Extract file data from concatenated file_data.
+        // NOTE: vfs::create returns an INODE id, not a file descriptor —
+        // so write through the path-based write_file, not fd writes.
         let file_size = file.size as usize;
         if data_offset + file_size <= pkg.file_data.len() {
             let file_data = &pkg.file_data[data_offset..data_offset + file_size];
-            let _ = write(fd.try_into().unwrap(), file_data);
+            match crate::fs::vfs::write_file(path, file_data) {
+                Ok(_) => {}
+                Err(e) => {
+                    crate::println!("[pkg] Failed to write file {}: {:?}", path, e);
+                    return Err(InstallError::IoError);
+                }
+            }
             data_offset += file_size;
         } else {
             crate::println!(
                 "[pkg] Warning: file_data too short for {}, writing empty",
                 path
             );
-            let _ = write(fd.try_into().unwrap(), &[]);
+            let _ = crate::fs::vfs::write_file(path, &[]);
         }
 
         // Set permissions (would use chmod syscall when available)
