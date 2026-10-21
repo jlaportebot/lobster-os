@@ -142,6 +142,9 @@ static DRAG_START_CURSOR_Y: Spinlock<i32> = Spinlock::new(0);
 static DRAG_WIN_START_X: Spinlock<u32> = Spinlock::new(0);
 static DRAG_WIN_START_Y: Spinlock<u32> = Spinlock::new(0);
 static DRAGGING: Spinlock<bool> = Spinlock::new(false);
+/// Title-bar press is captured (DRAGGING) but the window only starts moving
+/// once the pointer has travelled DRAG_THRESHOLD_PX; until then it's a click.
+static DRAG_ARMED: Spinlock<bool> = Spinlock::new(false);
 
 /// Resize state
 static RESIZE_WIN_ID: Spinlock<u32> = Spinlock::new(0);
@@ -529,6 +532,16 @@ fn window_at(cx: u32, cy: u32) -> Option<(u32, u32, u32, u32, u32)> {
     best
 }
 
+/// Topmost window whose title bar contains the point (focus-follows-z).
+pub fn chrome_window_at(cx: u32, cy: u32) -> Option<u32> {
+    let (id, _x, y, _w, _h) = window_at(cx, cy)?;
+    if is_on_title_bar(cy, y) {
+        Some(id)
+    } else {
+        None
+    }
+}
+
 /// Check if point is on the close button of a window
 fn is_on_close_button(cx: u32, cy: u32, win_x: u32, win_y: u32, win_w: u32) -> bool {
     let btn_x = win_x + win_w - CLOSE_BTN_OFFSET_X;
@@ -622,6 +635,18 @@ fn handle_mouse_move(dx: i16, dy: i16) {
             let start_cy = *DRAG_START_CURSOR_Y.lock();
             let win_start_x = *DRAG_WIN_START_X.lock();
             let win_start_y = *DRAG_WIN_START_Y.lock();
+
+            let mut armed = DRAG_ARMED.lock();
+            if !*armed {
+                let ddx = cx as i32 - start_cx;
+                let ddy = cy as i32 - start_cy;
+                let t = crate::wm::config::DRAG_THRESHOLD_PX as i32;
+                if ddx * ddx + ddy * ddy < t * t {
+                    return;
+                }
+                *armed = true;
+            }
+            drop(armed);
 
             let new_x = (win_start_x as i32 + cx as i32 - start_cx).max(0) as u32;
             let new_y = (win_start_y as i32 + cy as i32 - start_cy).max(0) as u32;
@@ -738,6 +763,7 @@ fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
                 *DRAG_START_CURSOR_Y.lock() = cy as i32;
                 *DRAG_WIN_START_X.lock() = win_x;
                 *DRAG_WIN_START_Y.lock() = win_y;
+                *DRAG_ARMED.lock() = false;
                 *DRAGGING.lock() = true;
                 return;
             }
@@ -752,7 +778,7 @@ fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
 
         // Drag-to-edge snap: if the cursor is within 24px of a screen edge
         // at release, snap the window to that half (or full for top).
-        if was_dragging && drag_win != 0 {
+        if was_dragging && drag_win != 0 && *DRAG_ARMED.lock() {
             if let Some(fb) = compositor::fb_info() {
                 let (cx, cy) = crate::wm::input::cursor_pos();
                 let edge_zone = 24u32;
@@ -772,6 +798,7 @@ fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
         }
 
         *DRAGGING.lock() = false;
+        *DRAG_ARMED.lock() = false;
         *DRAG_WIN_ID.lock() = 0;
         *RESIZING.lock() = false;
         *RESIZE_WIN_ID.lock() = 0;

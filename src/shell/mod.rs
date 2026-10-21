@@ -1043,6 +1043,11 @@ fn run_builtin_out(
             0
         }
         "gh" => cmd_gh(args, argc),
+        "wmconfig" => {
+            #[cfg(target_arch = "aarch64")]
+            crate::wm::config::shell_command(&args[..argc]);
+            0
+        }
         "theme" => {
             #[cfg(target_arch = "aarch64")]
             {
