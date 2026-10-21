@@ -4242,16 +4242,26 @@ fn cmd_preempt(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
 }
 
-/// `python` / `python3` — run the embedded MicroPython interpreter.
-/// v1: interactive REPL (serial stdin). A script argument is planned
-/// once argv passing is wired into spawn (see C8 in the desktop plan).
+/// `python [script.py]` — run the embedded MicroPython interpreter.
+/// No args: interactive REPL. With a script: C8 argv wiring passes
+/// ["/bin/python", "<script>"] so the interpreter executes the file.
 fn cmd_python(args: [&str; MAX_ARGS], argc: usize) -> i32 {
-    if argc >= 2 {
-        Uart10::puts("python: scripts coming soon (argv not wired); starting REPL\r\n");
-    }
-    match crate::sched::spawn_from_path("/bin/python", crate::sched::Priority::Normal) {
+    let argv: Vec<&str> = if argc >= 2 {
+        Vec::from(&["/bin/python", args[1]][..])
+    } else {
+        Vec::new()
+    };
+    match crate::sched::spawn_from_path_args(
+        "/bin/python",
+        crate::sched::Priority::Normal,
+        &argv,
+    ) {
         Some(pid) => {
-            crate::println!("python: MicroPython REPL spawned as PID {}", pid);
+            if argc >= 2 {
+                crate::println!("python: running {} as PID {}", args[1], pid);
+            } else {
+                crate::println!("python: MicroPython REPL spawned as PID {}", pid);
+            }
             let exit_code = unsafe { crate::sched::run_and_wait(pid as u64) };
             crate::println!("python: interpreter exited with code {}", exit_code);
             0
@@ -4304,7 +4314,9 @@ fn cmd_run(args: [&str; MAX_ARGS], argc: usize) -> i32 {
             }
         } else {
             let path = resolve_path(args[1]);
-            match crate::sched::spawn_from_path(&path, priority) {
+            // C8: pass trailing tokens (before '&') as argv to the program.
+            let extra: Vec<&str> = args[2..argc_eff].to_vec();
+            match crate::sched::spawn_from_path_args(&path, priority, &extra) {
                 Some(pid) => {
                     crate::sched::mark_bg(pid);
                     crate::println!("run: {} spawned as PID {} (background)", path, pid);
@@ -4331,7 +4343,9 @@ fn cmd_run(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         }
     } else {
         let path = resolve_path(args[1]);
-        match crate::sched::spawn_from_path(&path, priority) {
+        // C8: pass trailing tokens as argv (program sees argc/argv).
+        let extra: Vec<&str> = args[2..argc].to_vec();
+        match crate::sched::spawn_from_path_args(&path, priority, &extra) {
             Some(pid) => {
                 crate::println!("run: {} spawned as PID {}", path, pid);
                 let exit_code = unsafe { crate::sched::run_and_wait(pid as u64) };

@@ -623,6 +623,103 @@ pub fn spawn_user_process(elf_data: &[u8], priority: Priority) -> Option<Pid> {
     Some(pid)
 }
 
+/// Write an argv block onto the top of a freshly-created user stack and
+/// point x0/x1 at it (AArch64 process-entry convention used by our
+/// MicroPython: w0 = argc, x1 = char** argv).
+/// Layout pushed at the stack top (grows down):
+///   [char* argv[argc]][NULL][string bytes...\0 per arg]
+/// Returns (argc, argv_ptr) on success.
+unsafe fn write_argv_block(user_sp: u64, args: &[&str]) -> Option<(u64, u64, u64)> {
+    const MAX_ARGV_BYTES: usize = 4096;
+    let argc = args.len() as u64;
+    let strings_len: usize = args.iter().map(|a| a.len() + 1).sum();
+    let array_len = (args.len() + 1) * 8; // argv[] + NULL terminator
+    let total = array_len + strings_len;
+    if total > MAX_ARGV_BYTES {
+        return None;
+    }
+    // Layout (addresses grow up): [argv array + NULL][string bytes...]
+    // SP lands ABOVE the strings so the program's own stack pushes (which
+    // grow DOWN from SP) go below the array, never over the strings.
+    let block_top = user_sp & !0xF;
+    let block_base = block_top - total as u64;
+    let array_ptr = block_base; // array at the bottom, already 8-aligned
+    let strings_base = block_base + array_len as u64;
+    let mut p = strings_base;
+    let mut ptrs: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+    for a in args {
+        let sptr = p;
+        for &b in a.as_bytes() {
+            core::ptr::write_volatile(p as *mut u8, b);
+            p += 1;
+        }
+        core::ptr::write_volatile(p as *mut u8, 0);
+        p += 1;
+        ptrs.push(sptr);
+    }
+    let mut ap = array_ptr;
+    for ptr in &ptrs {
+        core::ptr::write_volatile(ap as *mut u64, *ptr);
+        ap += 8;
+    }
+    core::ptr::write_volatile(ap as *mut u64, 0); // NULL terminator
+    Some((argc, array_ptr, block_base))
+}
+
+/// Set the entry registers for argv (call before the task first runs).
+/// Mirrors the MicroPython entry convention: w0 = argc, x1 = argv.
+pub fn set_task_argv(pid: Pid, args: &[&str]) -> bool {
+    let idx = match find_task_index(pid) {
+        Some(i) => i,
+        None => return false,
+    };
+    unsafe {
+        let (user_sp, ttbr0) = match &TASK_TABLE[idx] {
+            Some(t) if t.is_user => (t.user_sp, t.ttbr0_phys),
+            _ => return false,
+        };
+        if ttbr0 == 0 {
+            return false;
+        }
+        // User pages are dual-mapped into the kernel address space at
+        // ELF load time, so the kernel can write the block directly.
+        let Some((argc, argv_ptr, block_base)) = write_argv_block(user_sp, args) else {
+            return false;
+        };
+        if let Some(ref mut t) = TASK_TABLE[idx] {
+            t.regs.x0 = argc;
+            t.regs.x1 = argv_ptr;
+            // SP above the whole block (strings end); the program's stack
+            // pushes grow down into fresh stack, not over argv.
+            // SP sits BELOW the whole argv block: the program's stack
+            // pushes grow down from SP and can never overwrite argv
+            // (the classic process-entry layout: argv just above SP).
+            t.regs.sp = block_base & !0xF;
+        }
+        true
+    }
+}
+
+/// Spawn a user process from a file path in the VFS with argv.
+/// `args` are the program's arguments AFTER the program name; argv[0]
+/// is set to `path` per convention (argc = args.len() + 1).
+pub fn spawn_from_path_args(path: &str, priority: Priority, args: &[&str]) -> Option<Pid> {
+    let pid = spawn_from_path(path, priority)?;
+    if !args.is_empty() {
+        // Build [path, args...] — bounded to keep the block small.
+        let mut full: alloc::vec::Vec<&str> = alloc::vec::Vec::new();
+        full.push(path);
+        for a in args {
+            full.push(a);
+        }
+        if !set_task_argv(pid, &full) {
+            // argv is optional; a failure to write it degrades to no-args
+            crate::println!("[sched] warning: argv block failed for {}", path);
+        }
+    }
+    Some(pid)
+}
+
 /// Spawn a user process from a file path in the VFS.
 ///
 /// Reads the ELF binary from VFS, loads it, and creates a user task.
