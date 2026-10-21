@@ -1566,6 +1566,9 @@ fn run_builtin_out(
         // User process execution
         "run" => cmd_run(args, argc),
         "cc" => cmd_cc(args, argc),
+        // Python: run the embedded MicroPython interpreter directly,
+        // with optional script path (python [script.py]).
+        "python" | "python3" => cmd_python(args, argc),
         // Text editor
         "vi" | "edit" | "ed" | "nano" | "code" => cmd_editor(args, argc),
         // Text processing
@@ -4161,6 +4164,27 @@ fn cmd_mv(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         Ok(_) => 0,
         Err(e) => {
             crate::println!("mv: {} -> {}: error {}", src, dst, e);
+            1
+        }
+    }
+}
+
+/// `python` / `python3` — run the embedded MicroPython interpreter.
+/// v1: interactive REPL (serial stdin). A script argument is planned
+/// once argv passing is wired into spawn (see C8 in the desktop plan).
+fn cmd_python(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    if argc >= 2 {
+        Uart10::puts("python: scripts coming soon (argv not wired); starting REPL\r\n");
+    }
+    match crate::sched::spawn_from_path("/bin/python", crate::sched::Priority::Normal) {
+        Some(pid) => {
+            crate::println!("python: MicroPython REPL spawned as PID {}", pid);
+            let exit_code = unsafe { crate::sched::run_and_wait(pid as u64) };
+            crate::println!("python: interpreter exited with code {}", exit_code);
+            0
+        }
+        None => {
+            Uart10::puts("python: /bin/python not found\r\n");
             1
         }
     }
