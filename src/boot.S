@@ -345,18 +345,21 @@ _boot:
 
 exception_vector_table:
     // Current EL with SP0 (EL1t). The kernel now runs at EL1h, but keep real
-    // handlers here in case any code path (or QEMU eret default) drops to EL1t.
+    // handlers here in case any code path (or QEMU eret default) drops to EL1t —
+    // or an IRQ lands while SPSel=0 during restore_context's SP_EL0 window.
+    // The SP0 variants FIRST switch to the kernel SP bank so the handler
+    // never pushes onto a user (possibly freed) stack.
     .balign 128
-    b       .Lsync_el1h
+    b       .Lsync_el1_sp0
 
     .balign 128
-    b       .Lirq_el1h
+    b       .Lirq_el1_sp0
 
     .balign 128
-    b       .Lfiq_el1h
+    b       .Lfiq_el1_sp0
 
     .balign 128
-    b       .Lserror_el1h
+    b       .Lserror_el1_sp0
 
     // EL1 with SPn (SPx) — this is where kernel exceptions go
     .balign 128
@@ -460,6 +463,21 @@ exception_vector_table:
     bl      handle_sync_exception
     RESTORE_CONTEXT
     eret
+
+// SP0-slot entries: switch to the kernel stack bank (SPSel=1) BEFORE
+// saving context, then join the shared EL1h handler path.
+.Lsync_el1_sp0:
+    msr     SPSel, #1
+    b       .Lsync_el1h
+.Lirq_el1_sp0:
+    msr     SPSel, #1
+    b       .Lirq_el1h
+.Lfiq_el1_sp0:
+    msr     SPSel, #1
+    b       .Lfiq_el1h
+.Lserror_el1_sp0:
+    msr     SPSel, #1
+    b       .Lserror_el1h
 
 .Lirq_el1h:
     SAVE_CONTEXT
