@@ -507,10 +507,11 @@ fn split_path(path: &str) -> [Option<&str>; MAX_PATH_DEPTH] {
     parts
 }
 
-/// Persistent-home overlay: while enabled, `/home/user[/...]` is an alias for
-/// `/sd/home/user[/...]` (no copying — paths are rewritten before lookup).
+/// Persistent-home overlay: while enabled, `/home[/<name>[/...]]` is an alias
+/// for `/sd/home[/<name>[/...]]` (no copying — paths are rewritten before
+/// lookup). Covers every user's home (C5 multi-user), not just `/home/user`.
 /// Enabled at boot once /sd is mounted and /sd/home/user exists; otherwise
-/// /home/user is an ordinary (volatile) RAM directory.
+/// /home/<name> is an ordinary (volatile) RAM directory.
 static HOME_ALIAS_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 pub const HOME_PATH: &str = "/home/user";
@@ -520,12 +521,12 @@ pub fn set_home_alias(on: bool) {
     HOME_ALIAS_ON.store(on, core::sync::atomic::Ordering::Relaxed);
 }
 
-/// Rewrite a leading `/home/user` (exact component match) to `/sd/home/user`.
+/// Rewrite a leading `/home` (exact component match) to `/sd/home`.
 pub fn alias_path(path: &str) -> alloc::borrow::Cow<'_, str> {
     if HOME_ALIAS_ON.load(core::sync::atomic::Ordering::Relaxed) {
-        if let Some(rest) = path.strip_prefix(HOME_PATH) {
+        if let Some(rest) = path.strip_prefix("/home") {
             if rest.is_empty() || rest.starts_with('/') {
-                return alloc::borrow::Cow::Owned(alloc::format!("{}{}", HOME_BACKING, rest));
+                return alloc::borrow::Cow::Owned(alloc::format!("/sd/home{}", rest));
             }
         }
     }

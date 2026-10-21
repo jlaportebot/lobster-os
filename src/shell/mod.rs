@@ -1593,6 +1593,7 @@ fn run_builtin_out(
         "sleep" => cmd_sleep(args, argc),
         "man" => cmd_man(args, argc),
         "who" => cmd_who(),
+        "userlist" => cmd_userlist(),
         // Service management commands
         "svc" => cmd_svc(args, argc),
         "runlevel" => cmd_runlevel(args, argc),
@@ -3622,6 +3623,7 @@ fn cmd_useradd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         crate::println!("useradd: failed to write /etc/passwd: {:?}", e);
         return 1;
     }
+    crate::users::passwd::persist();
 
     // Write shadow file
     let mut shadows = crate::users::shadow::read_shadow_file().unwrap_or_default();
@@ -3696,6 +3698,7 @@ fn cmd_userdel(args: [&str; MAX_ARGS], argc: usize) -> i32 {
             crate::println!("[userdel] Failed to write /etc/passwd: {:?}", e);
             return 1;
         }
+        crate::users::passwd::persist();
     }
 
     // Remove from shadow
@@ -3838,7 +3841,7 @@ fn cmd_id(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 /// Whoami command
 fn cmd_whoami(_args: [&str; MAX_ARGS], _argc: usize) -> i32 {
     // Current user - would need session tracking
-    crate::println!("current_user");
+    crate::println!("{}", crate::users::current_user());
     0
 }
 
@@ -3960,10 +3963,10 @@ pub fn set_cwd(path: &str) {
 /// Expand a leading `~` (alone or `~/...`) to the home path.
 fn expand_tilde(path: &str) -> alloc::borrow::Cow<'_, str> {
     if path == "~" {
-        return alloc::borrow::Cow::Borrowed(crate::fs::vfs::HOME_PATH);
+        return alloc::borrow::Cow::Owned(crate::users::home_path());
     }
     if let Some(rest) = path.strip_prefix("~/") {
-        return alloc::borrow::Cow::Owned(alloc::format!("{}/{}", crate::fs::vfs::HOME_PATH, rest));
+        return alloc::borrow::Cow::Owned(alloc::format!("{}/{}", crate::users::home_path(), rest));
     }
     alloc::borrow::Cow::Borrowed(path)
 }
@@ -4117,7 +4120,7 @@ fn cmd_ls(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 
 fn cmd_cd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     if argc < 2 {
-        set_cwd(crate::fs::vfs::HOME_PATH);
+        set_cwd(&crate::users::home_path());
         return 0;
     }
     let target = resolve_path(args[1]);
@@ -4134,7 +4137,7 @@ fn cmd_cd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 }
 
 fn cmd_home() -> i32 {
-    set_cwd(crate::fs::vfs::HOME_PATH);
+    set_cwd(&crate::users::home_path());
     crate::println!("{}", cwd());
     0
 }
@@ -4889,7 +4892,7 @@ fn cmd_which(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         "uname", "date", "find", "run", "svc", "runlevel", "reboot", "halt",
         "cc", "curl", "wget", "pkg", "gh", "vi", "edit", "ed", "nano",
         "grep", "sort", "cut", "tr", "uniq", "seq", "yes", "tee",
-        "stat", "file", "ln", "basename", "dirname", "sleep", "man", "who",
+        "stat", "file", "ln", "basename", "dirname", "sleep", "man", "who", "userlist",
     ];
     if builtin.contains(&args[1]) {
         crate::println!("{}: shell built-in command", args[1]);
@@ -6477,10 +6480,23 @@ fn cmd_man(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 }
 
 /// who — show logged-in users
+fn cmd_userlist() -> i32 {
+    let cur = crate::users::current_user();
+    for name in crate::users::login_users() {
+        let uid = crate::users::passwd::find_user(&name).map_or(1000, |e| e.uid);
+        crate::println!("{:<16} uid={:<6} home=/home/{}{}", name, uid, name,
+            if name == cur { "  (current)" } else { "" });
+    }
+    0
+}
+
 fn cmd_who() -> i32 {
     let pid = crate::sched::current_pid();
     crate::println!("USER      TTY      PID     LOGIN@");
     crate::println!("root      tty1     1       (boot)");
+    for sess in crate::users::get_active_sessions() {
+        crate::println!("{:<9} {:<8} {:<7} (login)", sess.username, sess.tty, sess.pid);
+    }
     crate::println!("(current PID: {})", pid);
     0
 }

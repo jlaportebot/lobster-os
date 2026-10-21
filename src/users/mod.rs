@@ -1,5 +1,8 @@
 //! User and group management for LobsterOS
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 pub mod auth;
 pub mod group;
 pub mod passwd;
@@ -61,4 +64,51 @@ pub fn init() {
         }
         let _ = group::write_group_file(&groups);
     }
+}
+
+/// The implicit default account every boot has (home /home/user, not in passwd).
+pub const DEFAULT_USER: &str = "user";
+
+static mut CURRENT_USER: [u8; 32] = [0; 32];
+static mut CURRENT_USER_LEN: usize = 0;
+
+/// Name of the logged-in desktop user (defaults to `user`).
+pub fn current_user() -> String {
+    unsafe {
+        if CURRENT_USER_LEN == 0 {
+            return String::from(DEFAULT_USER);
+        }
+        String::from(core::str::from_utf8(&CURRENT_USER[..CURRENT_USER_LEN]).unwrap_or(DEFAULT_USER))
+    }
+}
+
+/// Set the logged-in user, switch the shell's home to /home/<name>, and
+/// record a session (visible to `who`).
+pub fn login(name: &str) {
+    let len = name.len().min(32);
+    unsafe {
+        CURRENT_USER[..len].copy_from_slice(&name.as_bytes()[..len]);
+        CURRENT_USER_LEN = len;
+    }
+    let home = home_path();
+    crate::shell::set_cwd(&home);
+    let _ = allocate_session(SessionType::Login, "tty1", name, crate::sched::current_pid() as u64);
+    crate::println!("[login] user {}", name);
+}
+
+/// Home directory of the logged-in user, e.g. `/home/alice`.
+pub fn home_path() -> String {
+    alloc::format!("/home/{}", current_user())
+}
+
+/// Accounts that can log in on the desktop: the implicit `user` plus every
+/// regular (uid >= 1000) entry in /etc/passwd.
+pub fn login_users() -> Vec<String> {
+    let mut v = alloc::vec![String::from(DEFAULT_USER)];
+    for e in passwd::get_all_users() {
+        if (1000..60000).contains(&e.uid) && !v.iter().any(|n| *n == e.username) {
+            v.push(e.username);
+        }
+    }
+    v
 }
