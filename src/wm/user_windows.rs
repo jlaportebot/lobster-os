@@ -49,6 +49,9 @@ struct UserWindow {
     title: [u8; MAX_TITLE],
     title_len: usize,
     dirty: bool,
+    /// Bumped on every (re)create so stale references (e.g. a pending
+    /// click) can tell the slot now holds a different window.
+    epoch: u32,
     events: [WinEvent; MAX_WIN_EVENTS],
     ev_head: u32,
     ev_tail: u32,
@@ -65,6 +68,7 @@ static mut WINDOWS: [UserWindow; MAX_USER_WINDOWS] = [UserWindow {
     title: [0; MAX_TITLE],
     title_len: 0,
     dirty: false,
+    epoch: 0,
     events: [WinEvent::none(); MAX_WIN_EVENTS],
     ev_head: 0,
     ev_tail: 0,
@@ -122,6 +126,9 @@ pub fn sys_win_create(x: u64, y: u64, w: u64, h: u64, title_ptr: u64) -> u64 {
             slot.buf_w = w as u32;
             slot.buf_h = h as u32;
             slot.dirty = true;
+            slot.epoch = slot.epoch.wrapping_add(1);
+            slot.ev_head = 0; // drop events queued for the previous occupant
+            slot.ev_tail = 0;
             slot.active = true;
 
             // Register a WM window so it gets chrome + input like any app
@@ -227,10 +234,21 @@ fn push_win_event(slot: &mut UserWindow, ev: WinEvent) {
     slot.ev_tail = next_tail;
 }
 
-/// Hit-test a screen coordinate against user windows. Returns the
-/// (window id, window-relative x, y) of the topmost hit, or None.
-/// `screen` coordinates are converted using each window's live WM rect.
-pub fn hit_test(sx: u32, sy: u32) -> Option<(u64, u32, u32)> {
+/// Current epoch of a user-window slot (changes on every re-create).
+pub fn epoch(win_id: u64) -> u32 {
+    let idx = (win_id as usize).saturating_sub(1);
+    if idx >= MAX_USER_WINDOWS {
+        return 0;
+    }
+    unsafe { WINDOWS[idx].epoch }
+}
+
+/// Hit-test a screen coordinate against user windows. Returns
+/// (window id, content x, content y, in_content) of the topmost hit.
+/// `in_content` is false for frame chrome (border/title bar/buttons): x,y
+/// are 0 then and the caller should hand the event to the WM
+/// (drag/close/resize) instead of the app.
+pub fn hit_test(sx: u32, sy: u32) -> Option<(u64, u32, u32, bool)> {
     unsafe {
         for (i, slot) in WINDOWS.iter().enumerate() {
             if !slot.active {
@@ -243,15 +261,16 @@ pub fn hit_test(sx: u32, sy: u32) -> Option<(u64, u32, u32)> {
             if sx < wx || sy < wy || sx >= wx + ww || sy >= wy + wh {
                 continue;
             }
+            let id = (i + 1) as u64;
             // Frame chrome: border (2px) + title bar (24px)
-            let cx = sx.saturating_sub(wx + 2);
-            let cy = sy.saturating_sub(wy + 26);
-            if cx >= slot.buf_w || cy >= slot.buf_h {
-                // On the frame, not the content — still counts as a hit
-                // for focus purposes, but no content coordinate.
-                return Some(((i + 1) as u64, 0, 0));
+            if sx < wx + 2 || sy < wy + 26 {
+                return Some((id, 0, 0, false));
             }
-            return Some(((i + 1) as u64, cx, cy));
+            let (cx, cy) = (sx - (wx + 2), sy - (wy + 26));
+            if cx >= slot.buf_w || cy >= slot.buf_h {
+                return Some((id, 0, 0, false));
+            }
+            return Some((id, cx, cy, true));
         }
     }
     None

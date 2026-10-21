@@ -75,10 +75,12 @@ pub fn tick() {
     static PUMPED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
     if IN_TICK.swap(true, core::sync::atomic::Ordering::Relaxed) {
         // Pumped from a syscall inside an outer tick (e.g. sys_sleep in a
-        // cooperative EL0 GUI app). Run only the render pass so user
-        // windows composite without re-processing input or animations.
+        // cooperative EL0 GUI app). Route HID into user-window queues with
+        // the restricted dispatcher and run the render pass so user windows
+        // composite without re-processing shell/panel input or animations.
         let fb = get_info();
         if fb.width > 0 {
+            crate::wm::input::pump_events_user_only();
             crate::apps::sysmon::render_to_windows(&fb);
             crate::apps::calculator::render_to_windows(&fb);
             crate::apps::file_manager::render_to_windows(&fb);

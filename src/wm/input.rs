@@ -52,11 +52,42 @@ pub fn poll_count() -> u32 {
 
 static PUMPED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
+/// Events the restricted pump could not handle (keys, non-user-window
+/// clicks). Replayed ahead of fresh HID input by the next full pump.
+const DEFER_CAP: usize = 32;
+static mut DEFERRED: [Option<HidEvent>; DEFER_CAP] = [None; DEFER_CAP];
+static mut DEFER_HEAD: usize = 0;
+static mut DEFER_LEN: usize = 0;
+
+fn defer(ev: HidEvent) {
+    unsafe {
+        if DEFER_LEN == DEFER_CAP {
+            // Full — drop the oldest
+            DEFER_HEAD = (DEFER_HEAD + 1) % DEFER_CAP;
+            DEFER_LEN -= 1;
+        }
+        DEFERRED[(DEFER_HEAD + DEFER_LEN) % DEFER_CAP] = Some(ev);
+        DEFER_LEN += 1;
+    }
+}
+
+fn next_deferred() -> Option<HidEvent> {
+    unsafe {
+        if DEFER_LEN == 0 {
+            return None;
+        }
+        let ev = DEFERRED[DEFER_HEAD].take();
+        DEFER_HEAD = (DEFER_HEAD + 1) % DEFER_CAP;
+        DEFER_LEN -= 1;
+        ev
+    }
+}
+
 pub fn pump_events() {
     // Drain up to 8 events per pump to stay responsive
     PUMPED.store(0, core::sync::atomic::Ordering::Relaxed);
     for _ in 0..8 {
-        let event = hid::poll();
+        let event = next_deferred().or_else(hid::poll);
         if event.is_some() {
             PUMPED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
@@ -88,6 +119,103 @@ pub fn pump_events() {
 /// Get current cursor position
 pub fn cursor_pos() -> (u32, u32) {
     unsafe { (CURSOR_X, CURSOR_Y) }
+}
+
+// ─── Restricted pump (nested ticks during EL0 app run) ──────────────
+
+/// Move the cursor without touching menu/icon/window hover state —
+/// safe to call from inside a syscall-driven nested WM tick.
+fn move_cursor_only(dx: i16, dy: i16) {
+    let info = match compositor::fb_info() {
+        Some(info) => info,
+        None => return,
+    };
+    unsafe {
+        let new_x = (CURSOR_X as i32 + dx as i32).max(0) as u32;
+        let new_y = (CURSOR_Y as i32 + dy as i32).max(0) as u32;
+        CURSOR_X = if new_x >= info.width { info.width - 1 } else { new_x };
+        CURSOR_Y = if new_y >= info.height { info.height - 1 } else { new_y };
+    }
+    compositor::set_hardware_cursor_pos(unsafe { CURSOR_X }, unsafe { CURSOR_Y });
+}
+
+/// Deliver press/release edges to user-window *content* only — no panel/
+/// desktop/shell/context-menu routing from inside a syscall (those paths
+/// assume they run from the main loop and can re-enter the shell).
+/// Returns true if the event was consumed; otherwise the caller defers it
+/// (MOUSE_* is left untouched so the main loop still sees the edge).
+fn user_window_click_only(left: bool) -> bool {
+    let prev_left = unsafe { MOUSE_LEFT };
+    let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+
+    if left && !prev_left {
+        if let Some((win_id, ux, uy, true)) = crate::wm::user_windows::hit_test(cx, cy) {
+            unsafe { MOUSE_LEFT = true };
+            begin_user_click(win_id, ux, uy);
+            return true;
+        }
+        return false;
+    }
+    if !left && prev_left && unsafe { USER_CLICK_PENDING } {
+        unsafe { MOUSE_LEFT = false };
+        end_user_click(cx, cy);
+        return true;
+    }
+    false
+}
+
+/// Queue a press into a user window and remember it for the release.
+fn begin_user_click(win_id: u64, ux: u32, uy: u32) {
+    crate::wm::user_windows::focus_window(win_id);
+    crate::wm::user_windows::click_event(win_id, 1, true, ux, uy);
+    unsafe {
+        USER_CLICK_PENDING_WIN = win_id as u32;
+        USER_CLICK_PENDING_EPOCH = crate::wm::user_windows::epoch(win_id);
+        USER_CLICK_PENDING = true;
+    }
+}
+
+/// Deliver the release for a pending press (if any) and clear the pending
+/// state. Safe to call on every left-release edge.
+fn end_user_click(cx: u32, cy: u32) {
+    if !unsafe { USER_CLICK_PENDING } {
+        return;
+    }
+    unsafe { USER_CLICK_PENDING = false };
+    let win_id = unsafe { USER_CLICK_PENDING_WIN } as u64;
+    // The slot was closed/reused since the press — don't leak the release.
+    if crate::wm::user_windows::epoch(win_id) != unsafe { USER_CLICK_PENDING_EPOCH } {
+        return;
+    }
+    let (ux, uy) = match crate::wm::user_windows::hit_test(cx, cy) {
+        Some((id, x, y, true)) if id == win_id => (x, y),
+        _ => (0, 0),
+    };
+    crate::wm::user_windows::click_event(win_id, 1, false, ux, uy);
+}
+
+/// Restricted event pump for nested WM ticks (called from sys_sleep while
+/// a cooperative EL0 GUI app runs). Keeps the cursor responsive and routes
+/// clicks into user-window queues; deliberately skips panel/desktop/shell
+/// routing which must only run from the main loop.
+pub fn pump_events_user_only() {
+    // NOTE: do not store(0) here — a nested pump must not clobber the
+    // outer pump's event count (poll_count drives dirty-marking).
+    for _ in 0..8 {
+        let event = hid::poll();
+        let Some(ev) = event else { break };
+        PUMPED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        match ev {
+            HidEvent::MouseMove { dx, dy } => move_cursor_only(dx, dy),
+            HidEvent::MouseButton { left, .. } => {
+                if !user_window_click_only(left) {
+                    defer(ev); // panel/desktop/chrome clicks wait for the main loop
+                }
+            }
+            // Keys wait for the main loop; replayed by the next pump_events()
+            HidEvent::KeyPress { .. } | HidEvent::KeyRelease { .. } => defer(ev),
+        }
+    }
 }
 
 /// Get current mouse button state
@@ -205,6 +333,8 @@ fn handle_mouse_move(dx: i16, dy: i16) {
 /// Pending EL0 user-window click awaiting its release event.
 static mut USER_CLICK_PENDING: bool = false;
 static mut USER_CLICK_PENDING_WIN: u32 = 0;
+/// user_windows::epoch() of the window when the press landed.
+static mut USER_CLICK_PENDING_EPOCH: u32 = 0;
 
 /// Handle mouse button changes
 fn handle_mouse_button(left: bool, right: bool, middle: bool) {
@@ -215,6 +345,14 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
         MOUSE_LEFT = left;
         MOUSE_RIGHT = right;
         MOUSE_MIDDLE = middle;
+    }
+
+    // Deliver the release of a captured press *before* any early return
+    // below (right-click, context menu) can swallow it and leave the
+    // pending state stuck.
+    if !left && prev_left {
+        let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+        end_user_click(cx, cy);
     }
 
     // Right-click: show context menu
@@ -255,22 +393,26 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
     // On left press: check panel clicks first, then desktop icons, then window focus
     if left && !prev_left {
         let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+        {
+        static PRESSES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+        let n = PRESSES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if n < 4 {
+    
+        }
+    }
 
         // Task Manager tab bar (before generic window focus routing)
         if crate::apps::task_manager::handle_click(cx, cy) {
             return;
         }
 
-        // EL0 user windows get clicks before normal focus routing
-        if let Some((win_id, ux, uy)) =
+        // EL0 user windows get content clicks before normal focus routing.
+        // Chrome hits (title bar, buttons, borders) fall through to
+        // window::handle_event below for drag/close/maximize/resize.
+        if let Some((win_id, ux, uy, true)) =
             crate::wm::user_windows::hit_test(cx, cy)
         {
-            crate::wm::user_windows::focus_window(win_id);
-            crate::wm::user_windows::click_event(win_id, 1, true, ux, uy);
-            unsafe {
-                USER_CLICK_PENDING_WIN = win_id as u32;
-                USER_CLICK_PENDING = true;
-            }
+            begin_user_click(win_id, ux, uy);
             return;
         }
 
@@ -309,17 +451,6 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
 
     // On left release: stop any drag
     if !left && prev_left {
-        // Deliver the release to a user window if a press was captured.
-        if unsafe { USER_CLICK_PENDING } {
-            unsafe {
-                USER_CLICK_PENDING = false;
-            }
-            let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
-            let win_id = unsafe { USER_CLICK_PENDING_WIN } as u64;
-            let (_, ux, uy) =
-                crate::wm::user_windows::hit_test(cx, cy).unwrap_or((win_id, 0, 0));
-            crate::wm::user_windows::click_event(win_id, 1, false, ux, uy);
-        }
         crate::wm::window::handle_event(HidEvent::MouseButton {
             left,
             right,

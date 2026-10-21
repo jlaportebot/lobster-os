@@ -119,9 +119,11 @@ pub fn poll() -> Option<HidEvent> {
 
         let raw = read_event_slot(head);
 
-        // Advance head (guest-side read pointer)
+        // Advance head (guest-side read pointer). Write to ADVANCE_HEAD
+        // (0x1C), NOT CLEAR (0x18) — CLEAR resets the whole ring and
+        // would drop every unconsumed event behind this one.
         let new_head = (head + 1) % RING_SIZE;
-        mmio_write32(INPUT_MMIO_BASE + 0x18, new_head as u32);
+        mmio_write32(INPUT_MMIO_BASE + 0x1C, new_head as u32);
 
         // Update modifier tracking
         MODIFIERS = raw.flags;
