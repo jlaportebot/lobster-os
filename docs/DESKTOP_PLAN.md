@@ -22,8 +22,9 @@ Everything else (App Store installs, multiple apps, shell while an app runs) unl
       background EL0 task (wake-deadline slicing on SYS_SLEEP; frame saved on yield).
       Shell stays fully responsive; verified with 2 concurrent bg apps + new bg_app
       harness test (6/6 suite).
-- [ ] **S3. QEMU timer IRQ**: fix the PSTATE.IL-class UNDEF at IRQ-vector entry so
-      hardware ticks fire → true preemption (removes the cooperative crutch).
+- [x] **S3. True preemption** — DONE 993fefd: hardware ticks ON BY DEFAULT (arch
+      timer PPI 29, 10ms). The multi-day bug: coop-exit wrote past the frame via a
+      u64 element-offset (add(256)=2048B). gdbstub caught it. Suite 8/8 preempted.
 - [x] **S4. Multiple concurrent EL0 apps** — DONE (with S2): two EL0 GUI apps run
       concurrently in their own windows with per-slot event rings and round-robin
       slices (verified live). Focus routing + hit_test already topmost-first.
@@ -95,16 +96,21 @@ Everything else (App Store installs, multiple apps, shell while an app runs) unl
       Script-args pending argv wiring (C8).
 
 ## C. System Services (kernel-level)
-- [~] **C1** → S0 above
-- [ ] **C2. Compositor event loop**: formal input routing table, click-through,
-      drag threshold, focus-follows-z
+- [x] **C1** → S0 complete (S1/S2/S4/S5/S6 all done — see above)
+- [x] **C2. Compositor event loop** — DONE (merge 1d5fa29): formal 10-stage
+      event-router table (event_router.rs), drag threshold, 'wmconfig ffz'
+      focus-follows-z option (default off).
 - [x] **C3. Storage UX** — DONE (merge 5f8d641): /home/user overlays /sd/home/user
       (alias in VFS resolve/create/open/mkdir/rename — no copying); boot prompt starts
       in home; 'home' command + 'cd ~'; welcome.txt seeded. Live-verified 5/5.
 - [x] **C4/D5. Audio device** — lobster-audio MMIO + host audio + guest mixer (beep/play)
-- [ ] **C5. Multi-user login**: greeter, sessions, per-user /home
+- [x] **C5. Multi-user login** — DONE (merge a2c090e): greeter card when >1 user,
+      click-to-login, per-user home aliasing, useradd/userlist with /sd/etc/passwd
+      persistence. Single-user boot unchanged. Live-verified end-to-end.
 - [ ] **C6. Dynamic linker v2**: shared-lib resolution for EL0 apps
-- [ ] **C7. Signals for EL0**: SIGINT/SIGTERM delivery to user processes
+- [~] **C7. Signals for EL0** — frame groundwork DONE (993fefd): TrapFrame.elr/spsr
+      are now real frame slots (frame-backed SAVE/RESTORE); signal delivery writes
+      land correctly. Ctrl+C/SIGINT wiring to the terminal + fg apps remains.
 - [x] **C8. argv for EL0 apps** — DONE bd45d85: `run <path> [args...] [&]` and
       `python <script.py>` pass argc/argv at EL0 entry (argv[0]=program path, block
       below SP so program pushes can't corrupt it). Verified with args-demo ELF in
