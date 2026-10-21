@@ -26,6 +26,22 @@ pub fn handle_key(scancode: u8, ch: Option<char>) -> bool {
         return false;
     }
 
+    // Ctrl+Plus / Ctrl+Minus: terminal font scale (set-1: '=' 0x0D, '-' 0x0C,
+    // keypad + 0x4E, keypad - 0x4A)
+    if crate::usb::hid::ctrl_held() {
+        match scancode {
+            0x0D | 0x4E => {
+                crate::apps::terminal::font_scale_up();
+                return true;
+            }
+            0x0C | 0x4A => {
+                crate::apps::terminal::font_scale_down();
+                return true;
+            }
+            _ => {}
+        }
+    }
+
     // Enter → execute the buffered line (set-1 scancode, matching
     // input.rs and hid::scancode_to_ascii)
     if scancode == 0x1C {
