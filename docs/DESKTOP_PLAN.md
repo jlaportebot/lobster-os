@@ -18,12 +18,15 @@ Everything else (App Store installs, multiple apps, shell while an app runs) unl
       register (0x1C) QEMU-side; guest driver writes 0x1C. Plus deferred-event replay
       ring, per-slot epochs, chrome-vs-content hit routing, pending-click lifecycle
       fixes (Claude-reviewed). Harness el0_app click now passes 3/3 + full suite 5/5.
-- [ ] **S2. Non-blocking app launch**: `run` + launcher spawn WITHOUT run_and_wait —
-      shell stays live; scheduler round-robins EL0 tasks at WM-frame boundaries.
+- [x] **S2. Non-blocking app launch** — DONE 8bc0c86: `run <path> &` spawns a sliced
+      background EL0 task (wake-deadline slicing on SYS_SLEEP; frame saved on yield).
+      Shell stays fully responsive; verified with 2 concurrent bg apps + new bg_app
+      harness test (6/6 suite).
 - [ ] **S3. QEMU timer IRQ**: fix the PSTATE.IL-class UNDEF at IRQ-vector entry so
       hardware ticks fire → true preemption (removes the cooperative crutch).
-- [ ] **S4. Multiple concurrent EL0 apps**: N windows, per-task event rings, per-app
-      input focus (hit_test already topmost-first), per-app CPU slices.
+- [x] **S4. Multiple concurrent EL0 apps** — DONE (with S2): two EL0 GUI apps run
+      concurrently in their own windows with per-slot event rings and round-robin
+      slices (verified live). Focus routing + hit_test already topmost-first.
 - [ ] **S5. Zero-copy shared framebuffer page**: SYS_WIN mmap'd shared page (removes
       syscall-per-fill overhead) + flush-driven damage tracking.
 - [ ] **S6. App lifecycle**: kill on close button, zombie reap, crash containment
