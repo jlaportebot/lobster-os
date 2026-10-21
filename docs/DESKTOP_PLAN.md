@@ -76,8 +76,10 @@ Everything else (App Store installs, multiple apps, shell while an app runs) unl
 ### B6. Media & extras
 - [x] B6.1 BMP image viewer; B6.3 Task Manager (SysMon+ProcMgr merged)
 - [ ] **B6.2** calculator keyboard + history
-- [ ] **B6.4** App Store: real package install from repo into /sd + launcher entry
-      (needs S2/S4: install then LAUNCH the installed app live)
+- [x] **B6.4** App Store real install — DONE ceb4497: `pkg install hello` downloads from
+      the GitHub package repo (release `pkg-repo`), sha256-verifies twice, extracts via
+      vfs::write_file, records the DB; `run /apps/hello &` launches the DOWNLOADED app.
+      App-Store-GUI wiring to this flow is the remaining polish.
 - [~] **B6.5** clock/timer + Minesweeper (notes done)
 - [ ] **B7. Code app**: editor panel wired to `cc` + `run` (write→compile→execute flow)
 - [x] **B8. Package runtime** — DONE 550ea52: embedded MicroPython runs as an EL0
