@@ -4189,7 +4189,17 @@ fn cmd_preempt(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                     // CRITICAL: QEMU's GIC resets PMR=0 which blocks ALL
                     // delivery (prio < PMR required). Allow all.
                     crate::arch::gic::Gic::set_priority_mask(0xFF);
-                    if argc >= 3 && args[2] == "notimer" {
+                    if argc >= 3 && args[2] == "virt" {
+                        // Virtual timer (CNTV, PPI 30) — Linux's choice.
+                        crate::arch::gic::Gic::enable_ppi(30);
+                        crate::arch::gic::Gic::set_priority(30, 0x00);
+                        crate::arch::gic::Gic::set_config(30, 0b10);
+                        crate::arch::gic::Gic::set_priority_mask(0xFF);
+                        crate::arch::timer::Timer::enable_virt_timer(10);
+                        crate::sched::set_preempt(true);
+                        crate::arch::cpu::enable_irqs();
+                        Uart10::puts("preempt: VIRTUAL timer ON (PPI 30, 10ms)\r\n");
+                    } else if argc >= 3 && args[2] == "notimer" {
                         // GIC + PMR only — for isolating vector issues from
                         // the arch timer itself.
                         Uart10::puts("preempt: GIC+PMR on, timer NOT armed\r\n");

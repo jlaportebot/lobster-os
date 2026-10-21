@@ -104,6 +104,33 @@ impl Timer {
         core::arch::asm!("msr CNTP_CTL_EL0, {0}", in(reg) 1u64);
     }
 
+    /// Enable the VIRTUAL timer (CNTV, PPI 30 on bcm2712 wiring).
+    /// Linux uses CNTV for its tick on this class of hardware; the
+    /// virtual-timer IRQ path in QEMU TCG differs from the physical one.
+    pub unsafe fn enable_virt_timer(period_ms: u64) {
+        let freq: u64;
+        core::arch::asm!("mrs {}, CNTFRQ_EL0", out(reg) freq);
+        if freq == 0 {
+            return;
+        }
+        let tval = freq.saturating_mul(period_ms) / 1000;
+        core::arch::asm!("msr CNTV_TVAL_EL0, {0}", in(reg) tval);
+        core::arch::asm!("msr CNTV_CTL_EL0, {0}", in(reg) 1u64);
+    }
+
+    /// Handle a CNTV IRQ: re-arm + unmask.
+    pub fn handle_virt_timer_irq() {
+        unsafe {
+            let freq: u64;
+            core::arch::asm!("mrs {}, CNTFRQ_EL0", out(reg) freq);
+            if freq > 0 {
+                let tval = freq.saturating_mul(TICK_INTERVAL_US as u64) / 1_000_000;
+                core::arch::asm!("msr CNTV_TVAL_EL0, {0}", in(reg) tval);
+            }
+            core::arch::asm!("msr CNTV_CTL_EL0, {0}", in(reg) 1u64);
+        }
+    }
+
     /// Read CNTFRQ_EL0 (for diagnostics)
     pub fn cntfrq() -> u64 {
         let freq: u64;

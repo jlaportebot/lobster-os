@@ -292,6 +292,14 @@ pub unsafe extern "C" fn handle_irq(_spsr: u64, _elr: u64, _esr: u64, _far: u64,
             crate::smp::runqueue::on_core_timer_tick(core_id);
             crate::smp::balance::on_timer_tick();
         }
+        30 => {
+            // Virtual timer (CNTV) — bcm2712 wiring routes it to PPI 30.
+            // Used when 'preempt on virt' selects the virtual timer.
+            crate::arch::timer::Timer::handle_virt_timer_irq();
+            sched::on_timer_tick();
+            let core_id = crate::smp::current_core_id() as usize;
+            crate::smp::runqueue::on_core_timer_tick(core_id);
+        }
         121 => {
             // UART10 RX interrupt
             crate::drivers::serial_input::handle_irq();
