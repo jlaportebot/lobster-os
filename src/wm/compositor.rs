@@ -340,6 +340,207 @@ fn init_hardware_cursor(fb: FramebufferInfo) {
     }
 }
 
+// ─── Software cursor (A4.3) ─────────────────────────────────────────
+// QEMU has no hardware cursor; these 16x16 1bpp glyphs are drawn at the
+// WM cursor position every tick and the pixels beneath are restored on
+// move. Glyphs: 16 rows of u16, MSB = leftmost pixel.
+
+const GLYPH_W: u32 = 16;
+const GLYPH_H: u32 = 16;
+
+/// Classic arrow. Hotspot (0,0).
+const GLYPH_ARROW: [u16; 16] = [
+    0b1000000000000000,
+    0b1100000000000000,
+    0b1110000000000000,
+    0b1111000000000000,
+    0b1111100000000000,
+    0b1111110000000000,
+    0b1111111000000000,
+    0b1111100000000000,
+    0b1110110000000000,
+    0b1100011000000000,
+    0b1000011000000000,
+    0b0000011000000000,
+    0b0000110000000000,
+    0b0000000000000000,
+    0b0000000000000000,
+    0b0000000000000000,
+];
+
+/// Text I-beam. Hotspot (7,7).
+const GLYPH_IBEAM: [u16; 16] = [
+    0b0000000000000000,
+    0b0011111111100000,
+    0b0001000000100000,
+    0b0001000000100000,
+    0b0001000000100000,
+    0b0001000000100000,
+    0b0001000000100000,
+    0b0001000000100000,
+    0b0001000000100000,
+    0b0001000000100000,
+    0b0001000000100000,
+    0b0001000000100000,
+    0b0001000000100000,
+    0b0011111111100000,
+    0b0000000000000000,
+    0b0000000000000000,
+];
+
+/// Busy watch (hourglass). Hotspot (8,8).
+const GLYPH_BUSY: [u16; 16] = [
+    0b0000000000000000,
+    0b0011111111110000,
+    0b0010000000100000,
+    0b0001000000010000,
+    0b0000100000001000,
+    0b0000010000010000,
+    0b0000001000100000,
+    0b0000000111000000,
+    0b0000000111000000,
+    0b0000001000100000,
+    0b0000010000010000,
+    0b0000100000001000,
+    0b0001000000010000,
+    0b0011111111110000,
+    0b0000000000000000,
+    0b0000000000000000,
+];
+
+/// Hand (pointing). Hotspot (5,0).
+const GLYPH_HAND: [u16; 16] = [
+    0b0000000000000000,
+    0b0000011000000000,
+    0b0000111100000000,
+    0b0000111100000000,
+    0b0011111111000000,
+    0b0111111111100000,
+    0b1111111111110000,
+    0b1111111111110000,
+    0b1111111111110000,
+    0b1111111111110000,
+    0b0111111111100000,
+    0b0011111111100000,
+    0b0001111111000000,
+    0b0000011110000000,
+    0b0000000000000000,
+    0b0000000000000000,
+];
+
+/// Cursor shapes (A4.3).
+#[derive(Clone, Copy, PartialEq)]
+pub enum CursorShape {
+    Arrow,
+    IBeam,
+    Busy,
+    Hand,
+}
+
+impl CursorShape {
+    fn glyph(&self) -> &'static [u16; 16] {
+        match self {
+            CursorShape::Arrow => &GLYPH_ARROW,
+            CursorShape::IBeam => &GLYPH_IBEAM,
+            CursorShape::Busy => &GLYPH_BUSY,
+            CursorShape::Hand => &GLYPH_HAND,
+        }
+    }
+}
+
+static mut CURSOR_SHAPE: CursorShape = CursorShape::Arrow;
+static mut CURSOR_SAVED: [u32; (GLYPH_W * GLYPH_H) as usize] = [0; 256];
+static mut CURSOR_SAVED_X: u32 = u32::MAX;
+static mut CURSOR_SAVED_Y: u32 = u32::MAX;
+
+/// Select the software-cursor shape (idempotent).
+pub fn set_cursor_shape(shape: CursorShape) {
+    unsafe {
+        CURSOR_SHAPE = shape;
+    }
+}
+
+pub fn cursor_shape() -> CursorShape {
+    unsafe { CURSOR_SHAPE }
+}
+
+/// Restore the pixels saved under the last drawn cursor.
+pub fn restore_software_cursor(fb: &FramebufferInfo) {
+    unsafe {
+        let (sx, sy) = (CURSOR_SAVED_X, CURSOR_SAVED_Y);
+        if sx == u32::MAX {
+            return;
+        }
+        for row in 0..GLYPH_H {
+            for col in 0..GLYPH_W {
+                let x = sx + col;
+                let y = sy + row;
+                if x >= fb.width || y >= fb.height {
+                    continue;
+                }
+                crate::display::graphics::draw_pixel(
+                    fb,
+                    x,
+                    y,
+                    CURSOR_SAVED[(row * GLYPH_W + col) as usize],
+                );
+            }
+        }
+    }
+}
+
+/// Draw the software cursor at the current WM cursor position,
+/// saving what was beneath it for a later restore.
+pub fn draw_software_cursor(fb: &FramebufferInfo) {
+    let (cx, cy) = crate::wm::input::cursor_pos();
+    unsafe {
+        // Save the area beneath
+        for row in 0..GLYPH_H {
+            for col in 0..GLYPH_W {
+                let x = cx + col;
+                let y = cy + row;
+                if x >= fb.width || y >= fb.height {
+                    CURSOR_SAVED[(row * GLYPH_W + col) as usize] = 0;
+                    continue;
+                }
+                let offset = (y * (fb.pitch / 4) + x) as usize;
+                let ptr = (fb.virt_addr as *const u32).add(offset);
+                CURSOR_SAVED[(row * GLYPH_W + col) as usize] = core::ptr::read_volatile(ptr);
+            }
+        }
+        CURSOR_SAVED_X = cx;
+        CURSOR_SAVED_Y = cy;
+        // Draw the glyph: black outline then white fill
+        let glyph = CURSOR_SHAPE.glyph();
+        for row in 0..GLYPH_H {
+            let bits = glyph[row as usize];
+            for col in 0..GLYPH_W {
+                if (bits << col) & 0x8000 == 0 {
+                    continue;
+                }
+                let x = cx + col;
+                let y = cy + row;
+                if x >= fb.width || y >= fb.height {
+                    continue;
+                }
+                // Fill
+                crate::display::graphics::draw_pixel(fb, x, y, 0xFFFFFFFF);
+                // Outline: right + below neighbors of set bits
+                if col + 1 < GLYPH_W && (bits << (col + 1)) & 0x8000 == 0 {
+                    if x + 1 < fb.width {
+                        crate::display::graphics::draw_pixel(fb, x + 1, y, 0xFF000000);
+                    }
+                }
+                if row + 1 < GLYPH_H && (glyph[(row + 1) as usize] << col) & 0x8000 == 0 {
+                    if y + 1 < fb.height {
+                        crate::display::graphics::draw_pixel(fb, x, y + 1, 0xFF000000);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Update hardware cursor position
 pub fn set_hardware_cursor_pos(x: u32, y: u32) {
     unsafe {
@@ -863,7 +1064,8 @@ pub fn composite() {
 
         // Triple buffering: rotate buffers and present
         let present_start = crate::arch::timer::Timer::system_time_us();
-        draw_software_cursor(fb, back_buffer);
+        // (old back-buffer cursor removed — A4.3 software cursor draws
+        // directly to the FB at the end of wm::tick on all builds)
 
         rotate_and_present(fb, back_buffer);
         let present_end = crate::arch::timer::Timer::system_time_us();
@@ -1800,43 +2002,6 @@ pub fn set_wallpaper_mode(mode: WallpaperMode) {
 /// Get current wallpaper mode
 pub fn get_wallpaper_mode() -> WallpaperMode {
     unsafe { WALLPAPER.mode }
-}
-
-/// Draw a software mouse cursor on the back buffer
-fn draw_software_cursor(fb: FramebufferInfo, back_buf: *mut u32) {
-    let (cx, cy) = crate::wm::input::cursor_pos();
-    if cx >= fb.width || cy >= fb.height {
-        return;
-    }
-
-    // Simple arrow cursor: 13x13 pixels
-    // White body with black outline
-    let cursor_pixels: [(i32, i32); 13] = [
-        (0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7),
-        (8, 8), (9, 9), (10, 10), (11, 11), (12, 12),
-    ];
-
-    let black: u32 = 0xFF000000;
-    let white: u32 = 0xFFFFFFFF;
-
-    // Draw outline (black) first, then body (white)
-    for &(dx, dy) in &cursor_pixels {
-        let px = cx as i32 + dx;
-        let py = cy as i32 + dy;
-        if px >= 0 && (px as u32) < fb.width && py >= 0 && (py as u32) < fb.height {
-            let idx = py as usize * fb.width as usize + px as usize;
-            unsafe { core::ptr::write_volatile(back_buf.add(idx), black); }
-        }
-    }
-    // White body (offset by 1 for outline effect)
-    for &(dx, dy) in &cursor_pixels {
-        let px = cx as i32 + dx + 1;
-        let py = cy as i32 + dy + 1;
-        if px >= 0 && (px as u32) < fb.width && py >= 0 && (py as u32) < fb.height {
-            let idx = py as usize * fb.width as usize + px as usize;
-            unsafe { core::ptr::write_volatile(back_buf.add(idx), white); }
-        }
-    }
 }
 
 /// Draw the wallpaper to the back buffer

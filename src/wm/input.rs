@@ -121,6 +121,26 @@ pub fn cursor_pos() -> (u32, u32) {
     unsafe { (CURSOR_X, CURSOR_Y) }
 }
 
+/// Pick the software-cursor shape from what's under the pointer:
+/// I-beam over Terminal/Editor client areas, arrow elsewhere (A4.3).
+pub fn update_cursor_shape() {
+    let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+    let title = crate::wm::window::get_title(crate::wm::window::focused_id());
+    let shape =
+        if (title == "Terminal" || title == "Editor" || title == "Notes")
+            && crate::wm::window::get_info(crate::wm::window::focused_id())
+                .map(|(x, y, w, h)| {
+                    cx >= x + 2 && cy >= y + 26 && cx < x + w && cy < y + h
+                })
+                .unwrap_or(false)
+        {
+            crate::wm::compositor::CursorShape::IBeam
+        } else {
+            crate::wm::compositor::CursorShape::Arrow
+        };
+    crate::wm::compositor::set_cursor_shape(shape);
+}
+
 // ─── Restricted pump (nested ticks during EL0 app run) ──────────────
 
 /// Move the cursor without touching menu/icon/window hover state —
@@ -328,6 +348,7 @@ fn handle_mouse_move(dx: i16, dy: i16) {
 
     // Update hardware cursor position
     compositor::set_hardware_cursor_pos(unsafe { CURSOR_X }, unsafe { CURSOR_Y });
+    update_cursor_shape();
 
     // Start-menu hover tracking (consumes nothing)
     {

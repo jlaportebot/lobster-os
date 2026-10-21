@@ -94,6 +94,16 @@ pub fn tick() {
         }
         return;
     }
+    // A4.3: restore pixels under last frame's software cursor before
+    // any drawing this tick (QEMU has no hardware cursor).
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        let fbc = get_info();
+        if fbc.width > 0 {
+            compositor::restore_software_cursor(&fbc);
+        }
+    }
+
     // Poll HID events and dispatch through the input bridge.
     // Any event invalidates the static render cache.
     let had_events = input::poll_count();
@@ -173,6 +183,15 @@ pub fn tick() {
 
     // Draw context menu on top of everything (if visible)
     context_menu::draw();
+
+    // A4.3: software cursor on top of everything (QEMU).
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        let fbc = get_info();
+        if fbc.width > 0 {
+            compositor::draw_software_cursor(&fbc);
+        }
+    }
 
     // Release the reentrancy guard.
     IN_TICK.swap(false, core::sync::atomic::Ordering::Relaxed);
