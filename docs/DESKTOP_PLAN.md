@@ -27,8 +27,10 @@ Everything else (App Store installs, multiple apps, shell while an app runs) unl
 - [x] **S4. Multiple concurrent EL0 apps** — DONE (with S2): two EL0 GUI apps run
       concurrently in their own windows with per-slot event rings and round-robin
       slices (verified live). Focus routing + hit_test already topmost-first.
-- [ ] **S5. Zero-copy shared framebuffer page**: SYS_WIN mmap'd shared page (removes
-      syscall-per-fill overhead) + flush-driven damage tracking.
+- [x] **S5. Zero-copy shared framebuffer** — DONE cee0b41: SYS_WIN_MAP(115) maps a
+      window's backing frames into the app's address space (0x4000_0000 + slot*16MB);
+      apps write pixels directly, SYS_WIN_FLUSH composites; kernel reads via phys map.
+      Live-verified: direct-write animation, clean close, suite 8/8.
 - [ ] **S6. App lifecycle**: kill on close button, zombie reap, crash containment
       (exception → kill that process only, desktop survives).
 
