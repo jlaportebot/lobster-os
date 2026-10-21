@@ -77,12 +77,15 @@ pub unsafe extern "C" fn handle_sync_exception(
             }
         }
         _ => {
-            println!("[exception] Synchronous exception at ELR={:#018x}", elr);
             println!(
-                "[exception] ESR={:#018x} (EC={}, ISS={:#010x})",
-                esr, ec, iss
+                "[exc] EC={:#04x} ISS={:#010x} SPSR={:#018x} FAR={:#018x} ELR={:#018x} IL={}",
+                ec,
+                iss,
+                spsr,
+                far,
+                elr,
+                (spsr >> 20) & 1
             );
-            println!("[exception] SPSR={:#018x} FAR={:#018x}", spsr, far);
             println!("[exception] regs[0]={:#018x} regs[1]={:#018x} regs[29]={:#018x}",
                 if _regs.is_null() {0} else {*_regs.add(0)},
                 if _regs.is_null() {0} else {*_regs.add(1)},
@@ -260,6 +263,18 @@ pub unsafe extern "C" fn handle_irq(_spsr: u64, _elr: u64, _esr: u64, _far: u64,
             crate::smp::handle_ipi(irq_id);
         }
         29 => {
+            // On QEMU raspi5b the bcm2712 wiring routes the EL1 physical
+            // timer (CNTP) to PPI 29 — the BCM system-timer MMIO does not
+            // exist there. On real hardware this is the BCM timer.
+            static ARCH_TIMER_TICKS: core::sync::atomic::AtomicU64 =
+                core::sync::atomic::AtomicU64::new(0);
+            let n = ARCH_TIMER_TICKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            if n < 5 {
+                crate::println!("[irq] timer tick #{}", n);
+            }
+            #[cfg(feature = "qemu_raspi5b")]
+            crate::arch::timer::Timer::handle_arch_timer_irq();
+            #[cfg(not(feature = "qemu_raspi5b"))]
             crate::arch::timer::Timer::handle_irq();
             // Drive scheduler from timer tick
             sched::on_timer_tick();

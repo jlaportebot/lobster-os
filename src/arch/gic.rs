@@ -158,6 +158,30 @@ impl Gic {
     /// (The BCM2712 GIC-400 numbers its SPIs 0-based from the GIC's IRQ 32.)
     const SPI_TO_DIST: u32 = 32;
 
+    /// Enable a PPI/SGI (GIC ID < 32): ISENABLERn bit (id % 32).
+    /// GICv2 PPIs are NOT enabled by default — they live in ISENABLER0.
+    pub unsafe fn enable_ppi(gic_id: u32) {
+        if gic_id >= 32 {
+            return;
+        }
+        let reg = gicd_base() + GICD_ISENABLER_OFF + ((gic_id as u64 / 32) * 4);
+        let bit = 1u32 << (gic_id % 32);
+        Self::write32(reg, bit);
+    }
+
+    /// Set the CPU-interface Priority Mask Register (GICC_PMR).
+    /// QEMU's GIC resets PMR to 0 — which blocks ALL interrupt delivery
+    /// (delivery requires prio < PMR). Set 0xFF to allow all.
+    pub unsafe fn set_priority_mask(mask: u8) {
+        const GICC_PMR_OFF: u64 = 0x104;
+        Self::write32(gicc_base() + GICC_PMR_OFF, mask as u32);
+    }
+
+    /// Raw distributor read (for diagnostics)
+    pub unsafe fn dist_read32(offset: u64) -> u32 {
+        Self::read32(gicd_base() + offset)
+    }
+
     /// Enable a specific SPI (Shared Peripheral Interrupt)
     pub unsafe fn enable_spi(irq_num: u32) {
         if irq_num < 32 {
@@ -180,9 +204,11 @@ impl Gic {
         Self::write32(reg, bit);
     }
 
-    /// Set priority for a specific IRQ (0 = highest, 0xFF = lowest)
+    /// Set priority for a specific IRQ (0 = highest, 0xFF = lowest).
+    /// SGIs/PPIs (ids < 32) are indexed directly; SPIs are 0-based and
+    /// offset by 32 to their GIC ID.
     pub unsafe fn set_priority(irq_num: u32, priority: u8) {
-        let id = irq_num + Self::SPI_TO_DIST;
+        let id = if irq_num < 32 { irq_num } else { irq_num + Self::SPI_TO_DIST };
         let shift = (id % 4) * 8;
         let reg_aligned = gicd_base() + GICD_IPRIORITYR_OFF + ((id as u64 / 4) * 4);
         let mut val = Self::read32(reg_aligned);
@@ -203,9 +229,10 @@ impl Gic {
     }
 
     /// Set interrupt configuration (edge vs level triggered)
-    /// config: 0b00 = level-sensitive, 0b10 = edge-triggered
+    /// config: 0b00 = level-sensitive, 0b10 = edge-triggered.
+    /// SGIs/PPIs (ids < 32) are indexed directly.
     pub unsafe fn set_config(irq_num: u32, config: u32) {
-        let id = irq_num + Self::SPI_TO_DIST;
+        let id = if irq_num < 32 { irq_num } else { irq_num + Self::SPI_TO_DIST };
         let reg = gicd_base() + GICD_ICFGR_OFF + ((id as u64 / 16) * 4);
         let shift = (id % 16) * 2;
         let mut val = Self::read32(reg);

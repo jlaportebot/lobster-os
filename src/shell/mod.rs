@@ -1569,6 +1569,8 @@ fn run_builtin_out(
         // Python: run the embedded MicroPython interpreter directly,
         // with optional script path (python [script.py]).
         "python" | "python3" => cmd_python(args, argc),
+        // S3: toggle architectural-timer preemption
+        "preempt" => cmd_preempt(args, argc),
         // Text editor
         "vi" | "edit" | "ed" | "nano" | "code" => cmd_editor(args, argc),
         // Text processing
@@ -4166,6 +4168,65 @@ fn cmd_mv(args: [&str; MAX_ARGS], argc: usize) -> i32 {
             crate::println!("mv: {} -> {}: error {}", src, dst, e);
             1
         }
+    }
+}
+
+/// `preempt on|off|status` — S3: control the architectural-timer
+/// (PPI 30) preemptive tick. `on` enables the GIC PPI + arms CNTP with
+/// the tick interval and unmasked DAIF.I.
+fn cmd_preempt(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+    #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
+    {
+        unsafe {
+            let action = if argc >= 2 { args[1] } else { "status" };
+            match action {
+                "on" => {
+                    // bcm2712 wiring: CNTP (EL1 physical timer) → PPI 29.
+                    // Enable + priority + edge config.
+                    crate::arch::gic::Gic::enable_ppi(29);
+                    crate::arch::gic::Gic::set_priority(29, 0x00);
+                    crate::arch::gic::Gic::set_config(29, 0b10);
+                    // CRITICAL: QEMU's GIC resets PMR=0 which blocks ALL
+                    // delivery (prio < PMR required). Allow all.
+                    crate::arch::gic::Gic::set_priority_mask(0xFF);
+                    if argc >= 3 && args[2] == "notimer" {
+                        // GIC + PMR only — for isolating vector issues from
+                        // the arch timer itself.
+                        Uart10::puts("preempt: GIC+PMR on, timer NOT armed\r\n");
+                    } else {
+                        // Arm the EL1 physical timer, 10ms period
+                        crate::arch::timer::Timer::enable_arch_timer(10);
+                        Uart10::puts("preempt: architectural timer ON (PPI 29, 10ms)\r\n");
+                    }
+                    // Unmask IRQs
+                    crate::arch::cpu::enable_irqs();
+                }
+                "off" => {
+                    // Mask the timer IRQ source: CTL Imask=1, Enable=0
+                    core::arch::asm!("msr CNTP_CTL_EL0, xzr");
+                    Uart10::puts("preempt: architectural timer OFF\r\n");
+                }
+                _ => {
+                    let ctl: u64;
+                    core::arch::asm!("mrs {}, CNTP_CTL_EL0", out(reg) ctl);
+                    let isen0 = crate::arch::gic::Gic::dist_read32(0x100);
+                    crate::println!(
+                        "preempt: CNTFRQ={} CTL={:#x} ISENABLER0={:#010x} (PPI29={})",
+                        crate::arch::timer::Timer::cntfrq(),
+                        ctl,
+                        isen0,
+                        (isen0 >> 29) & 1
+                    );
+                }
+            }
+        }
+        0
+    }
+    #[cfg(not(all(target_arch = "aarch64", feature = "qemu_raspi5b")))]
+    {
+        let _ = (args, argc);
+        Uart10::puts("preempt: not available on this build\r\n");
+        1
     }
 }
 

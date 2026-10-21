@@ -85,6 +85,46 @@ impl Timer {
         crate::println!("[timer] Using BCM2835 System Timer (1 MHz, SPI 65)");
     }
 
+    /// Enable the ARM architectural EL1 physical timer (CNTP) with a
+    /// periodic TVAL. This is the only timer QEMU raspi5b actually
+    /// implements (the BCM system timer MMIO does not exist there).
+    /// `period_ms` is the tick interval. IRQ = GIC PPI 30.
+    pub unsafe fn enable_arch_timer(period_ms: u64) {
+        let freq: u64;
+        core::arch::asm!("mrs {}, CNTFRQ_EL0", out(reg) freq);
+        if freq == 0 {
+            return;
+        }
+        let tval = freq.saturating_mul(period_ms) / 1000;
+        core::arch::asm!("msr CNTP_TVAL_EL0, {0}", in(reg) tval);
+        // Enable + unmask: CTL = 0b01 (Imask=0, Enable=1, status RO)
+        core::arch::asm!("msr CNTP_CTL_EL0, {0}", in(reg) 1u64);
+        // Route physical timer IRQs to EL1 (all cores, no NS bits needed
+        // at Secure EL1 on this platform)
+        core::arch::asm!("msr CNTP_CTL_EL0, {0}", in(reg) 1u64);
+    }
+
+    /// Read CNTFRQ_EL0 (for diagnostics)
+    pub fn cntfrq() -> u64 {
+        let freq: u64;
+        unsafe { core::arch::asm!("mrs {}, CNTFRQ_EL0", out(reg) freq); }
+        freq
+    }
+
+    /// Handle the architectural timer IRQ: re-arm TVAL + clear status.
+    pub fn handle_arch_timer_irq() {
+        unsafe {
+            let freq: u64;
+            core::arch::asm!("mrs {}, CNTFRQ_EL0", out(reg) freq);
+            if freq > 0 {
+                let tval = freq.saturating_mul(TICK_INTERVAL_US as u64) / 1_000_000;
+                core::arch::asm!("msr CNTP_TVAL_EL0, {0}", in(reg) tval);
+            }
+            // Writing CTL with Imask=0,Enable=1 clears the pending state
+            core::arch::asm!("msr CNTP_CTL_EL0, {0}", in(reg) 1u64);
+        }
+    }
+
     /// Enable the timer IRQ source in the GIC (call after boot completes).
     pub unsafe fn enable_irq_source() {
         crate::arch::gic::Gic::enable_spi(65);
