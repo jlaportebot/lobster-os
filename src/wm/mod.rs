@@ -13,9 +13,11 @@
 
 pub mod compositor;
 pub mod alt_tab;
+pub mod config;
 pub mod context_menu;
 pub mod desktop_icons;
 pub mod dirty;
+pub mod event_router;
 pub mod user_windows;
 pub mod gui_files;
 pub mod gui_shell;

@@ -10,7 +10,7 @@
 use crate::println;
 use crate::usb::hid::{self, HidEvent};
 use crate::wm::compositor;
-use crate::wm::panel;
+use crate::wm::event_router;
 
 // ─── Cursor State ──────────────────────────────────────────────────
 
@@ -193,7 +193,7 @@ fn user_window_click_only(left: bool) -> bool {
 }
 
 /// Queue a press into a user window and remember it for the release.
-fn begin_user_click(win_id: u64, ux: u32, uy: u32) {
+pub(super) fn begin_user_click(win_id: u64, ux: u32, uy: u32) {
     crate::wm::user_windows::focus_window(win_id);
     crate::wm::user_windows::click_event(win_id, 1, true, ux, uy);
     unsafe {
@@ -358,15 +358,9 @@ fn handle_mouse_move(dx: i16, dy: i16) {
     compositor::set_hardware_cursor_pos(unsafe { CURSOR_X }, unsafe { CURSOR_Y });
     update_cursor_shape();
 
-    // Start-menu hover tracking (consumes nothing)
-    {
-        let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
-        crate::wm::start_menu::handle_move(cx, cy);
-        crate::wm::desktop_icons::update_hover(cx, cy);
-    }
-
-    // Delegate to window module's existing handle_event
-    crate::wm::window::handle_event(HidEvent::MouseMove { dx, dy });
+    // Hover observers, drag/resize bookkeeping, optional focus-follows-z
+    let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+    event_router::route_move(cx, cy, dx, dy);
 }
 
 /// Pending EL0 user-window click awaiting its release event.
@@ -394,122 +388,27 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
         end_user_click(cx, cy);
     }
 
-    // Right-click: show context menu
+    let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+
+    // Right-click gesture: handled ahead of the routing table.
     if right && !prev_right {
-        let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
-
-        // If context menu is already visible, hide it
-        if crate::wm::context_menu::is_visible() {
-            crate::wm::context_menu::hide();
-            return;
-        }
-
-        // Check if click is on desktop (not on any window or panel)
-        let focused = crate::wm::window::focused_id();
-        let on_window = crate::wm::window::get_info(focused).is_some();
-
-        if !on_window {
-            crate::wm::context_menu::show_desktop_menu(cx, cy);
-        }
+        event_router::route_right_press(cx, cy);
         return;
     }
 
-    // If context menu is visible, route clicks to it
-    if crate::wm::context_menu::is_visible() {
-        let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
-        // Update hover state
-        crate::wm::context_menu::handle_hover(cx, cy);
-
-        if left && !prev_left {
-            if let Some(action) = crate::wm::context_menu::handle_click(cx, cy) {
-                handle_context_action(action);
-                return;
-            }
-        }
-        return;
-    }
-
-    // On left press: check panel clicks first, then desktop icons, then window focus
-    if left && !prev_left {
-        let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
-        {
-        static PRESSES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-        let n = PRESSES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        if n < 4 {
-    
-        }
-    }
-
-        // Task Manager tab bar (before generic window focus routing)
-        if crate::apps::task_manager::handle_click(cx, cy) {
-            return;
-        }
-
-        // Terminal tab bar (before generic window focus routing)
-        if crate::apps::terminal::handle_click(cx, cy) {
-            return;
-        }
-
-        // Editor tab strip (before generic window focus routing)
-        if crate::apps::editor::handle_click(cx, cy) {
-            return;
-        }
-
-        // EL0 user windows get content clicks before normal focus routing.
-        // Chrome hits (title bar, buttons, borders) fall through to
-        // window::handle_event below for drag/close/maximize/resize.
-        if let Some((win_id, ux, uy, true)) =
-            crate::wm::user_windows::hit_test(cx, cy)
-        {
-            begin_user_click(win_id, ux, uy);
-            return;
-        }
-
-        // Check if click is on panel (launcher, task buttons, tray)
-        if let Some(action) = panel::handle_click(cx, cy) {
-            handle_panel_action(action);
-            return;
-        }
-
-        // Tray popups: consume inside-clicks; outside click closes.
-        if crate::wm::tray_popups::handle_click(cx, cy) {
-            return;
-        }
-
-        // Start menu: consume clicks inside its surface (launch/close),
-        // and any outside click closes it.
-        if crate::wm::start_menu::handle_click(cx, cy) {
-            return;
-        }
-
-        // Check if click is on a desktop icon
-        if let Some(icon_idx) = crate::wm::desktop_icons::hit_test(cx, cy) {
-            crate::wm::desktop_icons::handle_click(icon_idx);
-            return;
-        }
-
-        // Not on panel or icon - clear icon selection, then focus the window
-        // under the cursor.
-        crate::wm::desktop_icons::select(None);
-        crate::wm::window::handle_event(HidEvent::MouseButton {
-            left,
-            right,
-            middle,
-        });
-    }
-
-    // On left release: stop any drag
-    if !left && prev_left {
-        crate::wm::window::handle_event(HidEvent::MouseButton {
-            left,
-            right,
-            middle,
-        });
-    }
+    // Everything else goes through the priority-ordered routing table.
+    event_router::route_button(&event_router::ButtonEv {
+        x: cx,
+        y: cy,
+        left,
+        right,
+        middle,
+        prev_left,
+    });
 }
 
 /// Handle panel click actions
-fn handle_panel_action(action: u32) {
+pub(super) fn handle_panel_action(action: u32) {
     match action {
         0xFFFFFFFF => {
             // Launcher button clicked - toggle the start menu
@@ -578,7 +477,7 @@ fn new_desktop_item(is_dir: bool) {
 }
 
 /// Handle context menu actions (IDs from context_menu::show_desktop_menu)
-fn handle_context_action(action: u32) {
+pub(super) fn handle_context_action(action: u32) {
     match action {
         1 => {
             // Terminal
