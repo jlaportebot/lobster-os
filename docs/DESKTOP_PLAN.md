@@ -77,7 +77,8 @@ Everything else (App Store installs, multiple apps, shell while an app runs) unl
 - [ ] **B5.3** HTML-lite images + clickable links
 ### B6. Media & extras
 - [x] B6.1 BMP image viewer; B6.3 Task Manager (SysMon+ProcMgr merged)
-- [ ] **B6.2** calculator keyboard + history
+- [x] **B6.2** Calculator keyboard + history — DONE 1fbf3c0: digits/ops/Enter/BS/Esc
+      when focused; 8-entry evaluation tape rendered under the display.
 - [x] **B6.4** App Store real install — DONE ceb4497: `pkg install hello` downloads from
       the GitHub package repo (release `pkg-repo`), sha256-verifies twice, extracts via
       vfs::write_file, records the DB; `run /apps/hello &` launches the DOWNLOADED app.
@@ -93,7 +94,9 @@ Everything else (App Store installs, multiple apps, shell while an app runs) unl
 - [~] **C1** → S0 above
 - [ ] **C2. Compositor event loop**: formal input routing table, click-through,
       drag threshold, focus-follows-z
-- [ ] **C3. Storage UX**: /sd → /home/user overlay, /sd/etc as persistent /etc
+- [x] **C3. Storage UX** — DONE (merge 5f8d641): /home/user overlays /sd/home/user
+      (alias in VFS resolve/create/open/mkdir/rename — no copying); boot prompt starts
+      in home; 'home' command + 'cd ~'; welcome.txt seeded. Live-verified 5/5.
 - [x] **C4/D5. Audio device** — lobster-audio MMIO + host audio + guest mixer (beep/play)
 - [ ] **C5. Multi-user login**: greeter, sessions, per-user /home
 - [ ] **C6. Dynamic linker v2**: shared-lib resolution for EL0 apps
