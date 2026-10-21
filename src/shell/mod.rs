@@ -1535,6 +1535,7 @@ fn run_builtin_out(
         "cat" => cmd_cat(args, argc),
         "ls" => cmd_ls(args, argc),
         "cd" => cmd_cd(args, argc),
+        "home" => cmd_home(),
         "pwd" => cmd_pwd(),
         "mkdir" => cmd_mkdir(args, argc),
         "rm" => cmd_rm(args, argc),
@@ -3956,7 +3957,19 @@ pub fn set_cwd(path: &str) {
     }
 }
 
+/// Expand a leading `~` (alone or `~/...`) to the home path.
+fn expand_tilde(path: &str) -> alloc::borrow::Cow<'_, str> {
+    if path == "~" {
+        return alloc::borrow::Cow::Borrowed(crate::fs::vfs::HOME_PATH);
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        return alloc::borrow::Cow::Owned(alloc::format!("{}/{}", crate::fs::vfs::HOME_PATH, rest));
+    }
+    alloc::borrow::Cow::Borrowed(path)
+}
+
 fn resolve_path(path: &str) -> alloc::string::String {
+    let path = &*expand_tilde(path);
     if path.starts_with('/') {
         alloc::string::String::from(path)
     } else {
@@ -4104,7 +4117,7 @@ fn cmd_ls(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 
 fn cmd_cd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     if argc < 2 {
-        set_cwd("/");
+        set_cwd(crate::fs::vfs::HOME_PATH);
         return 0;
     }
     let target = resolve_path(args[1]);
@@ -4118,6 +4131,12 @@ fn cmd_cd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
             1
         }
     }
+}
+
+fn cmd_home() -> i32 {
+    set_cwd(crate::fs::vfs::HOME_PATH);
+    crate::println!("{}", cwd());
+    0
 }
 
 fn cmd_pwd() -> i32 {
@@ -4865,7 +4884,7 @@ fn cmd_which(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         "cpu", "timer", "gpio", "login", "su", "sudo", "passwd", "useradd",
         "userdel", "groupadd", "groupdel", "id", "whoami", "hexdump", "yield",
         "test", "set", "export", "unset", "env", "printenv", "history",
-        "cat", "ls", "cd", "pwd", "mkdir", "rm", "mv", "chmod", "chown",
+        "cat", "ls", "cd", "home", "pwd", "mkdir", "rm", "mv", "chmod", "chown",
         "touch", "cp", "head", "tail", "wc", "du", "df", "free", "which",
         "uname", "date", "find", "run", "svc", "runlevel", "reboot", "halt",
         "cc", "curl", "wget", "pkg", "gh", "vi", "edit", "ed", "nano",

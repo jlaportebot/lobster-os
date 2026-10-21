@@ -507,8 +507,62 @@ fn split_path(path: &str) -> [Option<&str>; MAX_PATH_DEPTH] {
     parts
 }
 
+/// Persistent-home overlay: while enabled, `/home/user[/...]` is an alias for
+/// `/sd/home/user[/...]` (no copying — paths are rewritten before lookup).
+/// Enabled at boot once /sd is mounted and /sd/home/user exists; otherwise
+/// /home/user is an ordinary (volatile) RAM directory.
+static HOME_ALIAS_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+pub const HOME_PATH: &str = "/home/user";
+const HOME_BACKING: &str = "/sd/home/user";
+
+pub fn set_home_alias(on: bool) {
+    HOME_ALIAS_ON.store(on, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Rewrite a leading `/home/user` (exact component match) to `/sd/home/user`.
+pub fn alias_path(path: &str) -> alloc::borrow::Cow<'_, str> {
+    if HOME_ALIAS_ON.load(core::sync::atomic::Ordering::Relaxed) {
+        if let Some(rest) = path.strip_prefix(HOME_PATH) {
+            if rest.is_empty() || rest.starts_with('/') {
+                return alloc::borrow::Cow::Owned(alloc::format!("{}{}", HOME_BACKING, rest));
+            }
+        }
+    }
+    alloc::borrow::Cow::Borrowed(path)
+}
+
+/// Ensure /sd/home/user exists (mkdir -p) and enable the /home/user alias.
+/// Falls back to a RAM /home/user when no persistent disk is mounted.
+pub fn bootstrap_home() {
+    let have_sd = resolve_path("/sd").is_ok();
+    if have_sd {
+        for dir in ["/sd/home", HOME_BACKING] {
+            if resolve_path(dir).is_err() {
+                if let Err(e) = create_dir(dir) {
+                    println!("[vfs] mkdir {} failed: {:?}", dir, e);
+                }
+            }
+        }
+        if resolve_path(HOME_BACKING).is_ok() {
+            set_home_alias(true);
+        }
+    } else if resolve_path(HOME_PATH).is_err() {
+        let _ = create_dir(HOME_PATH);
+    }
+    let welcome = "/home/user/welcome.txt";
+    if resolve_path(welcome).is_err() {
+        let _ = write_file(
+            welcome,
+            b"Welcome to LobsterOS!\nThis is your home directory (/home/user).\nFiles saved here persist across reboots when a disk is attached.\n",
+        );
+    }
+    println!("[vfs] home: {} (alias {})", HOME_PATH, if have_sd { "-> /sd/home/user" } else { "RAM only" });
+}
+
 /// Resolve a path to a VFS node ID
 pub fn resolve_path(path: &str) -> Result<u64, VfsError> {
+    let path = &*alias_path(path);
     if path.is_empty() {
         return Err(VfsError::InvalidPath);
     }
@@ -541,6 +595,7 @@ pub fn resolve_path(path: &str) -> Result<u64, VfsError> {
 
 /// Create a directory
 pub fn mkdir(path: &str) -> Result<u64, VfsError> {
+    let path = &*alias_path(path);
     // Split path into parent + name
     let (parent_path, name) = if let Some(idx) = path.rfind('/') {
         (&path[..idx.max(1)], &path[idx + 1..])
@@ -579,6 +634,7 @@ pub fn mkdir(path: &str) -> Result<u64, VfsError> {
 
 /// Create a file
 pub fn create(path: &str) -> Result<u64, VfsError> {
+    let path = &*alias_path(path);
     let (parent_path, name) = if let Some(idx) = path.rfind('/') {
         (&path[..idx.max(1)], &path[idx + 1..])
     } else {
@@ -596,6 +652,7 @@ pub fn create(path: &str) -> Result<u64, VfsError> {
 
 /// Open a file (resolve path, return file descriptor)
 pub fn open(path: &str, flags: u32) -> Result<usize, VfsError> {
+    let path = &*alias_path(path);
     let inode_id = resolve_path(path);
 
     let inode_id = match inode_id {
@@ -977,6 +1034,8 @@ pub fn remove(path: &str) -> Result<(), VfsError> {
 
 /// Rename / move a file or directory
 pub fn rename(src_path: &str, dst_path: &str) -> Result<(), VfsError> {
+    let src_path = &*alias_path(src_path);
+    let dst_path = &*alias_path(dst_path);
     let src_id = resolve_path(src_path)?;
     let (dst_parent, dst_name) = if let Some(idx) = dst_path.rfind('/') {
         (&dst_path[..idx.max(1)], &dst_path[idx + 1..])
