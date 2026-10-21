@@ -1410,6 +1410,25 @@ pub unsafe fn save_slice_frame(pid: Pid, regs: *const u64, elr: u64, spsr: u64) 
     t.regs.spsr = spsr;
 }
 
+/// S3: true once `preempt on` has enabled the architectural-timer tick.
+static mut PREEMPT_ON: bool = false;
+
+pub fn set_preempt(on: bool) {
+    unsafe { PREEMPT_ON = on; }
+}
+
+pub fn preempt_enabled() -> bool {
+    unsafe { PREEMPT_ON }
+}
+
+/// Re-enable IRQs if the preempt tick is active. Called from the main
+/// loop after every slice/cooperative return (which leave DAIF masked).
+pub fn reenable_preempt_irqs() {
+    if preempt_enabled() {
+        crate::arch::cpu::enable_irqs();
+    }
+}
+
 /// Mark a task as a background (sliced) EL0 task. It runs one slice per
 /// main-loop iteration until its next SYS_SLEEP, then yields.
 pub fn mark_bg(pid: Pid) -> bool {

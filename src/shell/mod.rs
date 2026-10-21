@@ -4198,12 +4198,14 @@ fn cmd_preempt(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                         crate::arch::timer::Timer::enable_arch_timer(10);
                         Uart10::puts("preempt: architectural timer ON (PPI 29, 10ms)\r\n");
                     }
-                    // Unmask IRQs
+                    // Unmask IRQs + record mode for the main loop
+                    crate::sched::set_preempt(true);
                     crate::arch::cpu::enable_irqs();
                 }
                 "off" => {
                     // Mask the timer IRQ source: CTL Imask=1, Enable=0
                     core::arch::asm!("msr CNTP_CTL_EL0, xzr");
+                    crate::sched::set_preempt(false);
                     Uart10::puts("preempt: architectural timer OFF\r\n");
                 }
                 _ => {

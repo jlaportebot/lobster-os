@@ -956,6 +956,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         // slice ends at the task's next SYS_SLEEP — control returns here
         // so the shell and desktop stay fully responsive.
         crate::sched::run_bg_slices();
+        // S3: slice returns leave IRQs hard-masked (the cooperative-exit
+        // eret window must be atomic vs the arch timer). Re-enable here
+        // each main-loop iteration if preemption is on.
+        #[cfg(feature = "qemu_raspi5b")]
+        crate::sched::reenable_preempt_irqs();
 
         // Poll shell for input (cooperative scheduling on QEMU)
         crate::shell::poll();

@@ -202,6 +202,15 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
     // return address so we resume in kernel code that launched the process.
     if crate::sched::cooperative_exit_pending() {
         crate::sched::clear_cooperative_exit();
+        // S3: hard-mask IRQs for the ELR/SPSR rewrite + eret window.
+        // The arch timer (once preempt is on) can otherwise land exactly
+        // between the msr writes below and the handler's eret, producing
+        // a PSTATE.IL-class UNDEF loop at the IRQ vector body (EC=0x00,
+        // SPSR=0x3C5 — observed live). The main loop re-enables IRQs
+        // after run_and_wait returns.
+        unsafe {
+            core::arch::asm!("msr DAIFSet, #0xF");
+        }
         // S2: a background task's slice ends the same way — eret back to
         // the main loop, but keep the task alive and deliver the slice
         // marker instead of an exit code.
