@@ -425,6 +425,12 @@ exception_vector_table:
     // Save special registers
     mrs     x0, SPSR_EL1
     mrs     x1, ELR_EL1
+    // Persist ELR/SPSR in the frame (TrapFrame.elr @256, .spsr @264):
+    // handlers may unmask IRQs (console writer does DAIFClr), and a
+    // nested EL1 exception overwrites the live ELR_EL1/SPSR_EL1 —
+    // RESTORE_CONTEXT must not depend on them surviving. (C7: this
+    // also makes signal delivery's TrapFrame.elr/spsr writes real.)
+    stp     x1, x0, [sp, #256]
     mrs     x2, ESR_EL1
     mrs     x3, FAR_EL1
 
@@ -434,9 +440,18 @@ exception_vector_table:
 .endm
 
 .macro RESTORE_CONTEXT
-    // Restore SP_EL0 (user stack pointer) from offset 248
-    ldr     x0, [sp, #248]
+    // Close the IRQ window first: from here to eret, a nested exception
+    // would clobber the live ELR_EL1/SPSR_EL1 again. The eret target's
+    // DAIF comes from the restored SPSR, so masking does not leak into
+    // the returned context.
+    msr     DAIFSet, #0xF
+    // Restore SP_EL0 (248), ELR (256), SPSR (264) from the frame so the
+    // eret is immune to live-register clobbering by nested exceptions.
+    ldp     x0, x1, [sp, #248]
     msr     SP_EL0, x0
+    msr     ELR_EL1, x1
+    ldr     x0, [sp, #264]
+    msr     SPSR_EL1, x0
 
     // Restore GPRs
     ldp     x0, x1, [sp, #0]

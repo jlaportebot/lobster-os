@@ -935,16 +935,23 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     }
     #[cfg(feature = "qemu_raspi5b")]
     {
-        // S3 plumbing is in place but preemption stays opt-in ('preempt
-        // on'): a tick landing at EL0 while a FOREGROUND run_and_wait app
-        // executes corrupts the return PC (observed: PC Alignment Fault
-        // at ELR=0x3 under full-suite load). The desktop path and the
-        // S2 sliced-background path are tick-stable (60s soak, bg apps
-        // with argv complete under ticks) — the remaining bug is the
-        // EL0-taken-IRQ return through run_and_wait's eret window.
-        // Nothing is armed here; 'preempt on' does the full setup.
+        // S3: preemptive ticking via the architectural EL1 physical timer
+        // (the only timer QEMU raspi5b implements; bcm2712 wires CNTP to
+        // GIC PPI 29). First tick delayed 500ms so it lands in the idle
+        // main loop, not mid-boot. The frame-backed exception path makes
+        // EL0-taken ticks safe (the old live-register eret raced nested
+        // exceptions AND the coop-exit wrote past its frame via a u64
+        // element-offset bug — fixed).
+        unsafe {
+            crate::arch::gic::Gic::enable_ppi(29);
+            crate::arch::gic::Gic::set_priority(29, 0x00);
+            crate::arch::gic::Gic::set_config(29, 0b10);
+            crate::arch::gic::Gic::set_priority_mask(0xFF);
+            crate::arch::timer::Timer::enable_arch_timer(500);
+        }
+        crate::sched::set_preempt(true);
+        crate::println!("[boot] QEMU build: PREEMPTIVE ticks via arch timer (PPI 29, 10ms)");
     }
-    crate::println!("[boot] QEMU build: cooperative tick mode (preempt opt-in: 'preempt on')");
 
     // Boot init is complete — safe to take interrupts now.
     crate::println!("[boot] Enabling IRQs...");

@@ -236,16 +236,20 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
                 } else {
                     crate::sched::coop_exit_code() as u64
                 };
+                // RESTORE_CONTEXT (boot.S) reloads ELR/SPSR from the
+                // exception frame (offsets 256/264) and masks DAIF before
+                // the eret — the cooperative return must therefore be
+                // written into the FRAME (live msr writes would be
+                // overwritten by the frame-backed restore).
+                // EL1h (M=0b0101), all DAIF masked: 0x3C5 — kernel resume.
+                // NOTE: `regs` is *mut u64 — add() counts ELEMENTS, so
+                // byte offset 256 = add(32), 264 = add(33). (Using
+                // add(256)/add(264) wrote 2KB past the frame — the eret
+                // then loaded the ORIGINAL ELR/SPSR and returned to the
+                // app after exit, executing garbage.)
+                *regs.add(32) = kr;      // TrapFrame.elr   (byte 256)
+                *regs.add(33) = 0x3C5;   // TrapFrame.spsr  (byte 264)
             }
-            // EL1h (M=0b0101) with all DAIF masked: 0x3C5. The previous value
-            // 0x5 resumed KERNEL code at EL0t — unprivileged, so any privileged
-            // instruction after the resume (MMIO barriers, msr) faulted.
-            core::arch::asm!("msr SPSR_EL1, {0}", in(reg) 0x3C5u64);
-            core::arch::asm!("msr ELR_EL1, {0}", in(reg) kr);
-            // The resume trampoline (.Lcoop_resume in run_and_wait) restores
-            // the caller's SP and callee-saved registers itself, so only
-            // ELR/SPSR need to be set here. (Writing SP_EL1 while it is the
-            // active bank is UNDEFINED — that caused the 0xc00b0 UNDEF.)
         }
         // For slices the task stays Ready; the main loop will resume it
         // after its wake deadline. Only real exits park CURRENT_PID.
