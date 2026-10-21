@@ -952,6 +952,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         // Drive splash screen (handles transition to desktop)
         crate::display::splash::tick();
 
+        // S2: run one slice of a ready background EL0 task (if any). The
+        // slice ends at the task's next SYS_SLEEP — control returns here
+        // so the shell and desktop stay fully responsive.
+        crate::sched::run_bg_slices();
+
         // Poll shell for input (cooperative scheduling on QEMU)
         crate::shell::poll();
 

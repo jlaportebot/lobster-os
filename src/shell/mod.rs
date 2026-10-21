@@ -25,6 +25,10 @@ const MAX_CMD_LEN: usize = 512;
 /// Maximum number of arguments per command
 const MAX_ARGS: usize = 32;
 
+/// Set by the line parser when a command ends with `&` (background).
+/// The command handler consumes it (run spawns sliced; others ignore).
+static BG_PENDING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 /// Maximum environment variables
 const MAX_ENV: usize = 32;
 
@@ -534,6 +538,7 @@ pub fn poll() -> bool {
     // On QEMU, the UART RX interrupt (SPI 121) doesn't fire reliably.
     // Poll the UART directly for input bytes instead.
     let byte_avail = crate::drivers::uart::Uart10::has_data();
+
     if byte_avail {
         while let Some(b) = crate::drivers::uart::Uart10::read_byte_nb() {
             unsafe { crate::drivers::serial_input::feed_byte(b) };
@@ -656,6 +661,10 @@ fn execute_command(line: &str) -> CmdResult {
             (trimmed, false)
         }
     };
+    // Publish the flag BEFORE dispatch so the command handler (cmd_run)
+    // can consume it. Cleared unconditionally first so stale flags from
+    // crashed lines never leak into the next command.
+    BG_PENDING.store(background, core::sync::atomic::Ordering::Relaxed);
 
     // 3. Split into pipeline stages on |
     let mut stages: [&str; MAX_PIPELINE] = [""; MAX_PIPELINE];
@@ -780,12 +789,7 @@ fn execute_command(line: &str) -> CmdResult {
         // Next stage reads from the read end
         pipe_read_fd = next_pipe_fds.0;
 
-        // Handle background flag (just log it for now)
-        if background && stage_idx == 0 {
-            Uart10::puts("[background] ");
-            Uart10::puts(cmd);
-            Uart10::puts("\r\n");
-        }
+
     }
 
     // Close any remaining pipe read fd
@@ -4164,13 +4168,21 @@ fn cmd_mv(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 
 fn cmd_run(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     if argc < 2 {
-        Uart10::puts("Usage: run <path|demo> [priority]\r\n");
+        Uart10::puts("Usage: run <path|demo> [priority] [&]\r\n");
         Uart10::puts("  run demo       Run built-in hello-EL0 test binary\r\n");
         Uart10::puts("  run <path>     Load ELF from VFS and spawn as user process\r\n");
+        Uart10::puts("  run <path> &   Spawn in the background — shell stays live\r\n");
         return 1;
     }
 
-    let priority = if argc >= 3 {
+    // `run <path> &` — background (sliced) execution.
+    let bg = args[argc - 1] == "&";
+    let argc_eff = if bg { argc - 1 } else { argc };
+    // The tokenizer strips a trailing `&` into BG_PENDING (see
+    // execute pipeline); honor it for both run forms.
+    let bg = bg || BG_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed);
+
+    let priority = if argc_eff >= 3 {
         match args[2] {
             "high" | "hi" => crate::sched::Priority::High,
             "low" => crate::sched::Priority::Low,
@@ -4180,7 +4192,34 @@ fn cmd_run(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         crate::sched::Priority::Normal
     };
 
-    if args[1] == "demo" {
+    if bg {
+        if args[1] == "demo" {
+            match crate::sched::spawn_demo() {
+                Some(pid) => {
+                    crate::sched::mark_bg(pid);
+                    crate::println!("run: hello-EL0 demo spawned as PID {} (background)", pid);
+                    0
+                }
+                None => {
+                    Uart10::puts("run: failed to spawn demo\r\n");
+                    1
+                }
+            }
+        } else {
+            let path = resolve_path(args[1]);
+            match crate::sched::spawn_from_path(&path, priority) {
+                Some(pid) => {
+                    crate::sched::mark_bg(pid);
+                    crate::println!("run: {} spawned as PID {} (background)", path, pid);
+                    0
+                }
+                None => {
+                    crate::println!("run: failed to spawn {}", path);
+                    1
+                }
+            }
+        }
+    } else if args[1] == "demo" {
         match crate::sched::spawn_demo() {
             Some(pid) => {
                 crate::println!("run: hello-EL0 demo spawned as PID {}", pid);

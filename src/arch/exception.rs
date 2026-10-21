@@ -199,12 +199,31 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
     // return address so we resume in kernel code that launched the process.
     if crate::sched::cooperative_exit_pending() {
         crate::sched::clear_cooperative_exit();
+        // S2: a background task's slice ends the same way — eret back to
+        // the main loop, but keep the task alive and deliver the slice
+        // marker instead of an exit code.
+        let is_slice = crate::sched::slice_yield_pending();
+        crate::sched::clear_slice_yield();
         let kr = crate::sched::kernel_return_address();
         unsafe {
-            // Deliver the exit code in x0: the resume trampoline returns it
-            // to run_and_wait's caller as a normal function return value.
+            // S2: persist the EL0 frame BEFORE rewiring ELR/SPSR so the
+            // next run_and_wait resumes the app where it yielded.
+            if is_slice {
+                crate::sched::save_slice_frame(
+                    crate::sched::current_pid(),
+                    regs,
+                    elr,
+                    spsr,
+                );
+            }
+            // Deliver the exit code (or slice marker) in x0: the resume
+            // trampoline returns it to run_and_wait's caller.
             if !regs.is_null() {
-                *regs.add(0) = crate::sched::coop_exit_code() as u64;
+                *regs.add(0) = if is_slice {
+                    crate::sched::SLICE_YIELD_MARKER as u64
+                } else {
+                    crate::sched::coop_exit_code() as u64
+                };
             }
             // EL1h (M=0b0101) with all DAIF masked: 0x3C5. The previous value
             // 0x5 resumed KERNEL code at EL0t — unprivileged, so any privileged
@@ -216,7 +235,11 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
             // ELR/SPSR need to be set here. (Writing SP_EL1 while it is the
             // active bank is UNDEFINED — that caused the 0xc00b0 UNDEF.)
         }
-        crate::sched::set_current_pid(0);
+        // For slices the task stays Ready; the main loop will resume it
+        // after its wake deadline. Only real exits park CURRENT_PID.
+        if !is_slice {
+            crate::sched::set_current_pid(0);
+        }
     }
 }
 

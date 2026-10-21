@@ -257,6 +257,14 @@ pub struct Task {
     pub exit_code: i64,
     /// Signal that caused termination (0 if not killed by signal)
     pub exit_signal: u64,
+
+    // ── Sliced cooperative multitasking (S2) ──
+    /// Background EL0 task run via the sliced scheduler (spawned with `&`).
+    pub bg: bool,
+    /// Absolute uptime_ms when a sliced task's SYS_SLEEP ends (0 = none).
+    pub wake_ms: u64,
+    /// Round-robin ticket: order this task was last scheduled in.
+    pub rr_ticket: u64,
 }
 
 /// Global scheduler state
@@ -452,6 +460,9 @@ pub fn create_kernel_task(entry: fn() -> !, priority: Priority) -> Option<Pid> {
         pipe_write_fd: -1,
         exit_code: 0,
         exit_signal: 0,
+        bg: false,
+        wake_ms: 0,
+        rr_ticket: 0,
     };
 
     unsafe {
@@ -529,6 +540,9 @@ pub fn create_user_process(entry: u64, ttbr0: u64, priority: Priority) -> Option
         pipe_write_fd: -1,
         exit_code: 0,
         exit_signal: 0,
+        bg: false,
+        wake_ms: 0,
+        rr_ticket: 0,
     };
 
     unsafe {
@@ -1256,6 +1270,161 @@ pub fn clear_cooperative_exit() {
 /// go back to EL1 kernel mode instead of EL0.
 pub fn request_cooperative_exit() {
     unsafe { COOPERATIVE_EXIT_REQUESTED = true; }
+}
+
+// ── Sliced cooperative multitasking (S2) ─────────────────────────────
+//
+// Background EL0 apps (spawned with `run <path> &`) never own the CPU
+// outright. Each one runs until its next SYS_SLEEP; the sleep records a
+// wake deadline and requests a SLICE YIELD — the exception handler erets
+// back to the main loop exactly like a cooperative exit, but the task
+// stays Ready instead of exiting. The main loop then picks the next
+// ready background task whose wake time has passed and runs it.
+
+/// Marker value returned through the resume trampoline when a slice ends
+/// (as opposed to a process exit). Distinct from any plausible exit code.
+/// 0x5L1CE = 'slice'-ish marker, outside plausible exit-code range.
+pub const SLICE_YIELD_MARKER: i64 = 0x5E5_0000;
+
+/// Set when a background task's slice should end at the next exception.
+static mut SLICE_YIELD_REQUESTED: bool = false;
+
+/// Set when a cooperative exit should ALSO end the slice loop (task exited).
+pub fn request_slice_yield() {
+    unsafe { SLICE_YIELD_REQUESTED = true; }
+}
+
+pub fn slice_yield_pending() -> bool {
+    unsafe { SLICE_YIELD_REQUESTED }
+}
+
+pub fn clear_slice_yield() {
+    unsafe { SLICE_YIELD_REQUESTED = false; }
+}
+
+/// True when the current cooperative run should return to the main loop
+/// (either the task exited or its slice ended). Called by the exception
+/// handler's centralized exit check — SPSR/ELR are already set for EL1
+/// return there; we only decide whether to mark it as a slice vs exit.
+pub fn slice_mode_active() -> bool {
+    // Sliced only while a background task is the current task.
+    let pid = unsafe { CURRENT_PID };
+    match find_task_index(pid) {
+        Some(idx) => unsafe {
+            match &TASK_TABLE[idx] {
+                Some(t) => t.bg,
+                None => false,
+            }
+        },
+        None => false,
+    }
+}
+
+/// Pick the next background EL0 task to run: earliest wake_ms that has
+/// arrived, round-robin among ties. Returns its PID, or None.
+pub fn pick_bg_task(now_ms: u64) -> Option<Pid> {
+    unsafe {
+        let mut best: Option<(usize, u64, u64)> = None; // (idx, wake, ticket)
+        for i in 0..MAX_TASKS {
+            let Some(ref t) = TASK_TABLE[i] else { continue };
+            if !t.bg || !t.is_user {
+                continue;
+            }
+            if t.state != TaskState::Ready {
+                continue;
+            }
+            if t.wake_ms > now_ms {
+                continue; // still sleeping
+            }
+            let key = (t.wake_ms, t.rr_ticket);
+            match best {
+                Some((_, w, tk)) if (w, tk) <= key => {}
+                _ => best = Some((i, t.wake_ms, t.rr_ticket)),
+            }
+        }
+        let (idx, _, _) = best?;
+        // Bump the round-robin ticket so others go first next time.
+        static mut NEXT_TICKET: u64 = 1;
+        if let Some(ref mut t) = TASK_TABLE[idx] {
+            t.rr_ticket = NEXT_TICKET;
+            NEXT_TICKET += 1;
+            Some(t.pid)
+        } else {
+            None
+        }
+    }
+}
+
+/// Run one slice of every runnable background task (called from the main
+/// loop). Returns true if any task ran. A slice ends at the task's next
+/// SYS_SLEEP or its exit — both resume the main loop through the
+/// cooperative-exit path.
+pub fn run_bg_slices() -> bool {
+    let now = crate::arch::ArchTimer::uptime_ms();
+    let mut ran = false;
+    // One task per call keeps main-loop latency bounded; round-robin
+    // tickets ensure fairness across calls.
+    if let Some(pid) = pick_bg_task(now) {
+        let code = unsafe { run_and_wait(pid as u64) };
+        if code as u64 != SLICE_YIELD_MARKER as u64 {
+            println!("[sched] bg PID {} exited with code {}", pid, code);
+        } else if let Some(idx) = find_task_index(pid) {
+            // run_and_wait marked it Running; a slice end makes it Ready
+            // again (wake_ms gates the next slice).
+            unsafe {
+                if let Some(ref mut t) = TASK_TABLE[idx] {
+                    t.state = TaskState::Ready;
+                }
+            }
+        }
+        ran = true;
+    }
+    ran
+}
+
+/// Save the current EL0 trap frame into the task's register context so a
+/// later run_and_wait resumes exactly where the slice ended.
+/// `regs` is the exception-stack save block (x0-x30 at 0..240, SP_EL0 at
+/// 248). `elr`/`spsr` are the exception-time values (SVC ELR already
+/// points past the svc instruction).
+pub unsafe fn save_slice_frame(pid: Pid, regs: *const u64, elr: u64, spsr: u64) {
+    let Some(idx) = find_task_index(pid) else { return };
+    let Some(ref mut t) = TASK_TABLE[idx] else { return };
+    if regs.is_null() {
+        return;
+    }
+    let f = &mut t.regs;
+    f.x0 = *regs.add(0); f.x1 = *regs.add(1); f.x2 = *regs.add(2);
+    f.x3 = *regs.add(3); f.x4 = *regs.add(4); f.x5 = *regs.add(5);
+    f.x6 = *regs.add(6); f.x7 = *regs.add(7); f.x8 = *regs.add(8);
+    f.x9 = *regs.add(9); f.x10 = *regs.add(10); f.x11 = *regs.add(11);
+    f.x12 = *regs.add(12); f.x13 = *regs.add(13); f.x14 = *regs.add(14);
+    f.x15 = *regs.add(15); f.x16 = *regs.add(16); f.x17 = *regs.add(17);
+    f.x18 = *regs.add(18); f.x19 = *regs.add(19); f.x20 = *regs.add(20);
+    f.x21 = *regs.add(21); f.x22 = *regs.add(22); f.x23 = *regs.add(23);
+    f.x24 = *regs.add(24); f.x25 = *regs.add(25); f.x26 = *regs.add(26);
+    f.x27 = *regs.add(27); f.x28 = *regs.add(28); f.x29 = *regs.add(29);
+    f.x30 = *regs.add(30);
+    t.regs.sp = *regs.add(31);
+    t.regs.elr = elr;
+    t.regs.spsr = spsr;
+}
+
+/// Mark a task as a background (sliced) EL0 task. It runs one slice per
+/// main-loop iteration until its next SYS_SLEEP, then yields.
+pub fn mark_bg(pid: Pid) -> bool {
+    if let Some(idx) = find_task_index(pid) {
+        unsafe {
+            if let Some(ref mut t) = TASK_TABLE[idx] {
+                if t.is_user {
+                    t.bg = true;
+                    t.wake_ms = 0;
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Kill a task by PID

@@ -119,6 +119,11 @@ pub unsafe fn handle_irq() {
 
     // Clear UART interrupts
     core::ptr::write_volatile(UART_ICR as *mut u32, (1 << 4) | (1 << 6));
+
+    // Move IRQ-captured bytes through the line editor so the shell sees
+    // them. Without this, bytes received while user code runs at EL0
+    // (IRQs unmasked) sat in the ring forever and commands went missing.
+    process_rx_bytes();
 }
 
 #[cfg(target_arch = "x86_64")]

@@ -1184,6 +1184,25 @@ fn sys_sleep(ms: u64) {
     // alive with WM ticks (~60fps). Preemptive mode falls back to a
     // yield. KERNEL_RETURN_ADDR is only set while a cooperative
     // run_and_wait trampoline owns the current task.
+    //
+    // S2: for BACKGROUND tasks (spawned with `&`), don't busy-wait at
+    // all — record the wake deadline and end the slice. The main loop
+    // keeps running (shell stays live) and resumes the task later.
+    if sched::coop_active() && sched::slice_mode_active() {
+        let now = crate::arch::ArchTimer::uptime_ms();
+        let pid = sched::current_pid();
+        if let Some(idx) = sched::find_task_index(pid) {
+            unsafe {
+                if let Some(ref mut task) = crate::sched::TASK_TABLE[idx] {
+                    task.wake_ms = now.saturating_add(ms);
+                    task.state = crate::sched::TaskState::Ready; // stays runnable
+                }
+            }
+        }
+        sched::request_slice_yield();
+        sched::request_cooperative_exit();
+        return;
+    }
     if sched::coop_active() {
         let start = crate::arch::ArchTimer::uptime_ms();
         let mut now = start;

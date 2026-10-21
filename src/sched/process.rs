@@ -110,6 +110,9 @@ pub fn fork() -> i64 {
         pipe_write_fd: -1,
         exit_code: 0,
         exit_signal: 0,
+        bg: false,
+        wake_ms: 0,
+        rr_ticket: 0,
     };
 
     // Allocate kernel stack for child
