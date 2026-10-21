@@ -19,6 +19,7 @@ pub mod dirty;
 pub mod user_windows;
 pub mod gui_files;
 pub mod gui_shell;
+pub mod greeter;
 pub mod start_menu;
 pub mod notifications;
 pub mod wallpaper;

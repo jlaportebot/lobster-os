@@ -740,7 +740,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     // Home directory: ensure /sd/home/user, alias /home/user onto it, seed welcome.txt,
     // and start the shell there.
     crate::fs::vfs::bootstrap_home();
-    crate::shell::set_cwd(crate::fs::vfs::HOME_PATH);
+    // C5: restore users added in earlier boots (/sd/etc/passwd -> /etc/passwd).
+    if crate::users::passwd::load_persisted() {
+        crate::println!("[users] Restored user database from /sd/etc/passwd");
+    }
+    crate::shell::set_cwd(&crate::users::home_path());
 
     // 19. Initialize package manager repositories from /etc/pkg/repos.conf
     crate::println!("[pkg] Loading repository configuration...");
@@ -793,6 +797,15 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::println!("[apps] Initializing core applications...");
     crate::apps::init();
     crate::display::splash::update_progress(7, "Apps initialized");
+
+    // C5: multi-user greeter. With only the default account the boot goes
+    // straight to the desktop; with more than one login user, block on a
+    // login card first (the choice sets the session's home).
+    #[cfg(feature = "qemu_raspi5b")]
+    if crate::wm::greeter::needed() {
+        crate::wm::greeter::run();
+        crate::wm::compositor::mark_full_redraw();
+    }
 
     // Auto-create desktop app windows on QEMU for immediate desktop experience
     #[cfg(feature = "qemu_raspi5b")]

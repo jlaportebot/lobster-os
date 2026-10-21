@@ -131,3 +131,26 @@ pub fn write_passwd_file(entries: &[PasswdEntry]) -> Result<(), crate::fs::vfs::
     crate::fs::vfs::close(fd)?;
     Ok(())
 }
+
+/// Persistent copy of the user database (the RAM /etc is rebuilt each boot).
+const PERSIST_PATH: &str = "/sd/etc/passwd";
+
+/// Mirror /etc/passwd to /sd/etc/passwd so useradd survives reboots.
+pub fn persist() {
+    if let Ok(data) = read_file("/etc/passwd") {
+        let _ = crate::fs::vfs::write_file(PERSIST_PATH, &data);
+    }
+}
+
+/// Restore /etc/passwd from /sd/etc/passwd (call once /sd is mounted).
+/// Returns true when a persisted database was loaded.
+pub fn load_persisted() -> bool {
+    let Ok(data) = read_file(PERSIST_PATH) else { return false };
+    let Ok(text) = core::str::from_utf8(&data) else { return false };
+    let entries = parse_passwd(text);
+    // Require root so a corrupt/empty file can't wipe the defaults.
+    if !entries.iter().any(|e| e.uid == 0) {
+        return false;
+    }
+    write_passwd_file(&entries).is_ok()
+}

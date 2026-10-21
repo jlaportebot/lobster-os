@@ -353,6 +353,7 @@ pub mod settings_ui {
         Display,
         Network,
         Storage,
+        Users,
         About,
     }
 
@@ -362,11 +363,12 @@ pub mod settings_ui {
 
     static mut UI: Option<SettingsUi> = None;
 
-    const PAGES: [(&str, Page); 5] = [
+    const PAGES: [(&str, Page); 6] = [
         ("Appearance", Page::Appearance),
         ("Display", Page::Display),
         ("Network", Page::Network),
         ("Storage", Page::Storage),
+        ("Users", Page::Users),
         ("About", Page::About),
     ];
 
@@ -395,7 +397,8 @@ pub mod settings_ui {
                     Page::Appearance => Page::Display,
                     Page::Display => Page::Network,
                     Page::Network => Page::Storage,
-                    Page::Storage => Page::About,
+                    Page::Storage => Page::Users,
+                    Page::Users => Page::About,
                     Page::About => Page::Appearance,
                 };
             }
@@ -523,6 +526,23 @@ pub mod settings_ui {
                 g::draw_text(fb, mx + 12, cy + 66, "Mounted at /sd — settings, notes, files",
                     theme.label_text_dim, theme.win_bg);
                 g::draw_text(fb, mx + 12, cy + 90, "Files created in the guest survive reboots.",
+                    theme.label_text_dim, theme.win_bg);
+            }
+            Page::Users => {
+                g::draw_text(fb, mx + 12, cy + 10, "Users", theme.label_text, theme.win_bg);
+                g::draw_rect(fb, mx + 8, cy + 28, mw - 16, 1, theme.menu_border);
+                let cur = crate::users::current_user();
+                let mut uy = cy + 44;
+                for name in crate::users::login_users() {
+                    let line = if name == cur {
+                        alloc::format!("{}  (current)  /home/{}", name, name)
+                    } else {
+                        alloc::format!("{}  /home/{}", name, name)
+                    };
+                    g::draw_text(fb, mx + 12, uy, &line, theme.label_text, theme.win_bg);
+                    uy += 22;
+                }
+                g::draw_text(fb, mx + 12, uy + 10, "Shell: useradd <name> | userdel <name> | userlist",
                     theme.label_text_dim, theme.win_bg);
             }
             Page::About => {

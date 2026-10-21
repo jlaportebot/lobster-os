@@ -116,6 +116,14 @@ pub fn pump_events() {
     }
 }
 
+/// Set the cursor position (used by the boot-time login greeter).
+pub fn set_cursor_pos(x: u32, y: u32) {
+    unsafe {
+        CURSOR_X = x;
+        CURSOR_Y = y;
+    }
+}
+
 /// Get current cursor position
 pub fn cursor_pos() -> (u32, u32) {
     unsafe { (CURSOR_X, CURSOR_Y) }
