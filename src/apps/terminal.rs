@@ -19,6 +19,7 @@ use crate::terminal::{
     COLS, ROWS,
 };
 use crate::wm::widget::{WidgetId, WidgetTable};
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -42,6 +43,16 @@ fn shell_task_entry() -> ! {
 pub const TERM_COLS: u32 = COLS as u32;
 pub const TERM_ROWS: u32 = ROWS as u32;
 const SCROLLBACK_LINES: usize = 10000;
+
+/// Maximum number of terminal tabs
+pub const MAX_TABS: usize = 4;
+/// Height of the tab bar at the top of the window's client area
+pub const TAB_BAR_H: u32 = 22;
+const TAB_BTN_W: u32 = 24;
+const TAB_BTN_GAP: u32 = 4;
+/// Window frame chrome (matches wm::window_frame: 2px border + 24px title)
+const FRAME_BORDER: u32 = 2;
+const FRAME_TITLE: u32 = 24;
 
 /// Terminal emulator state
 pub struct Terminal {
@@ -72,6 +83,13 @@ pub struct Terminal {
     dec_tcem: bool, // Text cursor enable mode
     /// OSC 52 clipboard buffer
     clipboard: Option<String>,
+    /// Tabs: `screen`/`parser` always hold the ACTIVE tab's state; every other
+    /// tab's (screen, parser) is parked in `saved[idx]` and swapped in on switch.
+    tab_count: usize,
+    active_tab: usize,
+    saved: [Option<Box<(ScreenBuffer, Parser)>>; MAX_TABS],
+    /// Font scale: 1 = 8x16 glyphs, 2 = 16x32
+    font_scale: u32,
 }
 
 impl Terminal {
@@ -93,6 +111,41 @@ impl Terminal {
             dec_colm: false,
             dec_tcem: true,
             clipboard: None,
+            tab_count: 1,
+            active_tab: 0,
+            saved: [None, None, None, None],
+            font_scale: 1,
+        }
+    }
+
+    /// Open a new tab (fresh VT screen) and switch to it. Returns false at MAX_TABS.
+    pub fn add_tab(&mut self) -> bool {
+        if self.tab_count >= MAX_TABS {
+            return false;
+        }
+        let idx = self.tab_count;
+        let mut tab = Box::new((ScreenBuffer::new(), Parser::new()));
+        let banner = alloc::format!("LobsterOS Terminal - tab {}\r\nlobster:/# ", idx + 1);
+        for b in banner.bytes() {
+            tab.1.feed(b, &mut tab.0);
+        }
+        self.saved[idx] = Some(tab);
+        self.tab_count += 1;
+        self.switch_tab(idx);
+        true
+    }
+
+    /// Make tab `idx` the active tab (swaps its screen/parser into place).
+    pub fn switch_tab(&mut self, idx: usize) {
+        if idx >= self.tab_count || idx == self.active_tab {
+            return;
+        }
+        if let Some(mut other) = self.saved[idx].take() {
+            core::mem::swap(&mut self.screen, &mut other.0);
+            core::mem::swap(&mut self.parser, &mut other.1);
+            self.saved[self.active_tab] = Some(other);
+            self.active_tab = idx;
+            self.scrollback_offset = 0;
         }
     }
 
@@ -464,6 +517,105 @@ pub fn mirror_serial_byte(byte: u8) {
     term.parser.feed(byte, &mut term.screen);
 }
 
+/// x offset (from the client area's left edge) of tab-bar button `i`
+/// (`i == tab_count` is the '+' button).
+fn tab_btn_offset(i: usize) -> u32 {
+    4 + i as u32 * (TAB_BTN_W + TAB_BTN_GAP)
+}
+
+/// Set the terminal font scale (1 = 8x16, 2 = 16x32). Out-of-range values clamp.
+pub fn set_font_scale(scale: u32) {
+    get_terminal().font_scale = scale.clamp(1, 2);
+    crate::wm::dirty::mark();
+}
+
+/// Current terminal font scale (1 or 2).
+pub fn font_scale() -> u32 {
+    get_terminal().font_scale
+}
+
+/// Ctrl+Plus: 1x -> 2x
+pub fn font_scale_up() {
+    set_font_scale(font_scale() + 1);
+}
+
+/// Ctrl+Minus: 2x -> 1x
+pub fn font_scale_down() {
+    set_font_scale(font_scale().saturating_sub(1));
+}
+
+/// Tab-bar click handling (screen coords). Returns true if consumed.
+pub fn handle_click(cx: u32, cy: u32) -> bool {
+    use crate::wm::window;
+    let Some(win_id) = window::find_by_title("Terminal") else { return false };
+    let Some((x, y, w, h)) = window::get_info(win_id) else { return false };
+    let client_x = x + FRAME_BORDER;
+    let client_y = y + FRAME_BORDER + FRAME_TITLE;
+    let client_w = w.saturating_sub(2 * FRAME_BORDER);
+    let _ = h;
+    if cx < client_x || cx >= client_x + client_w || cy < client_y || cy >= client_y + TAB_BAR_H {
+        return false;
+    }
+    let term = get_terminal();
+    let rel_x = cx - client_x;
+    // Buttons: tabs 0..tab_count, then '+' (if room)
+    let slots = if term.tab_count < MAX_TABS { term.tab_count + 1 } else { term.tab_count };
+    for i in 0..slots {
+        let bx = tab_btn_offset(i);
+        if rel_x >= bx && rel_x < bx + TAB_BTN_W && cy >= client_y + 2 && cy < client_y + TAB_BAR_H - 2 {
+            window::focus(win_id);
+            if i < term.tab_count {
+                term.switch_tab(i);
+            } else {
+                term.add_tab();
+            }
+            crate::wm::dirty::mark();
+            return true;
+        }
+    }
+    false
+}
+
+/// Draw one glyph scaled `scale`x (integer) from the baked-in 8x16 font,
+/// merging horizontal runs of set pixels into rects. Transparent background.
+#[cfg(feature = "qemu_raspi5b")]
+fn draw_glyph_scaled(
+    fb: &crate::display::fb::FramebufferInfo,
+    x: u32,
+    y: u32,
+    ch: char,
+    fg: u32,
+    scale: u32,
+) {
+    let code = ch as usize;
+    if code >= 128 {
+        return;
+    }
+    let glyph = &crate::display::console::FONT[code];
+    for row in 0..16u32 {
+        let bits = glyph[row as usize];
+        let mut col = 0u32;
+        while col < 8 {
+            if (bits >> (7 - col)) & 1 == 0 {
+                col += 1;
+                continue;
+            }
+            let start = col;
+            while col < 8 && (bits >> (7 - col)) & 1 != 0 {
+                col += 1;
+            }
+            crate::wm::widget::fill_rect(
+                fb,
+                x + start * scale,
+                y + row * scale,
+                (col - start) * scale,
+                scale,
+                fg,
+            );
+        }
+    }
+}
+
 /// Render terminal screen buffer directly to the framebuffer in each terminal window.
 /// Called from the WM tick on QEMU (direct-to-framebuffer mode).
 #[cfg(feature = "qemu_raspi5b")]
@@ -505,14 +657,44 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
             continue;
         }
 
-        let line_height = 16u32;
-        let char_width = 8u32;
-        let visible_rows = (client_h / line_height) as usize;
-        let visible_cols = (client_w / char_width) as usize;
-        let scrollback = term.scrollback_offset;
+        let scale = term.font_scale;
+        let line_height = 16u32 * scale;
+        let char_width = 8u32 * scale;
+        let theme = crate::wm::theme::current();
 
         // Clear client area with terminal background color
         crate::wm::widget::fill_rect(fb, client_x, client_y, client_w, client_h, 0xFF000000);
+
+        // Tab bar: one button per tab + '+' (while under MAX_TABS)
+        crate::wm::widget::fill_rect(fb, client_x, client_y, client_w, TAB_BAR_H, theme.title_bar_unfocused);
+        let slots = if term.tab_count < MAX_TABS { term.tab_count + 1 } else { term.tab_count };
+        for i in 0..slots {
+            let bx = client_x + tab_btn_offset(i);
+            let by = client_y + 2;
+            let active = i == term.active_tab;
+            let bg = if active { theme.win_border } else { theme.btn_bg };
+            crate::wm::widget::fill_rect(fb, bx, by, TAB_BTN_W, TAB_BAR_H - 4, bg);
+            let label = if i < term.tab_count {
+                (b'1' + i as u8) as char
+            } else {
+                '+'
+            };
+            let mut lbuf = [0u8; 4];
+            graphics::draw_text(
+                fb,
+                bx + (TAB_BTN_W - 8) / 2,
+                by + (TAB_BAR_H - 4 - 16) / 2,
+                label.encode_utf8(&mut lbuf),
+                if active { 0xFFFFFFFF } else { theme.btn_text },
+                bg,
+            );
+        }
+
+        let body_y = client_y + TAB_BAR_H;
+        let body_h = client_h.saturating_sub(TAB_BAR_H + 4);
+        let visible_rows = (body_h / line_height) as usize;
+        let visible_cols = (client_w.saturating_sub(4) / char_width) as usize;
+        let scrollback = term.scrollback_offset;
 
         // Draw each visible cell
         for row_idx in 0..visible_rows.min(term.screen.rows) {
@@ -520,12 +702,16 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
             if actual_row >= term.screen.rows {
                 break;
             }
-            let y = client_y + 4 + (row_idx as u32 * line_height);
+            let y = body_y + 4 + (row_idx as u32 * line_height);
             for col_idx in 0..visible_cols.min(term.screen.cols) {
                 let cell = &term.screen.cells[actual_row][col_idx];
                 let x = client_x + 4 + (col_idx as u32 * char_width);
                 if cell.ch != ' ' && cell.ch != '\0' {
-                    graphics::draw_text(fb, x, y, &cell.ch.to_string(), cell.fg, cell.bg);
+                    if scale == 1 {
+                        graphics::draw_text(fb, x, y, &cell.ch.to_string(), cell.fg, cell.bg);
+                    } else {
+                        draw_glyph_scaled(fb, x, y, cell.ch, cell.fg, scale);
+                    }
                 }
             }
         }
@@ -534,9 +720,9 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
         if scrollback == 0 && term.dec_tcem {
             let cr = term.screen.cursor_row;
             let cc = term.screen.cursor_col;
-            if cr < term.screen.rows && cc < term.screen.cols {
+            if cr < term.screen.rows && cc < term.screen.cols && cr < visible_rows && cc < visible_cols {
                 let cx = client_x + 4 + (cc as u32 * char_width);
-                let cy = client_y + 4 + (cr as u32 * line_height);
+                let cy = body_y + 4 + (cr as u32 * line_height);
                 crate::wm::widget::fill_rect(fb, cx, cy, char_width, line_height, 0xFFFFFFFF);
             }
         }

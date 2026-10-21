@@ -416,6 +416,11 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
             return;
         }
 
+        // Terminal tab bar (before generic window focus routing)
+        if crate::apps::terminal::handle_click(cx, cy) {
+            return;
+        }
+
         // EL0 user windows get content clicks before normal focus routing.
         // Chrome hits (title bar, buttons, borders) fall through to
         // window::handle_event below for drag/close/maximize/resize.
