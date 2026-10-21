@@ -9,6 +9,34 @@
 //!
 //! The kernel owns the backing buffer; the WM composites user windows
 //! with the standard themed frame so they behave like any other window.
+//!
+//! # Zero-copy shared framebuffer (S5)
+//!
+//! Windows created by a real EL0 process (task `is_user` with a non-zero
+//! `ttbr0_phys`) are *frame-backed*: the pixel buffer is a set of 4KB
+//! physical frames from `frame_alloc` (one `allocate_frame()` per page, so
+//! no contiguity is required; the phys addrs live in `UserWindow::frames`,
+//! max 1024 pages = 1024x1024x4). Kernel tasks fall back to the legacy
+//! kernel-heap buffer (`Backing::Heap`).
+//!
+//!   SYS_WIN_MAP(win_id) → user VA (u64::MAX on failure)
+//!
+//! maps the frames into the caller's address space (EL0 RW, non-exec) at
+//!
+//!   user VA = 0x4000_0000 + slot_index * 0x0100_0000   (16MB per slot)
+//!
+//! as row-major ARGB32, stride = width * 4 bytes (no padding), so pixel
+//! (x, y) is the u32 at `va + (y * w + x) * 4`. Four slots span
+//! 0x4000_0000..0x4400_0000, clear of the user heap (0x2000_0000) and
+//! stack (0x7F00_0000). The pages are also mirrored into the kernel TTBR0
+//! (nG cleared, like the ELF loader does) so EL0 can run on it.
+//!
+//! The kernel never uses the user mapping: SYS_WIN_FILL and the compositor
+//! reach the same frames through the direct phys map
+//! (`PHYS_MAP_OFFSET + pa`), so writes through the mapping, SYS_WIN_FILL
+//! and the WM all see one buffer. After drawing, call SYS_WIN_FLUSH.
+//! SYS_WIN_CLOSE unmaps and frees the frames. Windows still owned by an
+//! exited process are not reclaimed (pre-existing limitation of this module).
 
 use crate::display::fb::FramebufferInfo;
 
@@ -16,6 +44,33 @@ const MAX_USER_WINDOWS: usize = 4;
 const MAX_TITLE: usize = 32;
 
 const MAX_WIN_EVENTS: usize = 16;
+
+const PAGE: usize = 4096;
+/// 1024x1024 ARGB32 = 4MB = 1024 pages.
+const MAX_WIN_PAGES: usize = 1024;
+/// User VA of slot 0's mapping, and the per-slot stride.
+const USER_MAP_BASE: u64 = 0x4000_0000;
+const USER_MAP_STRIDE: u64 = 0x0100_0000;
+
+/// EL0 read/write, normal memory, non-global, never executable.
+const PTE_WIN_USER: u64 = crate::memory::vmem::PTE_VALID
+    | crate::memory::vmem::PTE_PAGE
+    | crate::memory::vmem::PTE_ACCESS
+    | crate::memory::vmem::PTE_NG
+    | crate::memory::vmem::PTE_ISH
+    | crate::memory::mmu::MT_NORMAL
+    | crate::memory::mmu::PTE_AP_EL0_RW
+    | crate::memory::mmu::PTE_UXN
+    | crate::memory::mmu::PTE_PXN;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Backing {
+    None,
+    /// Legacy kernel-heap buffer (`UserWindow::buf`).
+    Heap,
+    /// Physical frames (`UserWindow::frames[..npages]`), shareable with EL0.
+    Frames,
+}
 
 /// Packed input event word delivered to EL0 apps:
 ///   bits  0..7   kind   (1 = press, 2 = release)
@@ -42,7 +97,12 @@ struct UserWindow {
     active: bool,
     owner_pid: u64,
     wm_id: Option<u32>,
+    backing: Backing,
     buf: *mut u32,
+    frames: [u64; MAX_WIN_PAGES],
+    npages: usize,
+    /// User VA the frames are mapped at (0 = not mapped).
+    user_va: u64,
     buf_w: u32,
     buf_h: u32,
     capacity: usize,
@@ -61,7 +121,11 @@ static mut WINDOWS: [UserWindow; MAX_USER_WINDOWS] = [UserWindow {
     active: false,
     owner_pid: 0,
     wm_id: None,
+    backing: Backing::None,
     buf: core::ptr::null_mut(),
+    frames: [0; MAX_WIN_PAGES],
+    npages: 0,
+    user_va: 0,
     buf_w: 0,
     buf_h: 0,
     capacity: 0,
@@ -92,6 +156,70 @@ fn alloc_buffer(w: u32, h: u32) -> (usize, *mut u32) {
     (pixels, ptr as *mut u32)
 }
 
+/// Allocate zeroed frames for a `w`x`h` buffer into `frames`; returns the
+/// page count, or None (everything rolled back) when out of memory.
+fn alloc_frames(w: u32, h: u32, frames: &mut [u64; MAX_WIN_PAGES]) -> Option<usize> {
+    let bytes = (w as usize) * (h as usize) * 4;
+    let npages = (bytes + PAGE - 1) / PAGE;
+    if npages == 0 || npages > MAX_WIN_PAGES {
+        return None;
+    }
+    for i in 0..npages {
+        match crate::memory::frame_alloc::allocate_frame() {
+            Some(f) => {
+                unsafe {
+                    core::ptr::write_bytes((crate::memory::PHYS_MAP_OFFSET + f.0) as *mut u8, 0, PAGE)
+                };
+                frames[i] = f.0;
+            }
+            None => {
+                free_frames(frames, i);
+                return None;
+            }
+        }
+    }
+    Some(npages)
+}
+
+fn free_frames(frames: &[u64; MAX_WIN_PAGES], n: usize) {
+    for &pa in &frames[..n] {
+        crate::memory::frame_alloc::deallocate_frame(crate::memory::PhysAddr::new(pa));
+    }
+}
+
+/// Kernel-visible pointer to pixel `idx` (row-major) of a window.
+#[inline]
+unsafe fn pixel_ptr(slot: &UserWindow, idx: usize) -> *mut u32 {
+    match slot.backing {
+        Backing::Frames => {
+            let off = idx * 4;
+            let pa = slot.frames[off / PAGE] + (off % PAGE) as u64;
+            (crate::memory::PHYS_MAP_OFFSET + pa) as *mut u32
+        }
+        _ => slot.buf.add(idx),
+    }
+}
+
+/// TTBR0 of the calling task if it is an EL0 process with its own address space.
+fn current_user_ttbr0() -> Option<u64> {
+    let idx = crate::sched::find_task_index(crate::sched::current_pid())?;
+    unsafe {
+        let t = crate::sched::TASK_TABLE[idx].as_ref()?;
+        if t.is_user && t.ttbr0_phys != 0 {
+            Some(t.ttbr0_phys)
+        } else {
+            None
+        }
+    }
+}
+
+fn kernel_ttbr0() -> u64 {
+    let v: u64;
+    unsafe { core::arch::asm!("mrs {}, TTBR0_EL1", out(reg) v) };
+    // Strip the ASID field / CnP bit; keep the table base.
+    v & 0x0000_FFFF_FFFF_F000
+}
+
 /// Create a user window. Returns the syscall error code (-1 on failure).
 pub fn sys_win_create(x: u64, y: u64, w: u64, h: u64, title_ptr: u64) -> u64 {
     if w == 0 || h == 0 || w > 1024 || h > 1024 {
@@ -103,10 +231,20 @@ pub fn sys_win_create(x: u64, y: u64, w: u64, h: u64, title_ptr: u64) -> u64 {
             if slot.active {
                 continue;
             }
-            let (cap, buf) = alloc_buffer(w as u32, h as u32);
-            if buf.is_null() {
-                return u64::MAX;
-            }
+            // Frame-backed (shareable via SYS_WIN_MAP) for real EL0
+            // processes; heap-backed for kernel tasks.
+            let (cap, buf, backing, npages) = if current_user_ttbr0().is_some() {
+                match alloc_frames(w as u32, h as u32, &mut slot.frames) {
+                    Some(n) => (w as usize * h as usize, core::ptr::null_mut(), Backing::Frames, n),
+                    None => return u64::MAX,
+                }
+            } else {
+                let (cap, buf) = alloc_buffer(w as u32, h as u32);
+                if buf.is_null() {
+                    return u64::MAX;
+                }
+                (cap, buf, Backing::Heap, 0)
+            };
             // Copy the title from USER memory (bounded read via byte walk)
             let mut tlen = 0usize;
             let mut i = 0usize;
@@ -122,6 +260,9 @@ pub fn sys_win_create(x: u64, y: u64, w: u64, h: u64, title_ptr: u64) -> u64 {
             slot.title_len = tlen;
             slot.owner_pid = pid;
             slot.buf = buf;
+            slot.backing = backing;
+            slot.npages = npages;
+            slot.user_va = 0;
             slot.capacity = cap;
             slot.buf_w = w as u32;
             slot.buf_h = h as u32;
@@ -177,13 +318,65 @@ pub fn sys_win_fill(win_id: u64, x: u64, y: u64, w: u64, h: u64, argb: u64) -> u
         let y_end = (y + h).min(bh);
         let pixel = argb as u32;
         for py in y..y_end {
-            let row = slot.buf.add((py * bw) as usize);
             for px in x..x_end {
-                core::ptr::write_volatile(row.add(px as usize), pixel);
+                core::ptr::write_volatile(pixel_ptr(slot, (py * bw + px) as usize), pixel);
             }
         }
         slot.dirty = true;
         0
+    }
+}
+
+/// Map a window's pixel buffer into the caller's address space (zero-copy).
+/// Returns the user VA of the ARGB32 buffer, or u64::MAX on failure.
+/// Idempotent: a second call returns the same VA.
+pub fn sys_win_map(win_id: u64) -> u64 {
+    unsafe {
+        let slot = match slot_by_id(win_id) {
+            Some(s) => s,
+            None => return u64::MAX,
+        };
+        let Some(ttbr0) = current_user_ttbr0() else { return u64::MAX };
+        if slot.user_va != 0 {
+            return slot.user_va;
+        }
+
+        // Legacy heap-backed window (created by a kernel task): migrate
+        // the pixels into frames first.
+        if slot.backing == Backing::Heap {
+            let Some(n) = alloc_frames(slot.buf_w, slot.buf_h, &mut slot.frames) else {
+                return u64::MAX;
+            };
+            slot.backing = Backing::Frames;
+            let pixels = slot.buf_w as usize * slot.buf_h as usize;
+            let old = slot.buf;
+            for i in 0..pixels {
+                core::ptr::write_volatile(pixel_ptr(slot, i), *old.add(i));
+            }
+            let layout = core::alloc::Layout::from_size_align(slot.capacity * 4, 16)
+                .unwrap_or(core::alloc::Layout::from_size_align(1, 1).unwrap());
+            crate::memory::heap::heap_free(old as *mut u8, layout);
+            slot.buf = core::ptr::null_mut();
+            slot.npages = n;
+        }
+        if slot.backing != Backing::Frames {
+            return u64::MAX;
+        }
+
+        let va = USER_MAP_BASE + slot_index(slot) as u64 * USER_MAP_STRIDE;
+        let ktt = kernel_ttbr0();
+        // The kernel runs EL0 on its own TTBR0 (see elf.rs), so mirror
+        // there too, with nG cleared (kernel ASID 0).
+        let kflags = PTE_WIN_USER & !crate::memory::vmem::PTE_NG;
+        for i in 0..slot.npages {
+            let pva = va + (i * PAGE) as u64;
+            crate::sched::elf::map_user_page(ttbr0, pva, slot.frames[i], PTE_WIN_USER);
+            if ktt != ttbr0 {
+                crate::sched::elf::map_user_page(ktt, pva, slot.frames[i], kflags);
+            }
+        }
+        slot.user_va = va;
+        va
     }
 }
 
@@ -211,13 +404,35 @@ pub fn sys_win_close(win_id: u64) -> u64 {
         if let Some(wm_id) = slot.wm_id {
             crate::wm::window::destroy(wm_id);
         }
-        if !slot.buf.is_null() {
-            let layout = core::alloc::Layout::from_size_align(slot.capacity * 4, 16)
-                .unwrap_or(core::alloc::Layout::from_size_align(1, 1).unwrap());
-            crate::memory::heap::heap_free(slot.buf as *mut u8, layout);
-        }
+        // Deactivate first so the compositor stops reading the buffer.
         slot.active = false;
         slot.wm_id = None;
+        match slot.backing {
+            Backing::Frames => {
+                if slot.user_va != 0 {
+                    if let Some(ttbr0) = current_user_ttbr0() {
+                        let ktt = kernel_ttbr0();
+                        for i in 0..slot.npages {
+                            let va = slot.user_va + (i * PAGE) as u64;
+                            crate::memory::process_vmem::unmap_user_page(ttbr0, va);
+                            if ktt != ttbr0 {
+                                crate::memory::process_vmem::unmap_user_page(ktt, va);
+                            }
+                        }
+                    }
+                }
+                free_frames(&slot.frames, slot.npages);
+            }
+            Backing::Heap if !slot.buf.is_null() => {
+                let layout = core::alloc::Layout::from_size_align(slot.capacity * 4, 16)
+                    .unwrap_or(core::alloc::Layout::from_size_align(1, 1).unwrap());
+                crate::memory::heap::heap_free(slot.buf as *mut u8, layout);
+            }
+            _ => {}
+        }
+        slot.backing = Backing::None;
+        slot.npages = 0;
+        slot.user_va = 0;
         slot.buf = core::ptr::null_mut();
         crate::wm::dirty::mark();
         0
@@ -343,12 +558,12 @@ pub fn render_to_windows(fb: &FramebufferInfo) {
             let (cx, cy, cw, ch) =
                 crate::wm::window_frame::draw_frame(fb, wm_id, wx, wy, ww, wh, title, focused);
             // Blit the backing buffer into the client area (clip to both)
-            if cw == 0 || ch == 0 || slot.buf.is_null() {
+            if cw == 0 || ch == 0 || slot.backing == Backing::None {
                 continue;
             }
             for py in 0..ch.min(slot.buf_h) {
                 for px in 0..cw.min(slot.buf_w) {
-                    let argb = *slot.buf.add((py * slot.buf_w + px) as usize);
+                    let argb = core::ptr::read_volatile(pixel_ptr(slot, (py * slot.buf_w + px) as usize));
                     crate::display::graphics::draw_pixel(
                         fb,
                         cx + px,
