@@ -96,7 +96,10 @@ Everything else (App Store installs, multiple apps, shell while an app runs) unl
 - [ ] **C5. Multi-user login**: greeter, sessions, per-user /home
 - [ ] **C6. Dynamic linker v2**: shared-lib resolution for EL0 apps
 - [ ] **C7. Signals for EL0**: SIGINT/SIGTERM delivery to user processes
-- [ ] **C8. exec/fork for GUI apps**: launcher uses fork+exec (ties S2)
+- [x] **C8. argv for EL0 apps** — DONE bd45d85: `run <path> [args...] [&]` and
+      `python <script.py>` pass argc/argv at EL0 entry (argv[0]=program path, block
+      below SP so program pushes can't corrupt it). Verified with args-demo ELF in
+      fg+bg. fork/exec-style launcher spawn remains a later refinement.
 - [ ] **C9. USB stack on real Pi5** (xHCI exists; needs on-metal bring-up)
 
 ## D. Emulator (lobster-qemu)
