@@ -168,6 +168,40 @@ pub fn paint_to_screen() {
 }
 
 /// Paint a single wallpaper row into a destination slice (for dirty-rect repair).
+/// Repaint an exposed screen region with the wallpaper gradient (used
+/// when a window is destroyed — nothing else repaints the desktop on
+/// the QEMU direct-FB path).
+pub fn erase_region(x: u32, y: u32, w: u32, h: u32) {
+    let fb = crate::display::fb::get_info();
+    if fb.width == 0 || fb.height == 0 {
+        return;
+    }
+    let x1 = x.min(fb.width);
+    let y1 = y.min(fb.height);
+    let x2 = (x + w).min(fb.width);
+    let y2 = (y + h).min(fb.height);
+    if x2 <= x1 || y2 <= y1 {
+        return;
+    }
+    for row in y1..y2 {
+        // paint_row computes the gradient color for this y; write it
+        // directly across the region's columns.
+        let p = active();
+        let (tr, tg, tb) = ((p.top >> 16) & 0xFF, (p.top >> 8) & 0xFF, p.top & 0xFF);
+        let (br, bg_, bb) = ((p.bottom >> 16) & 0xFF, (p.bottom >> 8) & 0xFF, p.bottom & 0xFF);
+        let t = row as f32 / fb.height.max(1) as f32;
+        let r = tr as f32 + (br as f32 - tr as f32) * t;
+        let g = tg as f32 + (bg_ as f32 - tg as f32) * t;
+        let b = tb as f32 + (bb as f32 - tb as f32) * t;
+        let argb = 0xFF000000 | ((r as u32 & 0xFF) << 16) | ((g as u32 & 0xFF) << 8) | (b as u32 & 0xFF);
+        let mut col = x1;
+        while col < x2 {
+            crate::display::graphics::draw_pixel(&fb, col, row, argb);
+            col += 1;
+        }
+    }
+}
+
 pub fn paint_row(fb: &crate::display::fb::FramebufferInfo, y: u32, dst: &mut [u32]) {
     let p = active();
     let (tr, tg, tb) = ((p.top >> 16) & 0xFF, (p.top >> 8) & 0xFF, p.top & 0xFF);

@@ -1565,6 +1565,9 @@ pub fn reap_zombies() -> usize {
         for i in 0..MAX_TASKS {
             if let Some(ref task) = TASK_TABLE[i] {
                 if task.state == TaskState::Zombie {
+                    // S6: tear down any user windows the app left open
+                    // (frames + WM chrome) before freeing the task.
+                    crate::wm::user_windows::close_all_for_pid(task.pid);
                     // Free kernel stack
                     for page in 0..KERN_STACK_PAGES {
                         let offset = (page as u64) * PAGE_SIZE;

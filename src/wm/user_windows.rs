@@ -491,6 +491,59 @@ pub fn hit_test(sx: u32, sy: u32) -> Option<(u64, u32, u32, bool)> {
     None
 }
 
+/// Tear down every user window owned by `pid` (frame-backed or heap),
+/// including the WM chrome. Called when the process is killed/reaped so
+/// closed apps never leak windows or frames (S6).
+pub fn close_all_for_pid(pid: u64) {
+    unsafe {
+        for slot in WINDOWS.iter_mut() {
+            if !slot.active || slot.owner_pid != pid {
+                continue;
+            }
+            if let Some(wm_id) = slot.wm_id {
+                crate::wm::window::destroy(wm_id);
+            }
+            slot.active = false;
+            slot.wm_id = None;
+            match slot.backing {
+                Backing::Frames => {
+                    for i in 0..slot.npages {
+                        if slot.frames[i] != 0 {
+                            crate::memory::frame_alloc::deallocate_frame(
+                                crate::memory::PhysAddr(slot.frames[i]),
+                            );
+                            slot.frames[i] = 0;
+                        }
+                    }
+                }
+                Backing::Heap => {
+                    if !slot.buf.is_null() {
+                        let layout = core::alloc::Layout::from_size_align(slot.capacity * 4, 16)
+                            .unwrap_or(core::alloc::Layout::from_size_align(1, 1).unwrap());
+                        crate::memory::heap::heap_free(slot.buf as *mut u8, layout);
+                        slot.buf = core::ptr::null_mut();
+                    }
+                }
+                Backing::None => {}
+            }
+        }
+        crate::wm::dirty::mark();
+    }
+}
+
+/// Find the owning PID of the user window registered under a WM window id.
+/// Used by the WM close path to kill the app whose window was closed (S6).
+pub fn owner_of_wm(wm_id: u32) -> Option<u64> {
+    unsafe {
+        for slot in WINDOWS.iter() {
+            if slot.active && slot.wm_id == Some(wm_id) {
+                return Some(slot.owner_pid);
+            }
+        }
+    }
+    None
+}
+
 /// Focus the WM window of a user window (on click).
 pub fn focus_window(win_id: u64) {
     unsafe {

@@ -971,6 +971,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         // slice ends at the task's next SYS_SLEEP — control returns here
         // so the shell and desktop stay fully responsive.
         crate::sched::run_bg_slices();
+        // S6: periodically reap zombie tasks (frees stacks + windows).
+        static REAP_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+        if REAP_TICK.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % 64 == 0 {
+            crate::sched::reap_zombies();
+        }
         // S3: slice returns leave IRQs hard-masked (the cooperative-exit
         // eret window must be atomic vs the arch timer). Re-enable here
         // each main-loop iteration if preemption is on.

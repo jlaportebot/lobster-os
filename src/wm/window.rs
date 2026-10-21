@@ -677,6 +677,21 @@ fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
 
             // Check close button
             if is_on_close_button(cx, cy, win_x, win_y, win_w) {
+                // S6: closing an EL0 app window kills its process (its
+                // slices stop; reap frees stacks). Kernel windows just
+                // destroy as before.
+                if let Some(owner_pid) = crate::wm::user_windows::owner_of_wm(win_id) {
+                    // S6: deactivate the app's user windows NOW (not at
+                    // reap) — the WM would keep re-drawing the dead app's
+                    // pixels every dirty cycle otherwise.
+                    if let Some((wx, wy, ww, wh)) = get_info(win_id) {
+                        crate::wm::wallpaper::erase_region(wx, wy, ww, wh);
+                    }
+                    crate::wm::user_windows::close_all_for_pid(owner_pid);
+                    crate::sched::kill(owner_pid);
+                    crate::wm::dirty::mark();
+                    return;
+                }
                 destroy(win_id);
                 return;
             }
