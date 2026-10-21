@@ -139,12 +139,14 @@ impl Timer {
     }
 
     /// Handle the architectural timer IRQ: re-arm TVAL + clear status.
+    /// Re-arms at the preempt slice interval (10ms).
     pub fn handle_arch_timer_irq() {
         unsafe {
             let freq: u64;
             core::arch::asm!("mrs {}, CNTFRQ_EL0", out(reg) freq);
             if freq > 0 {
-                let tval = freq.saturating_mul(TICK_INTERVAL_US as u64) / 1_000_000;
+                const SLICE_MS: u64 = 10;
+                let tval = freq.saturating_mul(SLICE_MS) / 1000;
                 core::arch::asm!("msr CNTP_TVAL_EL0, {0}", in(reg) tval);
             }
             // Writing CTL with Imask=0,Enable=1 clears the pending state

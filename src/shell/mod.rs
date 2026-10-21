@@ -4205,8 +4205,12 @@ fn cmd_preempt(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                         Uart10::puts("preempt: GIC+PMR on, timer NOT armed\r\n");
                     } else {
                         // Arm the EL1 physical timer, 10ms period
-                        crate::arch::timer::Timer::enable_arch_timer(10);
-                        Uart10::puts("preempt: architectural timer ON (PPI 29, 10ms)\r\n");
+                        // First tick delayed 500ms so it lands while
+                        // the main loop idles (a 10ms first tick races
+                        // the command-return path — observed as the
+                        // abort-at-VA-0 storm). Handler re-arms at 10ms.
+                        crate::arch::timer::Timer::enable_arch_timer(500);
+                        Uart10::puts("preempt: architectural timer ON (PPI 29, 10ms slice)\r\n");
                     }
                     // Unmask IRQs + record mode for the main loop
                     crate::sched::set_preempt(true);

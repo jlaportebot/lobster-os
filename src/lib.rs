@@ -929,7 +929,17 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::println!("[boot] Timer IRQ source enabled (hardware ticks)");
     }
     #[cfg(feature = "qemu_raspi5b")]
-    crate::println!("[boot] QEMU build: cooperative tick mode (hardware ticks masked)");
+    {
+        // S3 plumbing is in place but preemption stays opt-in ('preempt
+        // on'): a tick landing at EL0 while a FOREGROUND run_and_wait app
+        // executes corrupts the return PC (observed: PC Alignment Fault
+        // at ELR=0x3 under full-suite load). The desktop path and the
+        // S2 sliced-background path are tick-stable (60s soak, bg apps
+        // with argv complete under ticks) — the remaining bug is the
+        // EL0-taken-IRQ return through run_and_wait's eret window.
+        // Nothing is armed here; 'preempt on' does the full setup.
+    }
+    crate::println!("[boot] QEMU build: cooperative tick mode (preempt opt-in: 'preempt on')");
 
     // Boot init is complete — safe to take interrupts now.
     crate::println!("[boot] Enabling IRQs...");
