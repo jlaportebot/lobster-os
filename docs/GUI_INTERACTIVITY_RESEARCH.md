@@ -1,3 +1,5 @@
+<!-- SUPERSEDED 2026-10-25: see DESKTOP_PLAN.md (living) and AUDIT_2026-10-25.md (queue). Do not add work here. -->
+
 # GUI Interactivity Research for LobsterOS
 
 ## Executive Summary
