@@ -1,3 +1,5 @@
+<!-- SUPERSEDED 2026-10-25: see docs/DESKTOP_PLAN.md (living) and docs/AUDIT_2026-10-25.md (queue). Do not add work here. -->
+
 # LobsterOS + Pi5 Emulator — Deep Audit & Fix Plan
 
 ## Audit Results (Aug 6, 2026)

@@ -1,3 +1,5 @@
+<!-- SUPERSEDED 2026-10-25: see docs/DESKTOP_PLAN.md (living) and docs/AUDIT_2026-10-25.md (queue). Do not add work here. -->
+
 # LobsterOS Completion Plan — v0.5 Daily Driver
 
 ## Current State
