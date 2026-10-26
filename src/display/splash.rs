@@ -23,6 +23,8 @@ pub enum SplashState {
 static mut SPLASH_STATE: SplashState = SplashState::Inactive;
 static mut SPLASH_TICKS: u64 = 0;
 static mut BOOT_PROGRESS: u32 = 0;
+/// system_time_us() of the most recent update_progress call (E2 marker).
+static mut LAST_BOOT_STEP_US: u64 = 0;
 static mut BOOT_MESSAGES: u64 = 0;
 
 /// Total boot steps for progress bar
@@ -105,6 +107,13 @@ pub fn update_progress(step: u32, _msg: &str) {
         BOOT_MESSAGES += 1;
     }
 
+    // E2 boot instrumentation: timestamp every boot step relative to kernel
+    // entry. One line per step; cheap (a single CLO read + one println).
+    let now_us = crate::arch::timer::Timer::system_time_us();
+    let now_ms = now_us / 1_000;
+    unsafe { LAST_BOOT_STEP_US = now_us };
+    crate::println!("[boot-t] step={} t_ms={}", step, now_ms);
+
     if unsafe { SPLASH_STATE } != SplashState::Active {
         return;
     }
@@ -138,6 +147,18 @@ pub fn tick() {
     if unsafe { SPLASH_TICKS } > 100 && unsafe { BOOT_PROGRESS } >= BOOT_STEPS {
         transition_to_desktop();
     }
+
+    // E2: time-based hand-over — transition once the last boot step finished at
+    // least DESKTOP_READY_GRACE_MS ago (replaces the fixed 100-tick rule, which
+    // imposed ~3.3s of artificial delay; the tick cadence is 33ms).
+    const DESKTOP_READY_GRACE_MS: u64 = 300;
+    let done_us = unsafe { LAST_BOOT_STEP_US };
+    if unsafe { BOOT_PROGRESS } >= BOOT_STEPS && done_us > 0 {
+        let now_us = crate::arch::timer::Timer::system_time_us();
+        if now_us.saturating_sub(done_us) >= DESKTOP_READY_GRACE_MS * 1_000 {
+            transition_to_desktop();
+        }
+    }
 }
 
 /// Transition from splash to desktop
@@ -154,6 +175,10 @@ pub fn transition_to_desktop() {
     // 2. Blend splash → desktop over N frames
     // 3. Switch to desktop
     // For now, instant transition
+    // E2: desktop-ready marker — the harness waits on this instead of a fixed
+    // 16s sleep, and it doubles as the boot-time baseline record.
+    let now_us = crate::arch::timer::Timer::system_time_us();
+    crate::println!("desktop-ready t_ms={}", now_us / 1_000);
     crate::println!("[splash] Transitioning to desktop");
 
     unsafe {
