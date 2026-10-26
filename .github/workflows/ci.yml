@@ -15,7 +15,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          target: aarch64-unknown-none
+          target: aarch64-unknown-none,aarch64-unknown-linux-gnu
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -39,8 +39,8 @@ jobs:
       - name: Build kernel
         run: cargo build --target aarch64-unknown-none --release
 
-      - name: Run unit tests
-        run: cargo test
+      - name: Run unit tests (host)
+        run: cargo test --features std --target aarch64-unknown-linux-gnu --lib
 
       - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
