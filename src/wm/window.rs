@@ -792,7 +792,7 @@ fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
             if let Some(fb) = compositor::fb_info() {
                 let (cx, cy) = crate::wm::input::cursor_pos();
                 let edge_zone = 24u32;
-                use crate::wm::window::SnapPosition;
+
                 if cx <= edge_zone {
                     resize(drag_win, fb.width / 2, fb.height);
                     move_window(drag_win, 0, 0);

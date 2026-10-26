@@ -232,7 +232,7 @@ impl FileManager {
 
     /// Copy selected entry to destination
     pub fn copy_selected(&mut self, dest_path: &str) -> Result<(), &'static str> {
-        use crate::fs::vfs::{create, open, read_file, write};
+        use crate::fs::vfs::read_file;
         if let Some(entry) = self.get_selected() {
             let entry_name = &entry.name; // Already a String
             let src_path = if self.current_path == "/" {

@@ -64,7 +64,7 @@ impl SystemMonitor {
         x: u32,
         y: u32,
         width: u32,
-        height: u32,
+        _height: u32,
     ) {
         // CPU usage section
         let cpu_y = y + 30;
@@ -159,7 +159,7 @@ fn get_system_monitor() -> &'static mut SystemMonitor {
 
 /// Render System Monitor to its window (QEMU direct-to-framebuffer mode)
 #[cfg(feature = "qemu_raspi5b")]
-pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
+pub fn render_to_windows(_fb: &crate::display::fb::FramebufferInfo) {
     // Find the System Monitor window by title
     if let Some(win_id) = crate::wm::window::find_by_title("System Monitor") {
         if let Some(win) = crate::wm::window::get(win_id) {

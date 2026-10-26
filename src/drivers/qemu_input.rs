@@ -131,11 +131,11 @@ pub fn poll() -> Option<HidEvent> {
         // Convert raw event to HidEvent
         // Read fields individually to avoid alignment issues with packed struct
         let ev_type = raw.ev_type;
-        let flags = raw.flags;
+        let _flags = raw.flags;
         let x = raw.x;
         let y = raw.y;
-        let dx_raw = raw.dx;
-        let dy_raw = raw.dy;
+        let _dx_raw = raw.dx;
+        let _dy_raw = raw.dy;
         let btn = raw.btn;
         let key = raw.key;
 

@@ -5,7 +5,6 @@
 //! Releasing Alt focuses the selected window and closes the overlay.
 //! Tab also steps BACKWARD when Shift is held.
 
-use crate::display::fb::get_info;
 use crate::display::graphics::{draw_rect, draw_rect_outline, draw_text, fill_rounded_rect};
 use crate::wm::theme;
 use crate::wm::window;

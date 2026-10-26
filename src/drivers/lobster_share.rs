@@ -70,7 +70,8 @@ pub fn enabled() -> bool {
     if !detect() {
         return false;
     }
-    stat("").is_some() == false && list_dir("", |_| {}).is_ok() == false || true
+    // Probe both paths; either failing is fine, but detect() already passed.
+    stat("").is_none() || list_dir("", |_| {}).is_err()
 }
 
 fn set_path(path: &str) {

@@ -5,7 +5,6 @@
 //! frame (title bar, gradient accent, buttons, border) instead of per-app
 //! ad-hoc chrome. `tick_animations` drives open/close/minimize effects.
 
-use crate::display::fb::get_info;
 use crate::display::graphics::{draw_rect, draw_rect_outline, draw_text, fill_rounded_rect};
 use crate::wm::theme;
 

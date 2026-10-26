@@ -878,7 +878,7 @@ fn read_metadata(data: &[u8]) -> Result<(usize, PackageMetadata), InstallError> 
 
 /// Extract package files to filesystem
 fn extract_package(pkg: &Package) -> Result<(), InstallError> {
-    use crate::fs::vfs::{create, create_dir, write};
+    use crate::fs::vfs::create_dir;
 
     // Track created directories to avoid redundant mkdir calls
     let mut created_dirs = alloc::collections::BTreeSet::new();

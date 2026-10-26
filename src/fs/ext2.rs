@@ -341,10 +341,10 @@ pub fn read_backing_file(ino: u32) -> Result<alloc::vec::Vec<u8>, VfsError> {
         let fs = EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)?;
         let inode = fs.read_inode(ino)?;
         let size = u32::from_le(inode.i_size) as usize;
-        let mut buf = alloc::vec::Vec::with_capacity(size);
-        unsafe {
-            buf.set_len(size);
-        }
+        // resize() zero-fills: set_len on a reserved buffer would expose
+        // uninitialized memory to read_file's fill loop (clippy: uninit).
+        let mut buf = alloc::vec::Vec::new();
+        buf.resize(size, 0);
         fs.read_file(ino, 0, &mut buf)?;
         Ok(buf)
     }

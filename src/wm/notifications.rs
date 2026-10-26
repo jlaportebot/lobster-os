@@ -4,7 +4,6 @@
 //! a timeout, stacking downward. A history (log) keeps the last N for the
 //! notification-center tray popup. Drawn above windows, below context menu.
 
-use crate::display::fb::get_info;
 use crate::display::graphics::{draw_rect, draw_rect_outline, draw_text, fill_rounded_rect};
 use crate::wm::theme;
 

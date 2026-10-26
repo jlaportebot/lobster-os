@@ -9,7 +9,6 @@
 
 use crate::fs::vfs;
 use crate::println;
-use alloc::string::String;
 use alloc::vec::Vec;
 use core::mem::size_of;
 
@@ -192,14 +191,14 @@ pub fn lookup_symbol_in_libs(name: &str) -> u64 {
     0
 }
 
-fn find_symbol_in_lib(lib: &SharedLib, dyn_info: SharedLibDynInfo, name: &str) -> Option<u64> {
+fn find_symbol_in_lib(_lib: &SharedLib, _dyn_info: SharedLibDynInfo, _name: &str) -> Option<u64> {
     // Simplified: would need to parse the library's symtab/strtab
     // For now, return 0 (not found)
     None
 }
 
 /// dlopen syscall implementation
-pub fn sys_dlopen(path_ptr: u64, flags: u32) -> u64 {
+pub fn sys_dlopen(path_ptr: u64, _flags: u32) -> u64 {
     if path_ptr == 0 {
         return 0;
     }
@@ -213,10 +212,7 @@ pub fn sys_dlopen(path_ptr: u64, flags: u32) -> u64 {
         core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len))
     };
 
-    match load_shared_lib(path) {
-        Ok(addr) => addr,
-        Err(_) => 0,
-    }
+    load_shared_lib(path).unwrap_or_default()
 }
 
 /// dlsym syscall implementation

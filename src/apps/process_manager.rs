@@ -5,7 +5,6 @@
 
 use crate::display::fb;
 use crate::display::graphics;
-use crate::sched;
 use crate::sched::TaskState;
 use alloc::format;
 use alloc::vec::Vec;

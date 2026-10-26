@@ -22,6 +22,12 @@ pub struct Notes {
     loaded: bool,
 }
 
+impl Default for Notes {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Notes {
     pub fn new() -> Self {
         Self {

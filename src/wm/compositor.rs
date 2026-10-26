@@ -1059,7 +1059,11 @@ pub fn composite() {
 
     if do_full {
         // Full redraw: draw wallpaper first
-        draw_wallpaper(fb, back_buffer);
+        // SAFETY: back_buffer is the compositor-owned back buffer,
+        // framebuffer-sized by construction.
+        unsafe {
+            draw_wallpaper(fb, back_buffer);
+        }
 
         // Sort layers by z_order (simple bubble sort — small N)
         sort_layers();
@@ -2013,7 +2017,10 @@ pub fn get_wallpaper_mode() -> WallpaperMode {
 }
 
 /// Draw the wallpaper to the back buffer
-fn draw_wallpaper(fb: FramebufferInfo, back_buf: *mut u32) {
+///
+/// # Safety
+/// Caller must own `back_buf` (framebuffer-sized writable memory).
+unsafe fn draw_wallpaper(fb: FramebufferInfo, back_buf: *mut u32) {
     // Wallpapers come from the wallpaper engine (gradient presets, persisted).
     crate::wm::wallpaper::paint(&fb, back_buf);
     if false {

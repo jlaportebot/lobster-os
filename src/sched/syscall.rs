@@ -427,7 +427,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         }
         SYS_STAT => {
             let path_ptr = args[0] as *const u8;
-            let path_len = args[1] as usize;
+            let _path_len = args[1] as usize;
             let stat_ptr = args[2] as *mut u8;
             if path_ptr.is_null() || stat_ptr.is_null() {
                 return u64::MAX;
@@ -461,8 +461,8 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_GETDENTS => sys_getdents(args[0] as i32, args[1] as *mut u8, args[2] as usize),
         SYS_MKDIR => {
             let path_ptr = args[0] as *const u8;
-            let path_len = args[1] as usize;
-            let mode = args[2] as u32;
+            let _path_len = args[1] as usize;
+            let _mode = args[2] as u32;
             if path_ptr.is_null() {
                 return u64::MAX;
             }
@@ -480,7 +480,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         }
         SYS_RMDIR => {
             let path_ptr = args[0] as *const u8;
-            let path_len = args[1] as usize;
+            let _path_len = args[1] as usize;
             if path_ptr.is_null() {
                 return u64::MAX;
             }
@@ -498,7 +498,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         }
         SYS_UNLINK => {
             let path_ptr = args[0] as *const u8;
-            let path_len = args[1] as usize;
+            let _path_len = args[1] as usize;
             if path_ptr.is_null() {
                 return u64::MAX;
             }
@@ -516,8 +516,8 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         }
         SYS_CREAT => {
             let path_ptr = args[0] as *const u8;
-            let path_len = args[1] as usize;
-            let mode = args[2] as u32;
+            let _path_len = args[1] as usize;
+            let _mode = args[2] as u32;
             if path_ptr.is_null() {
                 return u64::MAX;
             }
@@ -540,7 +540,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             // args[0] = path ptr, args[1] = mode (F_OK=0, R_OK=4, W_OK=2, X_OK=1)
             // For now just check if file exists
             let path_ptr = args[0] as *const u8;
-            let path_len = args[1] as usize;
+            let _path_len = args[1] as usize;
             if path_ptr.is_null() {
                 return u64::MAX;
             }
@@ -574,7 +574,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         }
         SYS_CHDIR => {
             let path_ptr = args[0] as *const u8;
-            let path_len = args[1] as usize;
+            let _path_len = args[1] as usize;
             if path_ptr.is_null() {
                 return u64::MAX;
             }
@@ -639,7 +639,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_FDATASYNC => sys_fsync(args[0] as i32),
         SYS_TRUNCATE => {
             let path_ptr = args[0] as *const u8;
-            let path_len = args[1] as usize;
+            let _path_len = args[1] as usize;
             let length = args[2] as u64;
             if path_ptr.is_null() {
                 return u64::MAX;
@@ -1068,7 +1068,7 @@ mod linux_compat {
 fn sys_open_vfs(path: &str, flags: u32) -> u64 {
     match crate::fs::vfs::open(path, flags) {
         Ok(fd) => fd as u64,
-        Err(e) => {
+        Err(_e) => {
             #[cfg(feature = "debug_syscalls")]
             println!("[syscall] open({}) failed: {:?}", path, e);
             u64::MAX
@@ -2000,7 +2000,7 @@ fn sys_fstat(fd: i32, stat_ptr: *mut u8) -> u64 {
 }
 
 /// sys_getdents — read directory entries
-fn sys_getdents(fd: i32, buf_ptr: *mut u8, buf_size: usize) -> u64 {
+fn sys_getdents(_fd: i32, buf_ptr: *mut u8, buf_size: usize) -> u64 {
     // For now, only support fd opened via VFS
     // This is a simplified implementation
     if buf_ptr.is_null() || buf_size == 0 {

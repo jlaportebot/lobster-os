@@ -265,7 +265,7 @@ pub unsafe extern "C" fn handle_irq(_spsr: u64, _elr: u64, _esr: u64, _far: u64,
         return;
     }
 
-    let is_timer_irq = irq_id == 29 || (64..=67).contains(&irq_id);
+    let _is_timer_irq = irq_id == 29 || (64..=67).contains(&irq_id);
 
     match irq_id {
         0..=15 => {
@@ -328,7 +328,7 @@ pub unsafe extern "C" fn handle_irq(_spsr: u64, _elr: u64, _esr: u64, _far: u64,
     // schedule() does eret (noreturn) which corrupts the main loop context.
     // User processes are run directly from the shell's 'run' command instead.
     #[cfg(not(feature = "qemu_raspi5b"))]
-    if is_timer_irq {
+    if _is_timer_irq {
         if sched::schedule_pending() {
             sched::clear_schedule_flag();
             sched::schedule();

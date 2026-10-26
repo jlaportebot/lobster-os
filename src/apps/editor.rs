@@ -409,7 +409,7 @@ mod editor_stub {
         pub fn open(&mut self, path: &str) -> Result<(), &'static str> {
             let data = crate::fs::vfs::read_file(path).map_err(|_| "cannot read file")?;
             let text = core::str::from_utf8(&data).map_err(|_| "not utf-8")?;
-            self.buffer = text.lines().map(|l| String::from(l)).collect();
+            self.buffer = text.lines().map(String::from).collect();
             if self.buffer.is_empty() {
                 self.buffer.push(String::new());
             }

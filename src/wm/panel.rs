@@ -483,7 +483,7 @@ pub fn handle_click(px: u32, py: u32) -> Option<u32> {
                 PANEL_STATE.clock_label.y as i64,
             );
             let cw = 70i64;
-            let ch = PANEL_HEIGHT as i64;
+            let _ch = PANEL_HEIGHT as i64;
             if (px as i64) >= cx
                 && (px as i64) < cx + cw
                 && (py as i64) >= cy - 6

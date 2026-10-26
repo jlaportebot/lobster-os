@@ -4,7 +4,6 @@
 //! Processes (list + kill). Reuses the two apps' `render_pane`s as
 //! tab content so both stay single-sourced.
 
-use crate::display::fb;
 use crate::display::graphics;
 use crate::wm::theme;
 use crate::wm::window;

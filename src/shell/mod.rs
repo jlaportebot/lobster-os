@@ -1139,7 +1139,7 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                             if !crate::wm::window::exists(id) {
                                 continue;
                             }
-                            if let Some((x, y, ww, hh)) = crate::wm::window::get_info(id) {
+                            if let Some((x, y, _ww, _hh)) = crate::wm::window::get_info(id) {
                                 let nx = x.min(info.width.saturating_sub(64));
                                 let ny = y.min(info.height.saturating_sub(64));
                                 if nx != x || ny != y {
@@ -5172,7 +5172,7 @@ fn cmd_curl(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     });
 
     match body_opt {
-        Some((status_code, body)) => {
+        Some((_status_code, body)) => {
             if let Some(filename) = output_file {
                 // Write body to file
                 use crate::fs::vfs;
@@ -5372,7 +5372,7 @@ fn cmd_ip(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 }
 
 /// ifconfig - configure network interface
-fn cmd_ifconfig(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+fn cmd_ifconfig(_args: [&str; MAX_ARGS], argc: usize) -> i32 {
     let _ = argc;
 
     if !net_available() {
@@ -6074,9 +6074,7 @@ fn cmd_cc(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         let stem = name.strip_suffix(".c").unwrap_or(name);
         alloc::string::String::from("/bin/") + stem
     };
-    let output = output_path
-        .map(|p| resolve_path(p))
-        .unwrap_or(default_output);
+    let output = output_path.map(resolve_path).unwrap_or(default_output);
 
     // Compile via lobster-net device
     let source_str = match core::str::from_utf8(&source_data) {

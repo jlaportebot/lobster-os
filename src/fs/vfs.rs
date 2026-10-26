@@ -223,7 +223,7 @@ impl VfsNode {
             new_box[..old_len].copy_from_slice(old);
             // Release the previous buffer.
             let _ = unsafe {
-                alloc::boxed::Box::<[u8]>::from_raw(core::slice::from_raw_parts_mut(
+                alloc::boxed::Box::<[u8]>::from_raw(core::ptr::slice_from_raw_parts_mut(
                     self.data_ptr,
                     old_len,
                 ))
@@ -865,7 +865,7 @@ pub fn list_dir(path: &str) -> Result<alloc::vec::Vec<DirEntry>, VfsError> {
         let mut entries = alloc::vec::Vec::new();
         crate::drivers::lobster_share::list_dir(rel, |name| {
             let child_rel = if rel.is_empty() {
-                alloc::format!("{}", name)
+                name.to_string()
             } else {
                 alloc::format!("{}/{}", rel, name)
             };

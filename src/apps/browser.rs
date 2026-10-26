@@ -30,6 +30,12 @@ pub struct Browser {
     bookmarks: alloc::vec::Vec<alloc::string::String>,
 }
 
+impl Default for Browser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Browser {
     pub fn new() -> Self {
         Self {

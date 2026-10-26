@@ -6,7 +6,6 @@
 //! reboots.
 
 use crate::display::fb::get_info;
-use crate::display::graphics::draw_rect;
 
 /// Pack a color for the framebuffer. The guest display surface is BGRx, so
 /// the human-authored ARGB preset values are swizzled here once at paint time.
@@ -135,7 +134,12 @@ fn persist() {
 }
 
 /// Paint the wallpaper into the back buffer (row-fill gradient, QEMU-optimized).
-pub fn paint(fb: &crate::display::fb::FramebufferInfo, back_buf: *mut u32) {
+/// Paint the wallpaper gradient into `back_buf` (framebuffer base pointer).
+///
+/// # Safety
+/// `back_buf` must point to a writable buffer of at least
+/// `fb.width * fb.height` pixels for the duration of the call.
+pub unsafe fn paint(fb: &crate::display::fb::FramebufferInfo, back_buf: *mut u32) {
     let p = active();
 
     let (tr, tg, tb) = ((p.top >> 16) & 0xFF, (p.top >> 8) & 0xFF, p.top & 0xFF);
