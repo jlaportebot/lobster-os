@@ -294,13 +294,8 @@ unsafe fn set_clock(freq: u32) {
     //   400 KHz → div = 200M / (400K * 2) = 250
     //   25 MHz  → div = 200M / (25M * 2) = 4
     //   50 MHz  → div = 200M / (50M * 2) = 2
-    let mut div = EXTFREQ / (freq * 2);
-    if div == 0 {
-        div = 1;
-    }
-    if div > 0x3FF {
-        div = 0x3FF; // Max divider
-    }
+    // SDHCI divider field is 10 bits; clamp to [1, 0x3FF].
+    let div = (EXTFREQ / (freq * 2)).clamp(1, 0x3FF);
 
     // Set divider in Control1
     // Bits [15:8] = div LSBs (FREQ8), Bits [7:6] = div MSBs (FREQMS2)

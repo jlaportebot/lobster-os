@@ -365,13 +365,8 @@ unsafe fn set_clock(freq: u32) {
     delay_us(100);
 
     // Calculate clock divider: SDCLK = base_clock / (div * 2)
-    let mut div = EXTFREQ / (freq * 2);
-    if div == 0 {
-        div = 1;
-    }
-    if div > 0x3FF {
-        div = 0x3FF;
-    }
+    // SDHCI divider field is 10 bits; clamp to [1, 0x3FF].
+    let div = (EXTFREQ / (freq * 2)).clamp(1, 0x3FF);
 
     // Set divider in Control1
     let div_lo = (div & 0xFF) as u32;

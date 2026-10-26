@@ -416,7 +416,6 @@ fn decode_chunked(data: &[u8], out: &mut [u8; MAX_BODY_SIZE]) -> usize {
 /// Read a header value by name from raw header bytes (case-insensitive)
 /// Returns a slice of the value bytes, or None
 pub fn get_header<'a>(headers: &'a [u8], name: &str) -> Option<&'a [u8]> {
-    let _name_prefix = [b':', b' '];
     // Search for "Name: value\r\n"
     let name_lower = name.as_bytes();
     let mut i = 0;

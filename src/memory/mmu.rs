@@ -202,18 +202,17 @@ unsafe fn map_range_blocks(
 
         // Allocate L2 table if needed
         let entry_l1 = (*table_l1)[idx_l1];
-        let table_l2: *mut [u64; PT_ENTRIES];
-        if entry_l1 & PTE_VALID == 0 {
+        let table_l2: *mut [u64; PT_ENTRIES] = if entry_l1 & PTE_VALID == 0 {
             let next = alloc_page_table();
             let next_phys = pt_phys(next);
             (*table_l1)[idx_l1] = next_phys | PTE_VALID | PTE_TABLE;
-            table_l2 = next;
+            next
         } else if entry_l1 & PTE_TABLE != 0 {
             let next_phys = entry_l1 & !(PAGE_SIZE - 1);
-            table_l2 = core::ptr::with_exposed_provenance_mut(next_phys as usize);
+            core::ptr::with_exposed_provenance_mut(next_phys as usize)
         } else {
             panic!("[mmu] Block entry at L1 not expected (should be table for 2MB blocks)");
-        }
+        };
 
         // Use 2MB block at L2
         let entry_l2 = pa | flags | PTE_VALID | PTE_ACCESS; // Block entry (no PTE_TABLE)

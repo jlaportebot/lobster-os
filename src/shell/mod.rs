@@ -5051,11 +5051,8 @@ fn find_recursive(path: &str, pattern: Option<&str>, depth: usize) {
 fn parse_usize(s: &str) -> Option<usize> {
     let mut result: usize = 0;
     for c in s.chars() {
-        if let Some(d) = c.to_digit(10) {
-            result = result.checked_mul(10)?.checked_add(d as usize)?;
-        } else {
-            return None;
-        }
+        let d = c.to_digit(10)?;
+        result = result.checked_mul(10)?.checked_add(d as usize)?;
     }
     Some(result)
 }
