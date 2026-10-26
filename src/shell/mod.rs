@@ -1780,9 +1780,13 @@ fn cmd_kill(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
     match parse_u64(args[1]) {
         Some(pid) => {
-            crate::sched::kill(pid);
-            crate::println!("Killed PID {}", pid);
-            0
+            if crate::sched::kill(pid) {
+                crate::println!("Killed PID {}", pid);
+                0
+            } else {
+                crate::println!("kill: no such PID {}", pid);
+                1
+            }
         }
         None => {
             Uart10::puts("Invalid PID\r\n");

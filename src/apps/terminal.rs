@@ -267,12 +267,15 @@ impl Terminal {
         use crate::usb::hid;
 
         if ctrl {
+            // Set 1 scancodes: Z=0x2C X=0x2D C=0x2E V=0x2F A=0x1E D=0x20 E=0x12 L=0x26.
+            // (Audit Q6: the old table fired Ctrl+C on Ctrl+Z, Ctrl+D on Ctrl+X,
+            //  and Ctrl+E on Ctrl+D.)
             match scancode {
-                0x2C => self.send_input(b"\x03"), // Ctrl+C = SIGINT
-                0x2D => self.send_input(b"\x04"), // Ctrl+D = EOF
+                0x2E => self.send_input(b"\x03"), // Ctrl+C = SIGINT
+                0x2F => self.send_input(b"\x04"), // Ctrl+D = EOF
                 0x1E => self.send_input(b"\x01"), // Ctrl+A = start of line
-                0x20 => self.send_input(b"\x05"), // Ctrl+E = end of line
-                0x0F => self.send_input(b"\x0C"), // Ctrl+L = clear screen
+                0x12 => self.send_input(b"\x05"), // Ctrl+E = end of line
+                0x26 => self.send_input(b"\x0C"), // Ctrl+L = clear screen
                 _ => {}
             }
         } else if alt {
