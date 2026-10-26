@@ -1091,15 +1091,16 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::arch::cpu::wfe();
         #[cfg(feature = "qemu_raspi5b")]
         {
-            // Frame limiter: hold ~33ms between WM ticks (~30fps). This keeps
-            // frames coherent (the desktop is fully redrawn each tick), lowers
-            // CPU burn in the emulator, and lets tools like QEMU screendump
-            // catch complete frames instead of mid-redraw states.
+            // Frame limiter: hold ~33ms between WM ticks (~30fps) — but WAIT for
+            // the arch-timer tick (WFE) instead of busy-spinning. The 10ms PPI 29
+            // ticks wake the core, so the host CPU no longer burns a full core
+            // in the idle loop (audit Q1f/Q2).
             const FRAME_INTERVAL_US: u64 = 33_000;
             let frame_start_us = crate::arch::timer::Timer::system_time_us();
             let mut now_us = frame_start_us;
             while now_us.saturating_sub(frame_start_us) < FRAME_INTERVAL_US {
-                crate::arch::cpu::relax();
+                // WFI (not WFE): IRQ wake is what we need, and TCG yields the vCPU
+                crate::arch::cpu::wfi();
                 now_us = crate::arch::timer::Timer::system_time_us();
             }
         }
