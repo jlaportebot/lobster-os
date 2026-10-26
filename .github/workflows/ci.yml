@@ -40,6 +40,8 @@ jobs:
         run: cargo build --target aarch64-unknown-none --release
 
       - name: Run unit tests (host)
+        env:
+          RUSTFLAGS: ""
         run: cargo test --features std --target aarch64-unknown-linux-gnu --lib
 
       - name: Upload kernel artifact
