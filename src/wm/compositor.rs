@@ -955,6 +955,18 @@ pub fn set_layer_z(id: u32, z_order: u32) {
 }
 
 /// Bring a layer to the top (highest z-order)
+/// Z-order of a window's layer (0 if absent) — used by focus/hit-test routing.
+pub fn layer_z_order(id: u32) -> u32 {
+    let layers = LAYERS.lock();
+    let layer_count = *LAYER_COUNT.lock();
+    for i in 0..layer_count {
+        if layers[i].id == id {
+            return layers[i].z_order;
+        }
+    }
+    0
+}
+
 pub fn raise_layer(id: u32) {
     let mut layers = LAYERS.lock();
     let layer_count = *LAYER_COUNT.lock();

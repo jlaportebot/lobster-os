@@ -465,7 +465,22 @@ pub fn epoch(win_id: u64) -> u32 {
 /// (drag/close/resize) instead of the app.
 pub fn hit_test(sx: u32, sy: u32) -> Option<(u64, u32, u32, bool)> {
     unsafe {
+        // Topmost-first: iterate slots in descending z-order of their backing WM
+        // window so an overlapping click lands on the visually-front window, not
+        // whichever slot happens to have the lowest index (audit Q1g).
+        let mut order: [(usize, u32); MAX_USER_WINDOWS] = [(0, 0); MAX_USER_WINDOWS];
+        let mut n = 0usize;
         for (i, slot) in WINDOWS.iter().enumerate() {
+            if !slot.active {
+                continue;
+            }
+            let Some(wm_id) = slot.wm_id else { continue };
+            order[n] = (i, crate::wm::compositor::layer_z_order(wm_id));
+            n += 1;
+        }
+        order[..n].sort_by(|a, b| b.1.cmp(&a.1));
+        for &(i, _) in &order[..n] {
+            let slot = &WINDOWS[i];
             if !slot.active {
                 continue;
             }
