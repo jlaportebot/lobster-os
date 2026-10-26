@@ -1367,12 +1367,14 @@ fn sys_dup2(old_fd: i32, new_fd: i32) -> u64 {
 
 /// sys_shm_create(size, key, mode) — create shared memory region
 fn sys_shm_create(size: usize, key: u64, mode: u32) -> u64 {
-    crate::ipc::shm_create(size, key, mode).map_or(u64::MAX, |idx| idx as u64)
+    crate::ipc::shm_create(size, key, mode)
+        .map(|idx| idx as u64)
+        .unwrap_or(u64::MAX)
 }
 
 /// sys_shm_attach(shm_idx, writable) — attach shared memory
 fn sys_shm_attach(shm_idx: usize, writable: bool) -> u64 {
-    crate::ipc::shm_attach(shm_idx, writable).map_or(u64::MAX, |addr| addr)
+    crate::ipc::shm_attach(shm_idx, writable).unwrap_or(u64::MAX)
 }
 
 /// sys_shm_detach(shm_idx) — detach shared memory

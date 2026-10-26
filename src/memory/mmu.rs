@@ -82,9 +82,7 @@ unsafe fn alloc_page_table() -> *mut [u64; PT_ENTRIES] {
     let idx = NEXT_PT_INDEX;
     NEXT_PT_INDEX += 1;
     // Zero the table
-    for entry in &mut PAGE_TABLE_STORAGE.0[idx] {
-        *entry = 0;
-    }
+    PAGE_TABLE_STORAGE.0[idx].fill(0);
     &mut PAGE_TABLE_STORAGE.0[idx]
 }
 
@@ -187,18 +185,17 @@ unsafe fn map_range_blocks(
         let entry_l0 = (*table_l0)[idx_l0];
 
         // Allocate L1 table if needed
-        let table_l1: *mut [u64; PT_ENTRIES];
-        if entry_l0 & PTE_VALID == 0 {
+        let table_l1: *mut [u64; PT_ENTRIES] = if entry_l0 & PTE_VALID == 0 {
             let next = alloc_page_table();
             let next_phys = pt_phys(next);
             (*table_l0)[idx_l0] = next_phys | PTE_VALID | PTE_TABLE;
-            table_l1 = next;
+            next
         } else if entry_l0 & PTE_TABLE != 0 {
             let next_phys = entry_l0 & !(PAGE_SIZE - 1);
-            table_l1 = core::ptr::with_exposed_provenance_mut(next_phys as usize);
+            core::ptr::with_exposed_provenance_mut(next_phys as usize)
         } else {
             panic!("[mmu] Block entry at L0 not expected");
-        }
+        };
 
         // Allocate L2 table if needed
         let entry_l1 = (*table_l1)[idx_l1];
