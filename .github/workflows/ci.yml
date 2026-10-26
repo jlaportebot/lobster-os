@@ -41,7 +41,7 @@ jobs:
 
       - name: Run unit tests (host)
         env:
-          RUSTFLAGS: ""
+          RUSTFLAGS: "-C link-arg=-Wl,--no-fix-cortex-a53-843419"
         run: cargo test --features std --target aarch64-unknown-linux-gnu --lib
 
       - name: Upload kernel artifact
