@@ -448,14 +448,23 @@ pub unsafe fn sigreturn(regs: *mut TrapFrame) -> Result<(), &'static str> {
             let frame_ptr = sp as *const TrapFrame;
             let saved_frame = core::ptr::read_volatile(frame_ptr);
 
+            // SECURITY (audit Q1c): never let sigreturn raise privilege. Mask the
+            // M-field of the restored SPSR to EL0 only (M=0b0000 EL0t). A user
+            // process crafting its own sigreturn frame used to be able to eret
+            // straight into EL1 with kernel permissions.
+            const SPSR_M_MASK: u64 = 0b1_11;
+            const SPSR_EL0T: u64 = 0b0_0000;
+            let mut safe_frame = saved_frame;
+            safe_frame.spsr = (safe_frame.spsr & !SPSR_M_MASK) | SPSR_EL0T;
+
             // Check for SA_RESTART marker: if x30 was set to ELR - 4,
             // restore ELR to point to SVC instruction so syscall restarts
-            let restart_marker = saved_frame.x30;
-            let saved_elr = saved_frame.elr;
+            let restart_marker = safe_frame.x30;
+            let saved_elr = safe_frame.elr;
             let should_restart = restart_marker != 0 && restart_marker == saved_elr - 4;
 
             // Restore the trap frame
-            *regs = saved_frame;
+            *regs = safe_frame;
 
             // If SA_RESTART was set and we have a valid restart marker,
             // adjust ELR to point to SVC instruction so syscall restarts
