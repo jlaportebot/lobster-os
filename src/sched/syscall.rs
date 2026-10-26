@@ -396,7 +396,9 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
                 }
             }
             if !tz_ptr.is_null() {
-                unsafe { *tz_ptr = 0; }
+                unsafe {
+                    *tz_ptr = 0;
+                }
             }
             0
         }
@@ -405,14 +407,21 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             let rem_ptr = args[1] as *mut u64;
             let secs = if !req_ptr.is_null() {
                 unsafe { *req_ptr }
-            } else { 0 };
+            } else {
+                0
+            };
             let nsecs = if !req_ptr.is_null() {
                 unsafe { *req_ptr.add(1) }
-            } else { 0 };
+            } else {
+                0
+            };
             let total_ms = (secs * 1000) + (nsecs / 1_000_000);
             sys_sleep(total_ms);
             if !rem_ptr.is_null() {
-                unsafe { *rem_ptr = 0; *rem_ptr.add(1) = 0; }
+                unsafe {
+                    *rem_ptr = 0;
+                    *rem_ptr.add(1) = 0;
+                }
             }
             0
         }
@@ -420,10 +429,14 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             let path_ptr = args[0] as *const u8;
             let path_len = args[1] as usize;
             let stat_ptr = args[2] as *mut u8;
-            if path_ptr.is_null() || stat_ptr.is_null() { return u64::MAX; }
+            if path_ptr.is_null() || stat_ptr.is_null() {
+                return u64::MAX;
+            }
             let path_str = unsafe {
                 let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                while *path_ptr.add(len) != 0 && len < 256 {
+                    len += 1;
+                }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
             };
             sys_stat(path_str, stat_ptr)
@@ -431,65 +444,96 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_FSTAT => sys_fstat(args[0] as i32, args[1] as *mut u8),
         SYS_LSTAT => {
             let path_ptr = args[0] as *const u8;
-            if path_ptr.is_null() { return u64::MAX; }
+            if path_ptr.is_null() {
+                return u64::MAX;
+            }
             let path_str = unsafe {
                 let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                while *path_ptr.add(len) != 0 && len < 256 {
+                    len += 1;
+                }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
             };
             sys_stat(path_str, args[1] as *mut u8)
         }
-        SYS_LSEEK => {
-            crate::fs::vfs::seek(args[0] as usize, args[1] as i64, args[2] as u32)
-                .unwrap_or(u64::MAX) as u64
-        }
+        SYS_LSEEK => crate::fs::vfs::seek(args[0] as usize, args[1] as i64, args[2] as u32)
+            .unwrap_or(u64::MAX) as u64,
         SYS_GETDENTS => sys_getdents(args[0] as i32, args[1] as *mut u8, args[2] as usize),
         SYS_MKDIR => {
             let path_ptr = args[0] as *const u8;
             let path_len = args[1] as usize;
             let mode = args[2] as u32;
-            if path_ptr.is_null() { return u64::MAX; }
+            if path_ptr.is_null() {
+                return u64::MAX;
+            }
             let path_str = unsafe {
                 let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                while *path_ptr.add(len) != 0 && len < 256 {
+                    len += 1;
+                }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
             };
-            match crate::fs::vfs::mkdir(path_str) { Ok(_) => 0, Err(_) => u64::MAX }
+            match crate::fs::vfs::mkdir(path_str) {
+                Ok(_) => 0,
+                Err(_) => u64::MAX,
+            }
         }
         SYS_RMDIR => {
             let path_ptr = args[0] as *const u8;
             let path_len = args[1] as usize;
-            if path_ptr.is_null() { return u64::MAX; }
+            if path_ptr.is_null() {
+                return u64::MAX;
+            }
             let path_str = unsafe {
                 let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                while *path_ptr.add(len) != 0 && len < 256 {
+                    len += 1;
+                }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
             };
-            match crate::fs::vfs::remove(path_str) { Ok(_) => 0, Err(_) => u64::MAX }
+            match crate::fs::vfs::remove(path_str) {
+                Ok(_) => 0,
+                Err(_) => u64::MAX,
+            }
         }
         SYS_UNLINK => {
             let path_ptr = args[0] as *const u8;
             let path_len = args[1] as usize;
-            if path_ptr.is_null() { return u64::MAX; }
+            if path_ptr.is_null() {
+                return u64::MAX;
+            }
             let path_str = unsafe {
                 let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                while *path_ptr.add(len) != 0 && len < 256 {
+                    len += 1;
+                }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
             };
-            match crate::fs::vfs::unlink(path_str) { Ok(_) => 0, Err(_) => u64::MAX }
+            match crate::fs::vfs::unlink(path_str) {
+                Ok(_) => 0,
+                Err(_) => u64::MAX,
+            }
         }
         SYS_CREAT => {
             let path_ptr = args[0] as *const u8;
             let path_len = args[1] as usize;
             let mode = args[2] as u32;
-            if path_ptr.is_null() { return u64::MAX; }
+            if path_ptr.is_null() {
+                return u64::MAX;
+            }
             let path_str = unsafe {
                 let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                while *path_ptr.add(len) != 0 && len < 256 {
+                    len += 1;
+                }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
             };
-            match crate::fs::vfs::open(path_str, crate::fs::vfs::O_WRONLY | crate::fs::vfs::O_CREAT | crate::fs::vfs::O_TRUNC) {
-                Ok(fd) => fd as u64, Err(_) => u64::MAX
+            match crate::fs::vfs::open(
+                path_str,
+                crate::fs::vfs::O_WRONLY | crate::fs::vfs::O_CREAT | crate::fs::vfs::O_TRUNC,
+            ) {
+                Ok(fd) => fd as u64,
+                Err(_) => u64::MAX,
             }
         }
         SYS_ACCESS => {
@@ -497,44 +541,65 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             // For now just check if file exists
             let path_ptr = args[0] as *const u8;
             let path_len = args[1] as usize;
-            if path_ptr.is_null() { return u64::MAX; }
+            if path_ptr.is_null() {
+                return u64::MAX;
+            }
             let path_str = unsafe {
                 let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                while *path_ptr.add(len) != 0 && len < 256 {
+                    len += 1;
+                }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
             };
-            match crate::fs::vfs::resolve_path(path_str) { Ok(_) => 0, Err(_) => u64::MAX }
+            match crate::fs::vfs::resolve_path(path_str) {
+                Ok(_) => 0,
+                Err(_) => u64::MAX,
+            }
         }
         SYS_GETCWD => {
             let buf_ptr = args[0] as *mut u8;
             let buf_size = args[1] as usize;
-            if buf_ptr.is_null() || buf_size == 0 { return u64::MAX; }
+            if buf_ptr.is_null() || buf_size == 0 {
+                return u64::MAX;
+            }
             let cwd = crate::shell::cwd();
             let bytes = cwd.as_bytes();
             let copy_len = bytes.len().min(buf_size - 1);
-            unsafe { core::slice::from_raw_parts_mut(buf_ptr, copy_len) }.copy_from_slice(&bytes[..copy_len]);
-            unsafe { *buf_ptr.add(copy_len) = 0; }
+            unsafe { core::slice::from_raw_parts_mut(buf_ptr, copy_len) }
+                .copy_from_slice(&bytes[..copy_len]);
+            unsafe {
+                *buf_ptr.add(copy_len) = 0;
+            }
             buf_ptr as u64
         }
         SYS_CHDIR => {
             let path_ptr = args[0] as *const u8;
             let path_len = args[1] as usize;
-            if path_ptr.is_null() { return u64::MAX; }
+            if path_ptr.is_null() {
+                return u64::MAX;
+            }
             let path_str = unsafe {
                 let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                while *path_ptr.add(len) != 0 && len < 256 {
+                    len += 1;
+                }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
             };
             match crate::fs::vfs::resolve_path(path_str) {
-                Ok(_) => { crate::shell::set_cwd(path_str); 0 }
-                Err(_) => u64::MAX
+                Ok(_) => {
+                    crate::shell::set_cwd(path_str);
+                    0
+                }
+                Err(_) => u64::MAX,
             }
         }
         SYS_TIME => {
             let tloc = args[0] as *mut u64;
             let now_sec = crate::arch::timer::Timer::system_time_us() / 1_000_000;
             if !tloc.is_null() {
-                unsafe { *tloc = now_sec; }
+                unsafe {
+                    *tloc = now_sec;
+                }
             }
             now_sec
         }
@@ -547,27 +612,43 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_SETSID => crate::sched::create_session(),
         SYS_UNAME => {
             let buf_ptr = args[0] as *mut u8;
-            if buf_ptr.is_null() { return u64::MAX; }
+            if buf_ptr.is_null() {
+                return u64::MAX;
+            }
             let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, 6 * 65) };
-            for b in buf.iter_mut() { *b = 0; }
-            let name = b"lobster-os\0"; buf[..name.len()].copy_from_slice(name);
-            let node = b"lobster\0"; buf[65..65+node.len()].copy_from_slice(node);
-            let rel = b"0.2.0\0"; buf[130..130+rel.len()].copy_from_slice(rel);
-            let ver = b"lobster-os 0.2.0\0"; buf[195..195+ver.len()].copy_from_slice(ver);
-            let mach = b"aarch64\0"; buf[260..260+mach.len()].copy_from_slice(mach);
+            for b in buf.iter_mut() {
+                *b = 0;
+            }
+            let name = b"lobster-os\0";
+            buf[..name.len()].copy_from_slice(name);
+            let node = b"lobster\0";
+            buf[65..65 + node.len()].copy_from_slice(node);
+            let rel = b"0.2.0\0";
+            buf[130..130 + rel.len()].copy_from_slice(rel);
+            let ver = b"lobster-os 0.2.0\0";
+            buf[195..195 + ver.len()].copy_from_slice(ver);
+            let mach = b"aarch64\0";
+            buf[260..260 + mach.len()].copy_from_slice(mach);
             0
         }
-        SYS_SYNC => { crate::fs::vfs::sync(); 0 },
+        SYS_SYNC => {
+            crate::fs::vfs::sync();
+            0
+        }
         SYS_FSYNC => sys_fsync(args[0] as i32),
         SYS_FDATASYNC => sys_fsync(args[0] as i32),
         SYS_TRUNCATE => {
             let path_ptr = args[0] as *const u8;
             let path_len = args[1] as usize;
             let length = args[2] as u64;
-            if path_ptr.is_null() { return u64::MAX; }
+            if path_ptr.is_null() {
+                return u64::MAX;
+            }
             let path_str = unsafe {
                 let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 { len += 1; }
+                while *path_ptr.add(len) != 0 && len < 256 {
+                    len += 1;
+                }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
             };
             sys_truncate(path_str, length)
@@ -577,8 +658,12 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_DLOPEN => sys_dlopen(args[0], args[1] as u32),
         SYS_DLSYM => sys_dlsym(args[0] as u64, args[1]),
         SYS_DLCLOSE => sys_dlclose(args[0] as u64),
-        SYS_WIN_CREATE => crate::wm::user_windows::sys_win_create(args[0], args[1], args[2], args[3], args[4]),
-        SYS_WIN_FILL => crate::wm::user_windows::sys_win_fill(args[0], args[1], args[2], args[3], args[4], args[5]),
+        SYS_WIN_CREATE => {
+            crate::wm::user_windows::sys_win_create(args[0], args[1], args[2], args[3], args[4])
+        }
+        SYS_WIN_FILL => crate::wm::user_windows::sys_win_fill(
+            args[0], args[1], args[2], args[3], args[4], args[5],
+        ),
         SYS_WIN_FLUSH => crate::wm::user_windows::sys_win_flush(args[0]),
         SYS_WIN_CLOSE => crate::wm::user_windows::sys_win_close(args[0]),
         SYS_WIN_POLL => crate::wm::user_windows::sys_win_poll(args[0]),
@@ -719,9 +804,7 @@ mod linux_compat {
             LINUX_READ => sys_read(args[0] as i32, args[1], args[2] as usize),
             LINUX_CLOSE => sys_close(args[0] as i32),
 
-            LINUX_EXIT | LINUX_EXIT_GROUP => {
-                sys_exit(args[0] as i64)
-            }
+            LINUX_EXIT | LINUX_EXIT_GROUP => sys_exit(args[0] as i64),
 
             LINUX_GETPID => sched::current_pid(),
             LINUX_GETTID => sched::current_pid(),
@@ -762,7 +845,9 @@ mod linux_compat {
                 // args[0] = timespec ptr {sec, nsec}, args[1] = rem ptr
                 let secs = if args[0] != 0 {
                     unsafe { *(args[0] as *const u64) }
-                } else { 0 };
+                } else {
+                    0
+                };
                 sys_sleep(secs * 1000);
                 0
             }
@@ -770,28 +855,26 @@ mod linux_compat {
             LINUX_UNAME => {
                 // Fill utsname struct (6 × 65-byte fields)
                 if args[0] != 0 {
-                    let buf = unsafe {
-                        core::slice::from_raw_parts_mut(
-                            args[0] as *mut u8,
-                            6 * 65,
-                        )
-                    };
-                    for b in buf.iter_mut() { *b = 0; }
+                    let buf =
+                        unsafe { core::slice::from_raw_parts_mut(args[0] as *mut u8, 6 * 65) };
+                    for b in buf.iter_mut() {
+                        *b = 0;
+                    }
                     // sysname
                     let name = b"lobster-os\0";
                     buf[..name.len()].copy_from_slice(name);
                     // nodename
                     let node = b"lobster\0";
-                    buf[65..65+node.len()].copy_from_slice(node);
+                    buf[65..65 + node.len()].copy_from_slice(node);
                     // release
                     let rel = b"0.2.0\0";
-                    buf[130..130+rel.len()].copy_from_slice(rel);
+                    buf[130..130 + rel.len()].copy_from_slice(rel);
                     // version
                     let ver = b"lobster-os 0.2.0\0";
-                    buf[195..195+ver.len()].copy_from_slice(ver);
+                    buf[195..195 + ver.len()].copy_from_slice(ver);
                     // machine
                     let mach = b"aarch64\0";
-                    buf[260..260+mach.len()].copy_from_slice(mach);
+                    buf[260..260 + mach.len()].copy_from_slice(mach);
                 }
                 0
             }
@@ -832,9 +915,7 @@ mod linux_compat {
                     while *path_ptr.add(len) != 0 && len < 256 {
                         len += 1;
                     }
-                    core::str::from_utf8_unchecked(
-                        core::slice::from_raw_parts(path_ptr, len)
-                    )
+                    core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
                 };
                 sys_open_vfs(path_str, flags)
             }
@@ -851,9 +932,7 @@ mod linux_compat {
                     while *path_ptr.add(len) != 0 && len < 256 {
                         len += 1;
                     }
-                    core::str::from_utf8_unchecked(
-                        core::slice::from_raw_parts(path_ptr, len)
-                    )
+                    core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
                 };
                 sys_open_vfs(path_str, flags)
             }
@@ -868,12 +947,14 @@ mod linux_compat {
                 };
                 if stat_ptr != 0 {
                     // Linux stat struct (128 bytes on AArch64)
-                    let buf = unsafe {
-                        core::slice::from_raw_parts_mut(stat_ptr as *mut u8, 128)
-                    };
-                    for b in buf.iter_mut() { *b = 0; }
+                    let buf = unsafe { core::slice::from_raw_parts_mut(stat_ptr as *mut u8, 128) };
+                    for b in buf.iter_mut() {
+                        *b = 0;
+                    }
                     // st_mode = 0100644 (regular file, rw-r--r--)
-                    unsafe { *(stat_ptr as *mut u32) = 0o100644; }
+                    unsafe {
+                        *(stat_ptr as *mut u32) = 0o100644;
+                    }
                     // st_size — get from VFS fd
                     // For stdout/stderr (fd 1, 2), return 0
                     let _ = fd;
@@ -908,19 +989,14 @@ mod linux_compat {
                 sys_read(args[0] as i32, args[1], args[2] as usize)
             }
 
-            LINUX_PWRITE64 => {
-                sys_write(args[0] as i32, args[1], args[2] as usize)
-            }
+            LINUX_PWRITE64 => sys_write(args[0] as i32, args[1], args[2] as usize),
 
             LINUX_LSEEK => {
                 // args[0] = fd, args[1] = offset, args[2] = whence
-                crate::fs::vfs::seek(args[0] as usize, args[1] as i64, args[2] as u32)
-                    .unwrap_or(0)
+                crate::fs::vfs::seek(args[0] as usize, args[1] as i64, args[2] as u32).unwrap_or(0)
             }
 
-            LINUX_PIPE | LINUX_PIPE2 => {
-                sys_pipe(args[0], args[1])
-            }
+            LINUX_PIPE | LINUX_PIPE2 => sys_pipe(args[0], args[1]),
 
             LINUX_DUP => sys_dup(args[0] as i32),
             LINUX_FCNTL => sys_fcntl(args[0] as i32, args[1] as u32, args[2]),
@@ -944,15 +1020,15 @@ mod linux_compat {
             LINUX_EXECVE => {
                 // args[0] = path ptr, args[1] = argv ptr, args[2] = envp ptr
                 let path_ptr = args[0] as *const u8;
-                if path_ptr.is_null() { return u64::MAX; }
+                if path_ptr.is_null() {
+                    return u64::MAX;
+                }
                 let path_str = unsafe {
                     let mut len = 0usize;
                     while *path_ptr.add(len) != 0 && len < 256 {
                         len += 1;
                     }
-                    core::str::from_utf8_unchecked(
-                        core::slice::from_raw_parts(path_ptr, len)
-                    )
+                    core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
                 };
                 sys_exec(path_str)
             }
@@ -978,7 +1054,8 @@ mod linux_compat {
                 #[cfg(feature = "debug_syscalls")]
                 println!(
                     "[syscall] Unhandled Linux syscall #{} from PID {}",
-                    syscall_num, sched::current_pid()
+                    syscall_num,
+                    sched::current_pid()
                 );
                 let _ = syscall_num;
                 u64::MAX
@@ -1883,7 +1960,9 @@ fn sys_stat(path: &str, stat_ptr: *mut u8) -> u64 {
             unsafe {
                 // Linux stat struct (128 bytes on AArch64)
                 let buf = core::slice::from_raw_parts_mut(stat_ptr, 128);
-                for b in buf.iter_mut() { *b = 0; }
+                for b in buf.iter_mut() {
+                    *b = 0;
+                }
                 // st_mode
                 *(stat_ptr as *mut u32) = meta.file_type as u32 | meta.permissions;
                 // st_size
@@ -1896,16 +1975,20 @@ fn sys_stat(path: &str, stat_ptr: *mut u8) -> u64 {
             }
             0
         }
-        None => u64::MAX
+        None => u64::MAX,
     }
 }
 
 /// sys_fstat — fill stat struct for an open fd
 fn sys_fstat(fd: i32, stat_ptr: *mut u8) -> u64 {
-    if fd < 0 || fd > 2 { return u64::MAX; }
+    if fd < 0 || fd > 2 {
+        return u64::MAX;
+    }
     unsafe {
         let buf = core::slice::from_raw_parts_mut(stat_ptr, 128);
-        for b in buf.iter_mut() { *b = 0; }
+        for b in buf.iter_mut() {
+            *b = 0;
+        }
         // stdout/stderr/stdin are char devices
         *(stat_ptr as *mut u32) = 0o100644; // regular file for simplicity
         *(stat_ptr.add(48) as *mut u64) = 0;
@@ -1920,13 +2003,17 @@ fn sys_fstat(fd: i32, stat_ptr: *mut u8) -> u64 {
 fn sys_getdents(fd: i32, buf_ptr: *mut u8, buf_size: usize) -> u64 {
     // For now, only support fd opened via VFS
     // This is a simplified implementation
-    if buf_ptr.is_null() || buf_size == 0 { return u64::MAX; }
+    if buf_ptr.is_null() || buf_size == 0 {
+        return u64::MAX;
+    }
     0 // Return 0 entries (end of directory)
 }
 
 /// sys_fsync — sync file data (already in memory for VFS)
 fn sys_fsync(fd: i32) -> u64 {
-    if fd < 0 { return u64::MAX; }
+    if fd < 0 {
+        return u64::MAX;
+    }
     0 // VFS is in-memory, nothing to flush
 }
 
@@ -1934,7 +2021,7 @@ fn sys_fsync(fd: i32) -> u64 {
 fn sys_truncate(path: &str, length: u64) -> u64 {
     match crate::fs::vfs::truncate(path, length) {
         Ok(_) => 0,
-        Err(_) => u64::MAX
+        Err(_) => u64::MAX,
     }
 }
 

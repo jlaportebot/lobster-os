@@ -134,18 +134,15 @@ pub fn cursor_pos() -> (u32, u32) {
 pub fn update_cursor_shape() {
     let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
     let title = crate::wm::window::get_title(crate::wm::window::focused_id());
-    let shape =
-        if (title == "Terminal" || title == "Editor" || title == "Notes")
-            && crate::wm::window::get_info(crate::wm::window::focused_id())
-                .map(|(x, y, w, h)| {
-                    cx >= x + 2 && cy >= y + 26 && cx < x + w && cy < y + h
-                })
-                .unwrap_or(false)
-        {
-            crate::wm::compositor::CursorShape::IBeam
-        } else {
-            crate::wm::compositor::CursorShape::Arrow
-        };
+    let shape = if (title == "Terminal" || title == "Editor" || title == "Notes")
+        && crate::wm::window::get_info(crate::wm::window::focused_id())
+            .map(|(x, y, w, h)| cx >= x + 2 && cy >= y + 26 && cx < x + w && cy < y + h)
+            .unwrap_or(false)
+    {
+        crate::wm::compositor::CursorShape::IBeam
+    } else {
+        crate::wm::compositor::CursorShape::Arrow
+    };
     crate::wm::compositor::set_cursor_shape(shape);
 }
 
@@ -161,8 +158,16 @@ fn move_cursor_only(dx: i16, dy: i16) {
     unsafe {
         let new_x = (CURSOR_X as i32 + dx as i32).max(0) as u32;
         let new_y = (CURSOR_Y as i32 + dy as i32).max(0) as u32;
-        CURSOR_X = if new_x >= info.width { info.width - 1 } else { new_x };
-        CURSOR_Y = if new_y >= info.height { info.height - 1 } else { new_y };
+        CURSOR_X = if new_x >= info.width {
+            info.width - 1
+        } else {
+            new_x
+        };
+        CURSOR_Y = if new_y >= info.height {
+            info.height - 1
+        } else {
+            new_y
+        };
     }
     compositor::set_hardware_cursor_pos(unsafe { CURSOR_X }, unsafe { CURSOR_Y });
 }
@@ -468,7 +473,10 @@ fn new_desktop_item(is_dir: bool) {
                 }
                 Err(VfsError::AlreadyExists) => continue,
                 Err(e) => {
-                    crate::wm::notifications::error("Desktop", &alloc::format!("create failed: {:?}", e));
+                    crate::wm::notifications::error(
+                        "Desktop",
+                        &alloc::format!("create failed: {:?}", e),
+                    );
                     return;
                 }
             }

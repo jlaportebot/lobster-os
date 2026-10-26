@@ -166,25 +166,19 @@ pub fn poll() -> Option<HidEvent> {
                 };
                 Some(HidEvent::MouseMove { dx, dy })
             }
-            EV_MOUSE_BTN => {
-                Some(HidEvent::MouseButton {
-                    left: (btn & 0x01) != 0,
-                    right: (btn & 0x02) != 0,
-                    middle: (btn & 0x04) != 0,
-                })
-            }
-            EV_KEY_PRESS => {
-                Some(HidEvent::KeyPress {
-                    scancode: key,
-                    extended: false,
-                })
-            }
-            EV_KEY_RELEASE => {
-                Some(HidEvent::KeyRelease {
-                    scancode: key,
-                    extended: false,
-                })
-            }
+            EV_MOUSE_BTN => Some(HidEvent::MouseButton {
+                left: (btn & 0x01) != 0,
+                right: (btn & 0x02) != 0,
+                middle: (btn & 0x04) != 0,
+            }),
+            EV_KEY_PRESS => Some(HidEvent::KeyPress {
+                scancode: key,
+                extended: false,
+            }),
+            EV_KEY_RELEASE => Some(HidEvent::KeyRelease {
+                scancode: key,
+                extended: false,
+            }),
             _ => None,
         }
     }

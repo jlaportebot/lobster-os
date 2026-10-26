@@ -241,14 +241,20 @@ pub fn handle_move(px: u32, py: u32) {
     }
     let (x0, y0) = menu_origin();
     if px < x0 || px >= x0 + MENU_WIDTH || py < y0 || py >= y0 + MENU_HEIGHT {
-        unsafe { HOVER_ROW = -1; }
+        unsafe {
+            HOVER_ROW = -1;
+        }
         return;
     }
     let inner_y = py.saturating_sub(y0 + MENU_TOP_PAD + 28);
     if inner_y < VISIBLE_ROWS as u32 * (TILE_H + TILE_MARGIN) {
-        unsafe { HOVER_ROW = (inner_y / (TILE_H + TILE_MARGIN)) as i32; }
+        unsafe {
+            HOVER_ROW = (inner_y / (TILE_H + TILE_MARGIN)) as i32;
+        }
     } else {
-        unsafe { HOVER_ROW = -1; }
+        unsafe {
+            HOVER_ROW = -1;
+        }
     }
 }
 
@@ -408,8 +414,8 @@ pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
         let track_y = tiles_top + VISIBLE_ROWS as u32 * (TILE_H + TILE_MARGIN) + 6;
         draw_rect(fb, inner_x, track_y, tile_w, bar_h, theme.menu_border);
         let thumb_w = (tile_w * VISIBLE_ROWS as u32 / APPS.len() as u32).max(40);
-        let thumb_x = inner_x + (tile_w - thumb_w) * scroll as u32
-            / (APPS.len() - VISIBLE_ROWS).max(1) as u32;
+        let thumb_x = inner_x
+            + (tile_w - thumb_w) * scroll as u32 / (APPS.len() - VISIBLE_ROWS).max(1) as u32;
         draw_rect(fb, thumb_x, track_y, thumb_w, bar_h, theme.label_text_dim);
     }
 }

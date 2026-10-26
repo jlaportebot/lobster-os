@@ -134,7 +134,9 @@ impl Timer {
     /// Read CNTFRQ_EL0 (for diagnostics)
     pub fn cntfrq() -> u64 {
         let freq: u64;
-        unsafe { core::arch::asm!("mrs {}, CNTFRQ_EL0", out(reg) freq); }
+        unsafe {
+            core::arch::asm!("mrs {}, CNTFRQ_EL0", out(reg) freq);
+        }
         freq
     }
 

@@ -98,10 +98,7 @@ pub fn post(title: &str, body: &str, level: Level) {
             // Recycle slot 0 (simplest)
             slot = Some(0);
         }
-        TOASTS[slot.unwrap()] = Some(Toast {
-            notif,
-            progress: 0,
-        });
+        TOASTS[slot.unwrap()] = Some(Toast { notif, progress: 0 });
     }
 }
 
@@ -237,7 +234,14 @@ pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
                 theme.menu_bg,
             );
             // Title
-            draw_text(fb, x + 34, ty + 10, toast.notif.title_str(), theme.label_text, theme.menu_bg);
+            draw_text(
+                fb,
+                x + 34,
+                ty + 10,
+                toast.notif.title_str(),
+                theme.label_text,
+                theme.menu_bg,
+            );
             // Body (single line, clipped by construction: 96 bytes max)
             draw_text(
                 fb,

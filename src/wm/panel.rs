@@ -179,8 +179,7 @@ pub fn draw(fb: &FramebufferInfo) {
             PANEL_STATE.tray_network.widget.y = panel_y + 4;
             PANEL_STATE.tray_volume.widget.x = tray_x_start + (TRAY_ITEM_WIDTH + 4);
             PANEL_STATE.tray_volume.widget.y = panel_y + 4;
-            PANEL_STATE.tray_battery.widget.x =
-                tray_x_start + 2 * (TRAY_ITEM_WIDTH + 4);
+            PANEL_STATE.tray_battery.widget.x = tray_x_start + 2 * (TRAY_ITEM_WIDTH + 4);
             PANEL_STATE.tray_battery.widget.y = panel_y + 4;
         }
 
@@ -294,7 +293,14 @@ fn draw_cpu_graph(fb: &FramebufferInfo, panel_y: u32) {
             }
             let bar_h = gh * v / 100;
             let x = gx + i as u32 * (gw / n as u32);
-            draw_rect(fb, x, gy + gh - bar_h, gw / n as u32, bar_h, crate::wm::theme::accent_color());
+            draw_rect(
+                fb,
+                x,
+                gy + gh - bar_h,
+                gw / n as u32,
+                bar_h,
+                crate::wm::theme::accent_color(),
+            );
         }
     }
 }
@@ -446,8 +452,10 @@ pub fn handle_click(px: u32, py: u32) -> Option<u32> {
 
         // Check launcher button — live coords (the button's stored
         // position predates the framebuffer, like the clock labels).
-        if px >= 4 && px < 4 + LAUNCHER_WIDTH
-            && py >= panel_y + 4 && py < panel_y + PANEL_HEIGHT - 4
+        if px >= 4
+            && px < 4 + LAUNCHER_WIDTH
+            && py >= panel_y + 4
+            && py < panel_y + PANEL_HEIGHT - 4
         {
             return Some(0xFFFFFFFF);
         }
@@ -476,7 +484,11 @@ pub fn handle_click(px: u32, py: u32) -> Option<u32> {
             );
             let cw = 70i64;
             let ch = PANEL_HEIGHT as i64;
-            if (px as i64) >= cx && (px as i64) < cx + cw && (py as i64) >= cy - 6 && (py as i64) < cy + 22 {
+            if (px as i64) >= cx
+                && (px as i64) < cx + cw
+                && (py as i64) >= cy - 6
+                && (py as i64) < cy + 22
+            {
                 return Some(0xFFFFFFFB);
             }
         }

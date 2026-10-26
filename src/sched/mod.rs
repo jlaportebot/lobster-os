@@ -111,10 +111,22 @@ pub struct TrapFrame {
 }
 
 const _: () = {
-    assert!(core::mem::size_of::<TrapFrame>() == 272, "TrapFrame must match the 272-byte asm exception frame");
-    assert!(core::mem::offset_of!(TrapFrame, elr) == 256, "ELR must live at frame offset 256 (boot.S SAVE/RESTORE)");
-    assert!(core::mem::offset_of!(TrapFrame, spsr) == 264, "SPSR must live at frame offset 264 (boot.S SAVE/RESTORE)");
-    assert!(core::mem::offset_of!(TrapFrame, sp) == 248, "SP must live at frame offset 248");
+    assert!(
+        core::mem::size_of::<TrapFrame>() == 272,
+        "TrapFrame must match the 272-byte asm exception frame"
+    );
+    assert!(
+        core::mem::offset_of!(TrapFrame, elr) == 256,
+        "ELR must live at frame offset 256 (boot.S SAVE/RESTORE)"
+    );
+    assert!(
+        core::mem::offset_of!(TrapFrame, spsr) == 264,
+        "SPSR must live at frame offset 264 (boot.S SAVE/RESTORE)"
+    );
+    assert!(
+        core::mem::offset_of!(TrapFrame, sp) == 248,
+        "SP must live at frame offset 248"
+    );
 };
 
 impl TrapFrame {
@@ -316,7 +328,9 @@ pub fn current_pid() -> Pid {
 
 /// Set the current PID (used by cooperative exit to reset to 0)
 pub fn set_current_pid(pid: Pid) {
-    unsafe { CURRENT_PID = pid; }
+    unsafe {
+        CURRENT_PID = pid;
+    }
 }
 
 /// Get and increment next PID (for fork)
@@ -359,8 +373,8 @@ fn alloc_kernel_stack() -> Option<(u64, u64)> {
 /// in the user's page table. We just need to return the top of that range
 /// as the initial stack pointer.
 fn alloc_user_stack() -> Option<(u64, u64)> {
-    const USER_STACK_TOP: u64 = 0x7f000000;      // exclusive top
-    const USER_STACK_BASE: u64 = 0x7ef00000;      // inclusive base
+    const USER_STACK_TOP: u64 = 0x7f000000; // exclusive top
+    const USER_STACK_BASE: u64 = 0x7ef00000; // inclusive base
     Some((USER_STACK_TOP, USER_STACK_BASE))
 }
 
@@ -1205,7 +1219,6 @@ static mut KERNEL_SP: u64 = 0;
 /// eret-into-user clobbers all GPRs; the cooperative exit must restore these
 /// before resuming the caller, or the caller branches through garbage.
 
-
 /// Run a user process synchronously in cooperative mode.
 ///
 /// This function:
@@ -1240,7 +1253,7 @@ pub unsafe extern "C" fn run_and_wait(_pid: u64) -> i64 {
         "stp x27, x28, [x18, #64]",
         "stp x29, x30, [x18, #80]",
         "mov x1, sp",
-        "str x1, [x18, #96]",          // save SP
+        "str x1, [x18, #96]", // save SP
         "bl run_and_wait_body",
         // Normal return path (body found no task etc.): restore and return.
         "ldr x18, =KERNEL_CALLEE_SAVE",
@@ -1370,13 +1383,17 @@ pub fn coop_exit_code() -> i64 {
 
 /// Clear the cooperative exit flag
 pub fn clear_cooperative_exit() {
-    unsafe { COOPERATIVE_EXIT_REQUESTED = false; }
+    unsafe {
+        COOPERATIVE_EXIT_REQUESTED = false;
+    }
 }
 
 /// Mark that we want cooperative exit — the next exception return should
 /// go back to EL1 kernel mode instead of EL0.
 pub fn request_cooperative_exit() {
-    unsafe { COOPERATIVE_EXIT_REQUESTED = true; }
+    unsafe {
+        COOPERATIVE_EXIT_REQUESTED = true;
+    }
 }
 
 // ── Sliced cooperative multitasking (S2) ─────────────────────────────
@@ -1398,7 +1415,9 @@ static mut SLICE_YIELD_REQUESTED: bool = false;
 
 /// Set when a cooperative exit should ALSO end the slice loop (task exited).
 pub fn request_slice_yield() {
-    unsafe { SLICE_YIELD_REQUESTED = true; }
+    unsafe {
+        SLICE_YIELD_REQUESTED = true;
+    }
 }
 
 pub fn slice_yield_pending() -> bool {
@@ -1406,7 +1425,9 @@ pub fn slice_yield_pending() -> bool {
 }
 
 pub fn clear_slice_yield() {
-    unsafe { SLICE_YIELD_REQUESTED = false; }
+    unsafe {
+        SLICE_YIELD_REQUESTED = false;
+    }
 }
 
 /// True when the current cooperative run should return to the main loop
@@ -1495,22 +1516,46 @@ pub fn run_bg_slices() -> bool {
 /// 248). `elr`/`spsr` are the exception-time values (SVC ELR already
 /// points past the svc instruction).
 pub unsafe fn save_slice_frame(pid: Pid, regs: *const u64, elr: u64, spsr: u64) {
-    let Some(idx) = find_task_index(pid) else { return };
-    let Some(ref mut t) = TASK_TABLE[idx] else { return };
+    let Some(idx) = find_task_index(pid) else {
+        return;
+    };
+    let Some(ref mut t) = TASK_TABLE[idx] else {
+        return;
+    };
     if regs.is_null() {
         return;
     }
     let f = &mut t.regs;
-    f.x0 = *regs.add(0); f.x1 = *regs.add(1); f.x2 = *regs.add(2);
-    f.x3 = *regs.add(3); f.x4 = *regs.add(4); f.x5 = *regs.add(5);
-    f.x6 = *regs.add(6); f.x7 = *regs.add(7); f.x8 = *regs.add(8);
-    f.x9 = *regs.add(9); f.x10 = *regs.add(10); f.x11 = *regs.add(11);
-    f.x12 = *regs.add(12); f.x13 = *regs.add(13); f.x14 = *regs.add(14);
-    f.x15 = *regs.add(15); f.x16 = *regs.add(16); f.x17 = *regs.add(17);
-    f.x18 = *regs.add(18); f.x19 = *regs.add(19); f.x20 = *regs.add(20);
-    f.x21 = *regs.add(21); f.x22 = *regs.add(22); f.x23 = *regs.add(23);
-    f.x24 = *regs.add(24); f.x25 = *regs.add(25); f.x26 = *regs.add(26);
-    f.x27 = *regs.add(27); f.x28 = *regs.add(28); f.x29 = *regs.add(29);
+    f.x0 = *regs.add(0);
+    f.x1 = *regs.add(1);
+    f.x2 = *regs.add(2);
+    f.x3 = *regs.add(3);
+    f.x4 = *regs.add(4);
+    f.x5 = *regs.add(5);
+    f.x6 = *regs.add(6);
+    f.x7 = *regs.add(7);
+    f.x8 = *regs.add(8);
+    f.x9 = *regs.add(9);
+    f.x10 = *regs.add(10);
+    f.x11 = *regs.add(11);
+    f.x12 = *regs.add(12);
+    f.x13 = *regs.add(13);
+    f.x14 = *regs.add(14);
+    f.x15 = *regs.add(15);
+    f.x16 = *regs.add(16);
+    f.x17 = *regs.add(17);
+    f.x18 = *regs.add(18);
+    f.x19 = *regs.add(19);
+    f.x20 = *regs.add(20);
+    f.x21 = *regs.add(21);
+    f.x22 = *regs.add(22);
+    f.x23 = *regs.add(23);
+    f.x24 = *regs.add(24);
+    f.x25 = *regs.add(25);
+    f.x26 = *regs.add(26);
+    f.x27 = *regs.add(27);
+    f.x28 = *regs.add(28);
+    f.x29 = *regs.add(29);
     f.x30 = *regs.add(30);
     t.regs.sp = *regs.add(31);
     t.regs.elr = elr;
@@ -1521,7 +1566,9 @@ pub unsafe fn save_slice_frame(pid: Pid, regs: *const u64, elr: u64, spsr: u64) 
 static mut PREEMPT_ON: bool = false;
 
 pub fn set_preempt(on: bool) {
-    unsafe { PREEMPT_ON = on; }
+    unsafe {
+        PREEMPT_ON = on;
+    }
 }
 
 pub fn preempt_enabled() -> bool {

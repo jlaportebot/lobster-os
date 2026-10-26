@@ -168,7 +168,11 @@ fn alloc_frames(w: u32, h: u32, frames: &mut [u64; MAX_WIN_PAGES]) -> Option<usi
         match crate::memory::frame_alloc::allocate_frame() {
             Some(f) => {
                 unsafe {
-                    core::ptr::write_bytes((crate::memory::PHYS_MAP_OFFSET + f.0) as *mut u8, 0, PAGE)
+                    core::ptr::write_bytes(
+                        (crate::memory::PHYS_MAP_OFFSET + f.0) as *mut u8,
+                        0,
+                        PAGE,
+                    )
                 };
                 frames[i] = f.0;
             }
@@ -235,7 +239,12 @@ pub fn sys_win_create(x: u64, y: u64, w: u64, h: u64, title_ptr: u64) -> u64 {
             // processes; heap-backed for kernel tasks.
             let (cap, buf, backing, npages) = if current_user_ttbr0().is_some() {
                 match alloc_frames(w as u32, h as u32, &mut slot.frames) {
-                    Some(n) => (w as usize * h as usize, core::ptr::null_mut(), Backing::Frames, n),
+                    Some(n) => (
+                        w as usize * h as usize,
+                        core::ptr::null_mut(),
+                        Backing::Frames,
+                        n,
+                    ),
                     None => return u64::MAX,
                 }
             } else {
@@ -274,7 +283,8 @@ pub fn sys_win_create(x: u64, y: u64, w: u64, h: u64, title_ptr: u64) -> u64 {
 
             // Register a WM window so it gets chrome + input like any app
             let t = core::str::from_utf8(&slot.title[..tlen]).unwrap_or("EL0 App");
-            slot.wm_id = crate::wm::window::create(x as u32, y as u32, w as u32 + 8, h as u32 + 34, t);
+            slot.wm_id =
+                crate::wm::window::create(x as u32, y as u32, w as u32 + 8, h as u32 + 34, t);
             crate::wm::dirty::mark();
             return (slot_index(slot) + 1) as u64; // 1-based id
         }
@@ -336,7 +346,9 @@ pub fn sys_win_map(win_id: u64) -> u64 {
             Some(s) => s,
             None => return u64::MAX,
         };
-        let Some(ttbr0) = current_user_ttbr0() else { return u64::MAX };
+        let Some(ttbr0) = current_user_ttbr0() else {
+            return u64::MAX;
+        };
         if slot.user_va != 0 {
             return slot.user_va;
         }
@@ -524,9 +536,9 @@ pub fn close_all_for_pid(pid: u64) {
                 Backing::Frames => {
                     for i in 0..slot.npages {
                         if slot.frames[i] != 0 {
-                            crate::memory::frame_alloc::deallocate_frame(
-                                crate::memory::PhysAddr(slot.frames[i]),
-                            );
+                            crate::memory::frame_alloc::deallocate_frame(crate::memory::PhysAddr(
+                                slot.frames[i],
+                            ));
                             slot.frames[i] = 0;
                         }
                     }
@@ -599,7 +611,9 @@ pub fn click_event(win_id: u64, btn: u8, press: bool, x: u32, y: u32) {
 /// Syscall: poll the next event for a user window. 0 = none.
 pub fn sys_win_poll(win_id: u64) -> u64 {
     unsafe {
-        let Some(slot) = slot_by_id(win_id) else { return u64::MAX };
+        let Some(slot) = slot_by_id(win_id) else {
+            return u64::MAX;
+        };
         if slot.ev_head == slot.ev_tail {
             return 0;
         }
@@ -631,13 +645,9 @@ pub fn render_to_windows(fb: &FramebufferInfo) {
             }
             for py in 0..ch.min(slot.buf_h) {
                 for px in 0..cw.min(slot.buf_w) {
-                    let argb = core::ptr::read_volatile(pixel_ptr(slot, (py * slot.buf_w + px) as usize));
-                    crate::display::graphics::draw_pixel(
-                        fb,
-                        cx + px,
-                        cy + py,
-                        argb,
-                    );
+                    let argb =
+                        core::ptr::read_volatile(pixel_ptr(slot, (py * slot.buf_w + px) as usize));
+                    crate::display::graphics::draw_pixel(fb, cx + px, cy + py, argb);
                 }
             }
         }

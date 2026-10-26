@@ -347,19 +347,10 @@ mod tests {
 
     #[test]
     fn test_package_arch_from_str() {
-        assert_eq!(
-            PackageArch::from_str("aarch64"),
-            Ok(PackageArch::Aarch64)
-        );
-        assert_eq!(
-            PackageArch::from_str("x86_64"),
-            Ok(PackageArch::X86_64)
-        );
+        assert_eq!(PackageArch::from_str("aarch64"), Ok(PackageArch::Aarch64));
+        assert_eq!(PackageArch::from_str("x86_64"), Ok(PackageArch::X86_64));
         assert_eq!(PackageArch::from_str("armv7"), Ok(PackageArch::Armv7));
-        assert_eq!(
-            PackageArch::from_str("riscv64"),
-            Ok(PackageArch::Riscv64)
-        );
+        assert_eq!(PackageArch::from_str("riscv64"), Ok(PackageArch::Riscv64));
         assert_eq!(PackageArch::from_str("unknown"), Ok(PackageArch::Any));
     }
 

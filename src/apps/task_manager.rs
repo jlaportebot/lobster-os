@@ -107,8 +107,12 @@ pub fn handle_key(scancode: u8) -> bool {
 
 /// Click handling: tab bar hits switch panes. Returns true if consumed.
 pub fn handle_click(sx: u32, sy: u32) -> bool {
-    let Some(win_id) = window::find_by_title(APP_NAME) else { return false };
-    let Some((x, y, w, h)) = window::get_info(win_id) else { return false };
+    let Some(win_id) = window::find_by_title(APP_NAME) else {
+        return false;
+    };
+    let Some((x, y, w, h)) = window::get_info(win_id) else {
+        return false;
+    };
     let focused = window::focused_id() == win_id;
     let _ = focused;
     // client region (frame chrome: 2px border, 24px title)
@@ -121,7 +125,10 @@ pub fn handle_click(sx: u32, sy: u32) -> bool {
     if sy < cy + TAB_BAR_H {
         // inside the tab bar: find which tab by x
         let mut tab_x = cx + 8;
-        let tabs = [("Performance", Tab::Performance), ("Processes", Tab::Processes)];
+        let tabs = [
+            ("Performance", Tab::Performance),
+            ("Processes", Tab::Processes),
+        ];
         for (label, tab) in tabs {
             let tw = (label.len() as u32) * 8 + 16;
             if sx >= tab_x && sx < tab_x + tw {
@@ -136,24 +143,34 @@ pub fn handle_click(sx: u32, sy: u32) -> bool {
 
 /// Render the Task Manager window.
 pub fn render_to_windows(fbuf: &crate::display::fb::FramebufferInfo) {
-    let Some(win_id) = window::find_by_title(APP_NAME) else { return };
-    let Some((x, y, w, h)) = window::get_info(win_id) else { return };
+    let Some(win_id) = window::find_by_title(APP_NAME) else {
+        return;
+    };
+    let Some((x, y, w, h)) = window::get_info(win_id) else {
+        return;
+    };
     let focused = window::focused_id() == win_id;
-    let (cx, cy, cw, ch) = crate::wm::window_frame::draw_frame(
-        fbuf, win_id, x, y, w, h, APP_NAME, focused,
-    );
+    let (cx, cy, cw, ch) =
+        crate::wm::window_frame::draw_frame(fbuf, win_id, x, y, w, h, APP_NAME, focused);
     let t = theme::current();
 
     // Tab bar
     graphics::draw_rect(fbuf, cx, cy, cw, TAB_BAR_H, t.menu_bg);
-    let tabs = [("Performance", Tab::Performance), ("Processes", Tab::Processes)];
+    let tabs = [
+        ("Performance", Tab::Performance),
+        ("Processes", Tab::Processes),
+    ];
     let mut tab_x = cx + 8;
     let tm = get();
     let accent = crate::wm::theme::accent_color();
     for (label, tab) in tabs {
         let is_active = tm.tab == tab;
         let bg = if is_active { accent } else { t.menu_bg };
-        let fg = if is_active { 0xFFFFFFFF } else { t.label_text_dim };
+        let fg = if is_active {
+            0xFFFFFFFF
+        } else {
+            t.label_text_dim
+        };
         let tw = (label.len() as u32) * 8 + 16;
         graphics::draw_rect(fbuf, tab_x, cy + 4, tw, TAB_BAR_H - 8, bg);
         graphics::draw_text(fbuf, tab_x + 8, cy + 8, label, fg, bg);
@@ -164,7 +181,11 @@ pub fn render_to_windows(fbuf: &crate::display::fb::FramebufferInfo) {
     let py = cy + TAB_BAR_H + 4;
     let ph = ch.saturating_sub(TAB_BAR_H + 8);
     match tm.tab {
-        Tab::Performance => tm.perf.render_pane(fbuf, cx + 2, py, cw.saturating_sub(4), ph),
-        Tab::Processes => tm.procs.render_pane(fbuf, cx + 2, py, cw.saturating_sub(4), ph),
+        Tab::Performance => tm
+            .perf
+            .render_pane(fbuf, cx + 2, py, cw.saturating_sub(4), ph),
+        Tab::Processes => tm
+            .procs
+            .render_pane(fbuf, cx + 2, py, cw.saturating_sub(4), ph),
     }
 }

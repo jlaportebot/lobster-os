@@ -86,10 +86,12 @@ pub unsafe extern "C" fn handle_sync_exception(
                 elr,
                 (spsr >> 20) & 1
             );
-            println!("[exception] regs[0]={:#018x} regs[1]={:#018x} regs[29]={:#018x}",
-                if _regs.is_null() {0} else {*_regs.add(0)},
-                if _regs.is_null() {0} else {*_regs.add(1)},
-                if _regs.is_null() {0} else {*_regs.add(29)});
+            println!(
+                "[exception] regs[0]={:#018x} regs[1]={:#018x} regs[29]={:#018x}",
+                if _regs.is_null() { 0 } else { *_regs.add(0) },
+                if _regs.is_null() { 0 } else { *_regs.add(1) },
+                if _regs.is_null() { 0 } else { *_regs.add(29) }
+            );
             // Bring-up: do not halt; the caller context resumes.
         }
     }
@@ -221,12 +223,7 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
             // S2: persist the EL0 frame BEFORE rewiring ELR/SPSR so the
             // next run_and_wait resumes the app where it yielded.
             if is_slice {
-                crate::sched::save_slice_frame(
-                    crate::sched::current_pid(),
-                    regs,
-                    elr,
-                    spsr,
-                );
+                crate::sched::save_slice_frame(crate::sched::current_pid(), regs, elr, spsr);
             }
             // Deliver the exit code (or slice marker) in x0: the resume
             // trampoline returns it to run_and_wait's caller.
@@ -247,8 +244,8 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
                 // add(256)/add(264) wrote 2KB past the frame — the eret
                 // then loaded the ORIGINAL ELR/SPSR and returned to the
                 // app after exit, executing garbage.)
-                *regs.add(32) = kr;      // TrapFrame.elr   (byte 256)
-                *regs.add(33) = 0x3C5;   // TrapFrame.spsr  (byte 264)
+                *regs.add(32) = kr; // TrapFrame.elr   (byte 256)
+                *regs.add(33) = 0x3C5; // TrapFrame.spsr  (byte 264)
             }
         }
         // For slices the task stays Ready; the main loop will resume it

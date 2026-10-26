@@ -651,7 +651,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         // Embed MicroPython interpreter binary
         let micropython_bin = include_bytes!("../tools/micropython_min.bin");
         match crate::fs::vfs::write_file("/bin/python", micropython_bin) {
-            Ok(n) => crate::println!("[fs] Embedded /bin/python ({}/{} bytes)", n, micropython_bin.len()),
+            Ok(n) => crate::println!(
+                "[fs] Embedded /bin/python ({}/{} bytes)",
+                n,
+                micropython_bin.len()
+            ),
             Err(e) => crate::println!("[fs] Failed to embed /bin/python: {:?}", e),
         }
     }
@@ -997,7 +1001,9 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     // hardware ticks stay masked there until the issue is fixed.
     #[cfg(not(feature = "qemu_raspi5b"))]
     {
-        unsafe { crate::arch::timer::Timer::enable_irq_source(); }
+        unsafe {
+            crate::arch::timer::Timer::enable_irq_source();
+        }
         crate::println!("[boot] Timer IRQ source enabled (hardware ticks)");
     }
     #[cfg(feature = "qemu_raspi5b")]

@@ -558,7 +558,15 @@ pub fn bootstrap_home() {
             b"Welcome to LobsterOS!\nThis is your home directory (/home/user).\nFiles saved here persist across reboots when a disk is attached.\n",
         );
     }
-    println!("[vfs] home: {} (alias {})", HOME_PATH, if have_sd { "-> /sd/home/user" } else { "RAM only" });
+    println!(
+        "[vfs] home: {} (alias {})",
+        HOME_PATH,
+        if have_sd {
+            "-> /sd/home/user"
+        } else {
+            "RAM only"
+        }
+    );
 }
 
 /// Resolve a path to a VFS node ID
@@ -903,8 +911,7 @@ pub fn list_dir(path: &str) -> Result<alloc::vec::Vec<DirEntry>, VfsError> {
 pub fn read_file(path: &str) -> Result<alloc::vec::Vec<u8>, VfsError> {
     // Host shared folder
     if let Some(rel) = share_rel_path(path) {
-        return crate::drivers::lobster_share::read_file(rel)
-            .ok_or(VfsError::NotFound);
+        return crate::drivers::lobster_share::read_file(rel).ok_or(VfsError::NotFound);
     }
     let inode_id = resolve_path(path)?;
     // Materialize ext2-backed content before reading the inline buffer.
@@ -1014,7 +1021,8 @@ pub fn remove(path: &str) -> Result<(), VfsError> {
     {
         let (p_ino, p_fs, name_str): (u32, u32, alloc::string::String) = {
             let pid = node.parent_id;
-            let pname = get_node(pid).map(|p| alloc::string::String::from(p.name_str()))
+            let pname = get_node(pid)
+                .map(|p| alloc::string::String::from(p.name_str()))
                 .unwrap_or_default();
             let pino = get_node(pid).map(|p| p.backing_ino).unwrap_or(0);
             let pfs = get_node(pid).map(|p| p.backing_fs).unwrap_or(0);
@@ -1236,9 +1244,7 @@ pub fn hydrate_node(node_id: u64) -> Result<(), VfsError> {
 
 /// Whether a backing-store directory has been materialized into the VFS.
 pub fn node_dir_expanded(node_id: u64) -> bool {
-    unsafe {
-        get_node(node_id).map(|n| n.hydrated).unwrap_or(false)
-    }
+    unsafe { get_node(node_id).map(|n| n.hydrated).unwrap_or(false) }
 }
 
 /// Lazy directory expansion: called during path resolution when a node is an
@@ -1281,7 +1287,13 @@ pub fn writeback_node(node_id: u64) -> Result<(), VfsError> {
                 return Ok(());
             }
             let name: alloc::string::String = alloc::string::String::from(node.name_str());
-            (node.backing_ino, node.data().to_vec(), name, node.parent_id, node.metadata.file_type)
+            (
+                node.backing_ino,
+                node.data().to_vec(),
+                name,
+                node.parent_id,
+                node.metadata.file_type,
+            )
         };
         let _ = file_type;
 
@@ -1660,11 +1672,11 @@ pub fn ftruncate(fd: usize, length: u64) -> Result<(), VfsError> {
 pub fn truncate(path: &str, length: u64) -> Result<(), VfsError> {
     let inode_id = resolve_path(path)?;
     let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
-    
+
     if node.metadata.file_type != FileType::RegularFile {
         return Err(VfsError::NotAFile);
     }
-    
+
     // Check write permission
     let write_access = crate::security::PERM_OWNER_WRITE
         | crate::security::PERM_GROUP_WRITE
@@ -1672,13 +1684,16 @@ pub fn truncate(path: &str, length: u64) -> Result<(), VfsError> {
     if !check_permission(node, write_access) {
         return Err(VfsError::PermissionDenied);
     }
-    
+
     if length <= MAX_FILE_DATA as u64 {
         // Growing the file: ensure backing buffer covers the new length so
         // reads of the extended region stay in bounds (zero-filled).
         let need = length as usize;
         node.ensure_capacity(need)?;
-        if length as usize > node.data_len as usize && need <= node.data_cap && !node.data_ptr.is_null() {
+        if length as usize > node.data_len as usize
+            && need <= node.data_cap
+            && !node.data_ptr.is_null()
+        {
             let dst = unsafe { core::slice::from_raw_parts_mut(node.data_ptr, node.data_cap) };
             dst[node.data_len as usize..].fill(0);
         }

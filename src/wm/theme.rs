@@ -356,7 +356,9 @@ pub fn accent_argb() -> u32 {
 pub fn set_accent_name(name: &str) -> bool {
     for (n, c) in ACCENTS {
         if n.eq_ignore_ascii_case(name) {
-            unsafe { ACCENT = *c; }
+            unsafe {
+                ACCENT = *c;
+            }
             persist();
             crate::wm::compositor::mark_full_redraw();
             return true;
@@ -370,7 +372,9 @@ pub fn cycle_accent_name() {
     let current = accent_color();
     let idx = ACCENTS.iter().position(|(_, c)| *c == current).unwrap_or(0);
     let next = ACCENTS[(idx + 1) % ACCENTS.len()];
-    unsafe { ACCENT = next.1; }
+    unsafe {
+        ACCENT = next.1;
+    }
     persist();
     crate::wm::compositor::mark_full_redraw();
 }
@@ -391,7 +395,11 @@ pub fn toggle() {
 
 /// Persist the active theme to /sd/etc/theme.conf (best effort).
 fn persist() {
-    let conf = alloc::format!("theme={}\naccent={:#010x}\n", current_name(), accent_color());
+    let conf = alloc::format!(
+        "theme={}\naccent={:#010x}\n",
+        current_name(),
+        accent_color()
+    );
     if crate::fs::vfs::write_file("/sd/etc/theme.conf", conf.as_bytes()).is_ok() {
         crate::println!("[theme] Saved to /sd");
     }
@@ -417,7 +425,9 @@ pub fn load_persisted() {
         }
         if let Some(val) = line.strip_prefix("accent=") {
             if let Ok(c) = u32::from_str_radix(val.trim().trim_start_matches("0x"), 16) {
-                unsafe { ACCENT = c; }
+                unsafe {
+                    ACCENT = c;
+                }
                 crate::println!("[theme] Restored accent {:#010x} from /sd", c);
             }
         }

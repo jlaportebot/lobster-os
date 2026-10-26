@@ -587,7 +587,7 @@ pub unsafe fn map_page_virt(va: u64, pa: u64, flags: u64) {
     map_page_via_virt(root, va, pa, flags);
     // Flush TLB for this page
     #[cfg(target_arch = "aarch64")]
-            core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
+    core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
 }
@@ -611,7 +611,7 @@ pub unsafe fn unmap_page_virt(va: u64) {
     let idx = pt_index(va, 3);
     (*table)[idx] = 0; // Invalidate
     #[cfg(target_arch = "aarch64")]
-            core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
+    core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
 }
@@ -639,7 +639,7 @@ pub unsafe fn protect_page_virt(va: u64, flags: u64) {
         (*table)[idx] = pa | flags;
     }
     #[cfg(target_arch = "aarch64")]
-            core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
+    core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
 }

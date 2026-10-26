@@ -78,16 +78,56 @@ pub struct Stage {
 
 /// The routing table, in priority order. See module docs.
 pub static STAGES: [Stage; 10] = [
-    Stage { name: "context_menu", hit: hit_context_menu, handle: handle_context_menu },
-    Stage { name: "task_manager", hit: hit_left_press, handle: handle_task_manager },
-    Stage { name: "terminal_tabs", hit: hit_left_press, handle: handle_terminal_tabs },
-    Stage { name: "editor_tabs", hit: hit_left_press, handle: handle_editor_tabs },
-    Stage { name: "user_windows", hit: hit_user_window_content, handle: handle_user_windows },
-    Stage { name: "panel", hit: hit_left_press, handle: handle_panel },
-    Stage { name: "tray_popups", hit: hit_left_press, handle: handle_tray_popups },
-    Stage { name: "start_menu", hit: hit_left_press, handle: handle_start_menu },
-    Stage { name: "desktop_icons", hit: hit_desktop_icon, handle: handle_desktop_icons },
-    Stage { name: "window_chrome", hit: hit_press_or_release, handle: handle_window_chrome },
+    Stage {
+        name: "context_menu",
+        hit: hit_context_menu,
+        handle: handle_context_menu,
+    },
+    Stage {
+        name: "task_manager",
+        hit: hit_left_press,
+        handle: handle_task_manager,
+    },
+    Stage {
+        name: "terminal_tabs",
+        hit: hit_left_press,
+        handle: handle_terminal_tabs,
+    },
+    Stage {
+        name: "editor_tabs",
+        hit: hit_left_press,
+        handle: handle_editor_tabs,
+    },
+    Stage {
+        name: "user_windows",
+        hit: hit_user_window_content,
+        handle: handle_user_windows,
+    },
+    Stage {
+        name: "panel",
+        hit: hit_left_press,
+        handle: handle_panel,
+    },
+    Stage {
+        name: "tray_popups",
+        hit: hit_left_press,
+        handle: handle_tray_popups,
+    },
+    Stage {
+        name: "start_menu",
+        hit: hit_left_press,
+        handle: handle_start_menu,
+    },
+    Stage {
+        name: "desktop_icons",
+        hit: hit_desktop_icon,
+        handle: handle_desktop_icons,
+    },
+    Stage {
+        name: "window_chrome",
+        hit: hit_press_or_release,
+        handle: handle_window_chrome,
+    },
 ];
 
 /// Walk the table; returns the name of the consuming stage, if any.

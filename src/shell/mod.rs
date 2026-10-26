@@ -788,8 +788,6 @@ fn execute_command(line: &str) -> CmdResult {
 
         // Next stage reads from the read end
         pipe_read_fd = next_pipe_fds.0;
-
-
     }
 
     // Close any remaining pipe read fd
@@ -879,12 +877,7 @@ fn run_builtin(
 }
 
 /// Builtin dispatch with the stage's output sink applied.
-fn run_builtin_out(
-    cmd: &str,
-    args: [&str; MAX_ARGS],
-    argc: usize,
-    out: &ShellOut,
-) -> i32 {
+fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) -> i32 {
     match cmd {
         "help" | "?" => {
             cmd_help();
@@ -1054,7 +1047,10 @@ fn run_builtin_out(
                 if argc >= 2 {
                     crate::wm::theme::toggle();
                 } else {
-                    crate::println!("theme: {} (run 'theme toggle' to switch)", crate::wm::theme::current_name());
+                    crate::println!(
+                        "theme: {} (run 'theme toggle' to switch)",
+                        crate::wm::theme::current_name()
+                    );
                 }
             }
             0
@@ -1089,8 +1085,16 @@ fn run_builtin_out(
             {
                 if argc >= 2 {
                     match args[1] {
-                        "back" => { unsafe { crate::apps::browser::INSTANCE.as_mut().map(|b| b.back()); }; }
-                        "fwd" => { unsafe { crate::apps::browser::INSTANCE.as_mut().map(|b| b.forward()); }; }
+                        "back" => {
+                            unsafe {
+                                crate::apps::browser::INSTANCE.as_mut().map(|b| b.back());
+                            };
+                        }
+                        "fwd" => {
+                            unsafe {
+                                crate::apps::browser::INSTANCE.as_mut().map(|b| b.forward());
+                            };
+                        }
                         "down" => crate::apps::browser::scroll(true),
                         "up" => crate::apps::browser::scroll(false),
                         _ => {}
@@ -1103,7 +1107,10 @@ fn run_builtin_out(
             #[cfg(target_arch = "aarch64")]
             {
                 let (w, h) = if argc >= 3 {
-                    (args[1].parse::<u32>().unwrap_or(0), args[2].parse::<u32>().unwrap_or(0))
+                    (
+                        args[1].parse::<u32>().unwrap_or(0),
+                        args[2].parse::<u32>().unwrap_or(0),
+                    )
                 } else {
                     (0, 0)
                 };
@@ -1112,7 +1119,13 @@ fn run_builtin_out(
                 const MAX_W: u32 = 2560;
                 const MAX_H: u32 = 1600;
                 if w < MIN_W || h < MIN_H || w > MAX_W || h > MAX_H {
-                    crate::println!("usage: resolution <{}-{}> <{}-{}>", MIN_W, MAX_W, MIN_H, MAX_H);
+                    crate::println!(
+                        "usage: resolution <{}-{}> <{}-{}>",
+                        MIN_W,
+                        MAX_W,
+                        MIN_H,
+                        MAX_H
+                    );
                     return 0;
                 }
                 match crate::display::fb::init(w, h, 32) {
@@ -1145,8 +1158,16 @@ fn run_builtin_out(
         "beep" => {
             #[cfg(target_arch = "aarch64")]
             {
-                let freq = if argc >= 2 { args[1].parse::<u64>().unwrap_or(440_000) } else { 440_000 };
-                let ms = if argc >= 3 { args[2].parse::<u64>().unwrap_or(300) } else { 300 };
+                let freq = if argc >= 2 {
+                    args[1].parse::<u64>().unwrap_or(440_000)
+                } else {
+                    440_000
+                };
+                let ms = if argc >= 3 {
+                    args[2].parse::<u64>().unwrap_or(300)
+                } else {
+                    300
+                };
                 if !crate::drivers::lobster_audio::detect() {
                     crate::println!("beep: audio device absent");
                 } else {
@@ -1177,77 +1198,87 @@ fn run_builtin_out(
             }
             0
         }
-        "share" => {
-            match if argc >= 2 { Some(args[1]) } else { None } {
-                None => {
-                    if crate::drivers::lobster_share::detect() {
-                        crate::println!("share: device present (host LBST_SHARE)");
-                        let mut n = 0;
-                        let _ = crate::drivers::lobster_share::list_dir("", |name| {
-                            crate::println!("  {}", name);
-                            n += 1;
-                        });
-                        crate::println!("share: {} entries", n);
-                    } else {
-                        crate::println!("share: device absent");
-                    }
-                    0
+        "share" => match if argc >= 2 { Some(args[1]) } else { None } {
+            None => {
+                if crate::drivers::lobster_share::detect() {
+                    crate::println!("share: device present (host LBST_SHARE)");
+                    let mut n = 0;
+                    let _ = crate::drivers::lobster_share::list_dir("", |name| {
+                        crate::println!("  {}", name);
+                        n += 1;
+                    });
+                    crate::println!("share: {} entries", n);
+                } else {
+                    crate::println!("share: device absent");
                 }
-                Some("cat") if argc >= 3 => {
-                    let name = args[2];
-                    match crate::drivers::lobster_share::read_file(name) {
-                        Some(data) => {
-                            if let Ok(s) = core::str::from_utf8(&data) {
-                                crate::println!("{}", s.trim_end());
-                            } else {
-                                crate::println!("share: {} is binary ({} bytes)", name, data.len());
-                            }
-                            0
+                0
+            }
+            Some("cat") if argc >= 3 => {
+                let name = args[2];
+                match crate::drivers::lobster_share::read_file(name) {
+                    Some(data) => {
+                        if let Ok(s) = core::str::from_utf8(&data) {
+                            crate::println!("{}", s.trim_end());
+                        } else {
+                            crate::println!("share: {} is binary ({} bytes)", name, data.len());
                         }
-                        None => {
-                            crate::println!("share: not found: {}", name);
-                            0
-                        }
+                        0
                     }
-                }
-                Some("cp") if argc >= 4 => {
-                    let (from, to) = (args[2], args[3]);
-                    match crate::drivers::lobster_share::read_file(from) {
-                        Some(data) => {
-                            use crate::fs::vfs;
-                            let fd = match vfs::open(to, vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC) {
-                                Ok(fd) => fd,
-                                Err(e) => {
-                                    crate::println!("share: cannot create {}: {:?}", to, e);
-                                    return 0;
-                                }
-                            };
-                            let _ = vfs::write(fd, &data);
-                            vfs::close(fd);
-                            crate::println!("share: {} -> {} ({} bytes)", from, to, data.len());
-                            0
-                        }
-                        None => {
-                            crate::println!("share: not found: {}", from);
-                            0
-                        }
+                    None => {
+                        crate::println!("share: not found: {}", name);
+                        0
                     }
-                }
-                Some(other) => {
-                    crate::println!("share: unknown subcommand '{}'", other);
-                    0
                 }
             }
-        }
+            Some("cp") if argc >= 4 => {
+                let (from, to) = (args[2], args[3]);
+                match crate::drivers::lobster_share::read_file(from) {
+                    Some(data) => {
+                        use crate::fs::vfs;
+                        let fd = match vfs::open(to, vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC) {
+                            Ok(fd) => fd,
+                            Err(e) => {
+                                crate::println!("share: cannot create {}: {:?}", to, e);
+                                return 0;
+                            }
+                        };
+                        let _ = vfs::write(fd, &data);
+                        vfs::close(fd);
+                        crate::println!("share: {} -> {} ({} bytes)", from, to, data.len());
+                        0
+                    }
+                    None => {
+                        crate::println!("share: not found: {}", from);
+                        0
+                    }
+                }
+            }
+            Some(other) => {
+                crate::println!("share: unknown subcommand '{}'", other);
+                0
+            }
+        },
         "wins" => {
             #[cfg(target_arch = "aarch64")]
             {
                 let count = crate::wm::window::count();
-                crate::println!("wins: {} windows (focused id={})", count, crate::wm::window::focused_id());
+                crate::println!(
+                    "wins: {} windows (focused id={})",
+                    count,
+                    crate::wm::window::focused_id()
+                );
                 for id in 1..=count as u32 {
                     if crate::wm::window::exists(id) {
                         if let Some((x, y, w, h)) = crate::wm::window::get_info(id) {
-                            crate::println!("wins: id={} '{}' at ({},{}) {}x{}", id, crate::wm::window::get_title(id), x, y, w, h);
+                            crate::println!(
+                                "wins: id={} '{}' at ({},{}) {}x{}",
+                                id,
+                                crate::wm::window::get_title(id),
+                                x,
+                                y,
+                                w,
+                                h
+                            );
                         }
                     }
                 }
@@ -1281,7 +1312,10 @@ fn run_builtin_out(
                         crate::println!("accent: unknown '{}'", args[1]);
                     }
                 } else {
-                    crate::println!("accent: {:#010x} (try next or a preset name)", crate::wm::theme::accent_color());
+                    crate::println!(
+                        "accent: {:#010x} (try next or a preset name)",
+                        crate::wm::theme::accent_color()
+                    );
                 }
             }
             0
@@ -1291,8 +1325,10 @@ fn run_builtin_out(
             {
                 crate::apps::browser::init();
                 crate::apps::browser::toggle_bookmark();
-                crate::println!("bookmark: {} bookmarks (current URL toggled)",
-                    crate::apps::browser::bookmark_count());
+                crate::println!(
+                    "bookmark: {} bookmarks (current URL toggled)",
+                    crate::apps::browser::bookmark_count()
+                );
             }
             0
         }
@@ -1314,41 +1350,35 @@ fn run_builtin_out(
                             fm.refresh();
                             crate::println!("fm: {} entries", fm.entry_count());
                         }
-                        "sel" if argc >= 3 => {
-                            match args[2].parse::<usize>() {
-                                Ok(n) => {
-                                    fm.selected_index = n;
-                                    crate::println!("fm: selected {}", n);
-                                }
-                                Err(_) => crate::println!("fm: bad index"),
+                        "sel" if argc >= 3 => match args[2].parse::<usize>() {
+                            Ok(n) => {
+                                fm.selected_index = n;
+                                crate::println!("fm: selected {}", n);
                             }
-                        }
-                        "copy" if argc >= 3 => {
-                            match fm.copy_selected(args[2]) {
-                                Ok(()) => crate::println!("fm: copied to {}", args[2]),
-                                Err(e) => crate::println!("fm: {}", e),
-                            }
-                        }
-                        "move" if argc >= 3 => {
-                            match fm.move_selected(args[2]) {
-                                Ok(()) => crate::println!("fm: moved to {}", args[2]),
-                                Err(e) => crate::println!("fm: {}", e),
-                            }
-                        }
-                        "del" => {
-                            match fm.delete_selected() {
-                                Ok(()) => crate::println!("fm: deleted (persisted)"),
-                                Err(e) => crate::println!("fm: {}", e),
-                            }
-                        }
-                        "rename" if argc >= 3 => {
-                            match fm.rename_selected(args[2]) {
-                                Ok(()) => crate::println!("fm: renamed to {}", args[2]),
-                                Err(e) => crate::println!("fm: {}", e),
-                            }
-                        }
+                            Err(_) => crate::println!("fm: bad index"),
+                        },
+                        "copy" if argc >= 3 => match fm.copy_selected(args[2]) {
+                            Ok(()) => crate::println!("fm: copied to {}", args[2]),
+                            Err(e) => crate::println!("fm: {}", e),
+                        },
+                        "move" if argc >= 3 => match fm.move_selected(args[2]) {
+                            Ok(()) => crate::println!("fm: moved to {}", args[2]),
+                            Err(e) => crate::println!("fm: {}", e),
+                        },
+                        "del" => match fm.delete_selected() {
+                            Ok(()) => crate::println!("fm: deleted (persisted)"),
+                            Err(e) => crate::println!("fm: {}", e),
+                        },
+                        "rename" if argc >= 3 => match fm.rename_selected(args[2]) {
+                            Ok(()) => crate::println!("fm: renamed to {}", args[2]),
+                            Err(e) => crate::println!("fm: {}", e),
+                        },
                         "ls" => {
-                            crate::println!("fm: cwd {} ({} entries)", fm.current_path(), fm.entry_count());
+                            crate::println!(
+                                "fm: cwd {} ({} entries)",
+                                fm.current_path(),
+                                fm.entry_count()
+                            );
                         }
                         _ => crate::println!("fm: unknown subcommand"),
                     }
@@ -1363,8 +1393,14 @@ fn run_builtin_out(
             {
                 if argc >= 2 {
                     match args[1].parse::<usize>() {
-                        Ok(n) => { crate::wm::desktop_icons::select(Some(n)); crate::println!("iconsel: {}", n); }
-                        Err(_) => { crate::wm::desktop_icons::select(None); crate::println!("iconsel: cleared"); }
+                        Ok(n) => {
+                            crate::wm::desktop_icons::select(Some(n));
+                            crate::println!("iconsel: {}", n);
+                        }
+                        Err(_) => {
+                            crate::wm::desktop_icons::select(None);
+                            crate::println!("iconsel: cleared");
+                        }
                     }
                 }
             }
@@ -1408,12 +1444,21 @@ fn run_builtin_out(
                 match argc {
                     1 => {
                         crate::apps::notes::init();
-                        let id = crate::wm::window::find_by_title("Notes")
-                            .unwrap_or_else(|| crate::wm::window::create(260, 140, 700, 480, "Notes").unwrap_or(0));
-                        crate::println!("notes: {} notes (win {})", crate::apps::notes::note_count(), id);
+                        let id = crate::wm::window::find_by_title("Notes").unwrap_or_else(|| {
+                            crate::wm::window::create(260, 140, 700, 480, "Notes").unwrap_or(0)
+                        });
+                        crate::println!(
+                            "notes: {} notes (win {})",
+                            crate::apps::notes::note_count(),
+                            id
+                        );
                     }
                     _ => match args[1] {
-                        "new" => { crate::apps::notes::init(); crate::apps::notes::new_note(); crate::println!("notes: created"); }
+                        "new" => {
+                            crate::apps::notes::init();
+                            crate::apps::notes::new_note();
+                            crate::println!("notes: created");
+                        }
                         "type" if argc >= 3 => {
                             crate::apps::notes::init();
                             crate::apps::notes::type_char(args[2].chars().next().unwrap_or(' '));
@@ -1479,7 +1524,11 @@ fn run_builtin_out(
             #[cfg(target_arch = "aarch64")]
             {
                 let title = if argc >= 2 { args[1] } else { "Test" };
-                let body = if argc >= 3 { args[2] } else { "Notification from the shell" };
+                let body = if argc >= 3 {
+                    args[2]
+                } else {
+                    "Notification from the shell"
+                };
                 crate::wm::notifications::info(title, body);
                 crate::println!("notify: posted '{}'", title);
             }
@@ -1503,7 +1552,11 @@ fn run_builtin_out(
             #[cfg(target_arch = "aarch64")]
             {
                 crate::wm::start_menu::toggle();
-                let state = if crate::wm::start_menu::is_open() { "open" } else { "closed" };
+                let state = if crate::wm::start_menu::is_open() {
+                    "open"
+                } else {
+                    "closed"
+                };
                 crate::println!("menu: {}", state);
             }
             #[cfg(not(target_arch = "aarch64"))]
@@ -3442,8 +3495,9 @@ fn cmd_passwd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     let new_passwd_len = crate::drivers::serial_input::read_line_blocking(&mut new_passwd_buf);
     crate::drivers::serial_input::set_echo(saved_echo);
 
-    let new_password =
-        core::str::from_utf8(&new_passwd_buf[..new_passwd_len]).unwrap_or("").trim();
+    let new_password = core::str::from_utf8(&new_passwd_buf[..new_passwd_len])
+        .unwrap_or("")
+        .trim();
 
     // Confirm new password
     Uart10::puts("Retype new password: ");
@@ -3453,10 +3507,9 @@ fn cmd_passwd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         crate::drivers::serial_input::read_line_blocking(&mut confirm_passwd_buf);
     crate::drivers::serial_input::set_echo(saved_echo);
 
-    let confirm_password =
-        core::str::from_utf8(&confirm_passwd_buf[..confirm_passwd_len])
-            .unwrap_or("")
-            .trim();
+    let confirm_password = core::str::from_utf8(&confirm_passwd_buf[..confirm_passwd_len])
+        .unwrap_or("")
+        .trim();
 
     if new_password != confirm_password {
         crate::println!("passwd: passwords do not match");
@@ -4286,11 +4339,7 @@ fn cmd_python(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     } else {
         Vec::new()
     };
-    match crate::sched::spawn_from_path_args(
-        "/bin/python",
-        crate::sched::Priority::Normal,
-        &argv,
-    ) {
+    match crate::sched::spawn_from_path_args("/bin/python", crate::sched::Priority::Normal, &argv) {
         Some(pid) => {
             if argc >= 2 {
                 crate::println!("python: running {} as PID {}", args[1], pid);
@@ -4892,16 +4941,14 @@ fn cmd_which(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
     // All commands are built-in shell commands
     let builtin = [
-        "help", "clear", "uptime", "mem", "ps", "kill", "echo", "version",
-        "cpu", "timer", "gpio", "login", "su", "sudo", "passwd", "useradd",
-        "userdel", "groupadd", "groupdel", "id", "whoami", "hexdump", "yield",
-        "test", "set", "export", "unset", "env", "printenv", "history",
-        "cat", "ls", "cd", "home", "pwd", "mkdir", "rm", "mv", "chmod", "chown",
-        "touch", "cp", "head", "tail", "wc", "du", "df", "free", "which",
-        "uname", "date", "find", "run", "svc", "runlevel", "reboot", "halt",
-        "cc", "curl", "wget", "pkg", "gh", "vi", "edit", "ed", "nano",
-        "grep", "sort", "cut", "tr", "uniq", "seq", "yes", "tee",
-        "stat", "file", "ln", "basename", "dirname", "sleep", "man", "who", "userlist",
+        "help", "clear", "uptime", "mem", "ps", "kill", "echo", "version", "cpu", "timer", "gpio",
+        "login", "su", "sudo", "passwd", "useradd", "userdel", "groupadd", "groupdel", "id",
+        "whoami", "hexdump", "yield", "test", "set", "export", "unset", "env", "printenv",
+        "history", "cat", "ls", "cd", "home", "pwd", "mkdir", "rm", "mv", "chmod", "chown",
+        "touch", "cp", "head", "tail", "wc", "du", "df", "free", "which", "uname", "date", "find",
+        "run", "svc", "runlevel", "reboot", "halt", "cc", "curl", "wget", "pkg", "gh", "vi",
+        "edit", "ed", "nano", "grep", "sort", "cut", "tr", "uniq", "seq", "yes", "tee", "stat",
+        "file", "ln", "basename", "dirname", "sleep", "man", "who", "userlist",
     ];
     if builtin.contains(&args[1]) {
         crate::println!("{}: shell built-in command", args[1]);
@@ -5031,15 +5078,14 @@ fn net_available() -> bool {
 
 /// Print network-not-available message
 fn net_unavailable_msg(cmd: &str) {
-    crate::println!(
-        "{}: networking is not available in QEMU mode.",
-        cmd
-    );
+    crate::println!("{}: networking is not available in QEMU mode.", cmd);
     crate::println!(
         "{}: The QEMU raspi5b machine does not emulate the BCM2712 GENET Ethernet controller.",
         cmd
     );
-    crate::println!("  Network commands (curl, wget, ping, host) work on real Raspberry Pi 5 hardware.");
+    crate::println!(
+        "  Network commands (curl, wget, ping, host) work on real Raspberry Pi 5 hardware."
+    );
     crate::println!("  The full TCP/IP + DNS + HTTP stack is compiled in and ready.");
 }
 
@@ -5108,12 +5154,12 @@ fn cmd_curl(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     #[cfg(not(feature = "qemu_raspi5b"))]
     let body_opt = crate::net::http::http_get(url).map(|resp| {
         if !silent {
-            crate::println!(
-                "curl: HTTP {} ({} bytes)",
-                resp.status_code, resp.body_len
-            );
+            crate::println!("curl: HTTP {} ({} bytes)", resp.status_code, resp.body_len);
         }
-        (resp.status_code, alloc::vec::Vec::from(&resp.body[..resp.body_len]))
+        (
+            resp.status_code,
+            alloc::vec::Vec::from(&resp.body[..resp.body_len]),
+        )
     });
 
     #[cfg(feature = "qemu_raspi5b")]
@@ -5130,10 +5176,7 @@ fn cmd_curl(args: [&str; MAX_ARGS], argc: usize) -> i32 {
             if let Some(filename) = output_file {
                 // Write body to file
                 use crate::fs::vfs;
-                let fd = match vfs::open(
-                    filename,
-                    vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC,
-                ) {
+                let fd = match vfs::open(filename, vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC) {
                     Ok(fd) => fd,
                     Err(e) => {
                         crate::println!("curl: cannot open {} for writing: {:?}", filename, e);
@@ -5147,8 +5190,7 @@ fn cmd_curl(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                 }
             } else {
                 // Print body to stdout
-                let body_str = core::str::from_utf8(&body)
-                    .unwrap_or("<binary data>");
+                let body_str = core::str::from_utf8(&body).unwrap_or("<binary data>");
                 crate::println!("{}", body_str);
             }
             0
@@ -5229,7 +5271,10 @@ fn cmd_wget(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     // Fetch via appropriate backend
     #[cfg(not(feature = "qemu_raspi5b"))]
     let body_opt = crate::net::http::http_get(url).map(|resp| {
-        (resp.status_code, alloc::vec::Vec::from(&resp.body[..resp.body_len]))
+        (
+            resp.status_code,
+            alloc::vec::Vec::from(&resp.body[..resp.body_len]),
+        )
     });
 
     #[cfg(feature = "qemu_raspi5b")]
@@ -5254,10 +5299,7 @@ fn cmd_wget(args: [&str; MAX_ARGS], argc: usize) -> i32 {
             vfs::close(fd);
 
             if !quiet {
-                crate::println!(
-                    "wget: saved {} bytes to {}",
-                    body.len(), filename
-                );
+                crate::println!("wget: saved {} bytes to {}", body.len(), filename);
             }
             0
         }
@@ -5288,7 +5330,15 @@ fn cmd_ip(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                 crate::println!(
                     "eth0: <BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast state UP",
                 );
-                crate::println!("    link/ether {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                crate::println!(
+                    "    link/ether {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    mac[0],
+                    mac[1],
+                    mac[2],
+                    mac[3],
+                    mac[4],
+                    mac[5]
+                );
             }
             0
         }
@@ -5300,7 +5350,10 @@ fn cmd_ip(args: [&str; MAX_ARGS], argc: usize) -> i32 {
             #[cfg(not(feature = "qemu_raspi5b"))]
             {
                 crate::println!("default via {} dev eth0", "?.?.?.?"); // gateway
-                crate::println!("{} dev eth0 proto kernel scope link src ?.?.?.?", "?.?.?.?/24");
+                crate::println!(
+                    "{} dev eth0 proto kernel scope link src ?.?.?.?",
+                    "?.?.?.?/24"
+                );
             }
             0
         }
@@ -5337,10 +5390,22 @@ fn cmd_ifconfig(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         let mac = crate::net::genet::mac_addr();
 
         crate::println!("eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500");
-        crate::println!("        inet {}.{}.{}.{}  netmask 255.255.255.0",
-            0, 0, 0, 0); // would show real IP
-        crate::println!("        ether {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        crate::println!(
+            "        inet {}.{}.{}.{}  netmask 255.255.255.0",
+            0,
+            0,
+            0,
+            0
+        ); // would show real IP
+        crate::println!(
+            "        ether {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            mac[0],
+            mac[1],
+            mac[2],
+            mac[3],
+            mac[4],
+            mac[5]
+        );
         crate::println!("        RX packets:0  TX packets:0");
         crate::println!("        RX bytes:0  TX bytes:0");
         crate::println!();
@@ -5403,14 +5468,22 @@ fn cmd_ping(args: [&str; MAX_ARGS], argc: usize) -> i32 {
             Some(ip) => {
                 crate::println!(
                     "resolved {} to {}.{}.{}.{}",
-                    host, ip[0], ip[1], ip[2], ip[3]
+                    host,
+                    ip[0],
+                    ip[1],
+                    ip[2],
+                    ip[3]
                 );
 
                 for seq in 0..count {
                     crate::net::icmp::send_echo_request(ip, seq as u16);
                     crate::println!(
                         "icmp_seq={} sent to {}.{}.{}.{}",
-                        seq, ip[0], ip[1], ip[2], ip[3]
+                        seq,
+                        ip[0],
+                        ip[1],
+                        ip[2],
+                        ip[3]
                     );
                     for _ in 0..1_000_000 {
                         crate::arch::cpu::wfe();
@@ -5482,7 +5555,10 @@ fn cmd_ping(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                     received += 1;
                     crate::println!(
                         "64 bytes from {}: icmp_seq={} HTTP {} ({} bytes)",
-                        host, seq, status, body.len()
+                        host,
+                        seq,
+                        status,
+                        body.len()
                     );
                 }
                 None => {
@@ -5502,7 +5578,9 @@ fn cmd_ping(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         };
         crate::println!(
             "{} packets transmitted, {} received, {:.0}% packet loss",
-            transmitted, received, loss_pct
+            transmitted,
+            received,
+            loss_pct
         );
         0
     }
@@ -5551,7 +5629,12 @@ fn cmd_host(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 
         match crate::net::fetch_url(&url) {
             Some((status, body)) => {
-                crate::println!("  {} is reachable (HTTP {}, {} bytes)", hostname, status, body.len());
+                crate::println!(
+                    "  {} is reachable (HTTP {}, {} bytes)",
+                    hostname,
+                    status,
+                    body.len()
+                );
                 crate::println!("  (resolved via lobster-net MMIO proxy)");
                 0
             }
@@ -5591,7 +5674,6 @@ fn cmd_netstat() -> i32 {
     0
 }
 
-
 // ============================================================
 // NEW COMMANDS — Text Editor, Text Processing, File Utils
 // ============================================================
@@ -5606,7 +5688,9 @@ const GH_TOKEN_PATH: &str = "/etc/github_token";
 fn gh_read_token() -> Option<alloc::string::String> {
     match crate::fs::vfs::read_file(GH_TOKEN_PATH) {
         Ok(data) => {
-            let trimmed = data.iter().copied()
+            let trimmed = data
+                .iter()
+                .copied()
                 .take_while(|&b| b != b'\n' && b != b'\r' && b != b' ' && b != b'\t')
                 .collect::<alloc::vec::Vec<u8>>();
             if trimmed.is_empty() {
@@ -5671,9 +5755,9 @@ fn cmd_gh(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                         return 1;
                     }
                     // Validate token charset matches the device allowlist
-                    let ok = token.bytes().all(|b| {
-                        b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.'
-                    });
+                    let ok = token
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.');
                     if !ok {
                         crate::println!("gh: token contains unsupported characters");
                         return 1;
@@ -5710,22 +5794,22 @@ fn cmd_gh(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                 }
             }
         }
-        "user" => {
-            match gh_get("/user") {
-                Some(body) => {
-                    let s = core::str::from_utf8(&body).unwrap_or("<binary>");
-                    crate::println!("{}", s);
-                    0
-                }
-                None => {
-                    crate::println!("gh: request failed (are you logged in? see 'gh auth status')");
-                    1
-                }
+        "user" => match gh_get("/user") {
+            Some(body) => {
+                let s = core::str::from_utf8(&body).unwrap_or("<binary>");
+                crate::println!("{}", s);
+                0
             }
-        }
+            None => {
+                crate::println!("gh: request failed (are you logged in? see 'gh auth status')");
+                1
+            }
+        },
         "api" => {
             if argc < 3 {
-                Uart10::puts("Usage: gh api <endpoint>   e.g. gh api /repos/jlaportebot/lobster-os\r\n");
+                Uart10::puts(
+                    "Usage: gh api <endpoint>   e.g. gh api /repos/jlaportebot/lobster-os\r\n",
+                );
                 return 1;
             }
             let mut endpoint = alloc::string::String::from(args[2]);
@@ -5800,7 +5884,11 @@ fn cmd_editor(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         Ok(data) => {
             buffer = data;
             if !buffer.is_empty() {
-                Uart10::puts(&alloc::format!("Editing {} ({} bytes)\r\n", path, buffer.len()));
+                Uart10::puts(&alloc::format!(
+                    "Editing {} ({} bytes)\r\n",
+                    path,
+                    buffer.len()
+                ));
                 // Show existing lines
                 let content = core::str::from_utf8(&buffer).unwrap_or("");
                 for (i, line) in content.lines().enumerate() {
@@ -5833,12 +5921,10 @@ fn cmd_editor(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                 Uart10::puts("\r\n");
                 return 0;
             }
-            ":w" => {
-                match crate::fs::vfs::write_file(&path, &buffer) {
-                    Ok(n) => crate::println!("Saved {} bytes to {}", n, path),
-                    Err(e) => crate::println!("Error saving: {:?}", e),
-                }
-            }
+            ":w" => match crate::fs::vfs::write_file(&path, &buffer) {
+                Ok(n) => crate::println!("Saved {} bytes to {}", n, path),
+                Err(e) => crate::println!("Error saving: {:?}", e),
+            },
             ":q" => {
                 Uart10::puts("\r\n");
                 return 0;
@@ -5872,7 +5958,8 @@ fn cmd_editor(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                 if let Ok(n) = s[3..].trim().parse::<usize>() {
                     // Read lines to insert
                     Uart10::puts("Inserting (end with .):\r\n");
-                    let mut insert_lines: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
+                    let mut insert_lines: alloc::vec::Vec<alloc::string::String> =
+                        alloc::vec::Vec::new();
                     loop {
                         Uart10::puts(">> ");
                         let mut ibuf = [0u8; 512];
@@ -5975,7 +6062,11 @@ fn cmd_cc(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         return 1;
     }
 
-    crate::println!("cc: compiling {} ({} bytes)...", full_source, source_data.len());
+    crate::println!(
+        "cc: compiling {} ({} bytes)...",
+        full_source,
+        source_data.len()
+    );
 
     // Determine output path
     let default_output = {
@@ -6176,14 +6267,17 @@ fn cmd_tr(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     let content = core::str::from_utf8(&data).unwrap_or("");
     let s1: alloc::vec::Vec<char> = set1.chars().collect();
     let s2: alloc::vec::Vec<char> = set2.chars().collect();
-    let result: alloc::string::String = content.chars().map(|c| {
-        for (i, &sc) in s1.iter().enumerate() {
-            if c == sc && i < s2.len() {
-                return s2[i];
+    let result: alloc::string::String = content
+        .chars()
+        .map(|c| {
+            for (i, &sc) in s1.iter().enumerate() {
+                if c == sc && i < s2.len() {
+                    return s2[i];
+                }
             }
-        }
-        c
-    }).collect();
+            c
+        })
+        .collect();
     crate::println!("{}", result);
     0
 }
@@ -6360,7 +6454,10 @@ fn cmd_file(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                     "XML/HTML"
                 } else if data.starts_with(b"{") || data.starts_with(b"[") {
                     "JSON"
-                } else if data.iter().all(|&b| b.is_ascii() || b == b'\n' || b == b'\r' || b == b'\t') {
+                } else if data
+                    .iter()
+                    .all(|&b| b.is_ascii() || b == b'\n' || b == b'\r' || b == b'\t')
+                {
                     "ASCII text"
                 } else {
                     "binary data"
@@ -6480,7 +6577,7 @@ fn cmd_man(args: [&str; MAX_ARGS], argc: usize) -> i32 {
 
     for (name, doc) in &docs {
         if *name == cmd {
-            crate::println!("{}\n{}", name.to_uppercase() , doc);
+            crate::println!("{}\n{}", name.to_uppercase(), doc);
             return 0;
         }
     }
@@ -6493,8 +6590,13 @@ fn cmd_userlist() -> i32 {
     let cur = crate::users::current_user();
     for name in crate::users::login_users() {
         let uid = crate::users::passwd::find_user(&name).map_or(1000, |e| e.uid);
-        crate::println!("{:<16} uid={:<6} home=/home/{}{}", name, uid, name,
-            if name == cur { "  (current)" } else { "" });
+        crate::println!(
+            "{:<16} uid={:<6} home=/home/{}{}",
+            name,
+            uid,
+            name,
+            if name == cur { "  (current)" } else { "" }
+        );
     }
     0
 }
@@ -6504,9 +6606,13 @@ fn cmd_who() -> i32 {
     crate::println!("USER      TTY      PID     LOGIN@");
     crate::println!("root      tty1     1       (boot)");
     for sess in crate::users::get_active_sessions() {
-        crate::println!("{:<9} {:<8} {:<7} (login)", sess.username, sess.tty, sess.pid);
+        crate::println!(
+            "{:<9} {:<8} {:<7} (login)",
+            sess.username,
+            sess.tty,
+            sess.pid
+        );
     }
     crate::println!("(current PID: {})", pid);
     0
 }
-

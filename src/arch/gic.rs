@@ -208,7 +208,11 @@ impl Gic {
     /// SGIs/PPIs (ids < 32) are indexed directly; SPIs are 0-based and
     /// offset by 32 to their GIC ID.
     pub unsafe fn set_priority(irq_num: u32, priority: u8) {
-        let id = if irq_num < 32 { irq_num } else { irq_num + Self::SPI_TO_DIST };
+        let id = if irq_num < 32 {
+            irq_num
+        } else {
+            irq_num + Self::SPI_TO_DIST
+        };
         let shift = (id % 4) * 8;
         let reg_aligned = gicd_base() + GICD_IPRIORITYR_OFF + ((id as u64 / 4) * 4);
         let mut val = Self::read32(reg_aligned);
@@ -232,7 +236,11 @@ impl Gic {
     /// config: 0b00 = level-sensitive, 0b10 = edge-triggered.
     /// SGIs/PPIs (ids < 32) are indexed directly.
     pub unsafe fn set_config(irq_num: u32, config: u32) {
-        let id = if irq_num < 32 { irq_num } else { irq_num + Self::SPI_TO_DIST };
+        let id = if irq_num < 32 {
+            irq_num
+        } else {
+            irq_num + Self::SPI_TO_DIST
+        };
         let reg = gicd_base() + GICD_ICFGR_OFF + ((id as u64 / 16) * 4);
         let shift = (id % 16) * 2;
         let mut val = Self::read32(reg);

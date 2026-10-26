@@ -1900,11 +1900,7 @@ fn blit_rect(fb: FramebufferInfo, dst: *mut u32, src: *mut u32, rect: &DirtyRect
             let src_idx = py * pitch + dx_start;
             let dst_idx = py * pitch + dx_start;
             // Bulk copy per row — much faster than per-pixel volatile
-            core::ptr::copy_nonoverlapping(
-                src.add(src_idx),
-                dst.add(dst_idx),
-                row_len,
-            );
+            core::ptr::copy_nonoverlapping(src.add(src_idx), dst.add(dst_idx), row_len);
         }
     }
 }
@@ -2021,44 +2017,44 @@ fn draw_wallpaper(fb: FramebufferInfo, back_buf: *mut u32) {
     // Wallpapers come from the wallpaper engine (gradient presets, persisted).
     crate::wm::wallpaper::paint(&fb, back_buf);
     if false {
-    // (kept for reference below)
-    let theme = crate::wm::theme::current();
-    let base_color = theme.desktop_bg;
+        // (kept for reference below)
+        let theme = crate::wm::theme::current();
+        let base_color = theme.desktop_bg;
 
-    // Extract RGB components for gradient
-    let base_r = (base_color >> 16) & 0xFF;
-    let base_g = (base_color >> 8) & 0xFF;
-    let base_b = base_color & 0xFF;
+        // Extract RGB components for gradient
+        let base_r = (base_color >> 16) & 0xFF;
+        let base_g = (base_color >> 8) & 0xFF;
+        let base_b = base_color & 0xFF;
 
-    // Per-row fill: compute one color per row, fill a stack buffer,
-    // then copy_nonoverlapping the entire row at once.
-    // This is ~50x faster than per-pixel write_volatile on QEMU.
-    let row_pixels = fb.width as usize;
-    let mut row_buf: [u32; 1920] = [0; 1920];
+        // Per-row fill: compute one color per row, fill a stack buffer,
+        // then copy_nonoverlapping the entire row at once.
+        // This is ~50x faster than per-pixel write_volatile on QEMU.
+        let row_pixels = fb.width as usize;
+        let mut row_buf: [u32; 1920] = [0; 1920];
 
-    for y in 0..fb.height as usize {
-        // Slight gradient: top is slightly lighter, bottom slightly darker
-        let factor = y as f32 / fb.height as f32;
-        let r = (base_r as f32 * (1.0 - factor * 0.15)) as u32;
-        let g = (base_g as f32 * (1.0 - factor * 0.15)) as u32;
-        let b = (base_b as f32 * (1.0 - factor * 0.10)) as u32;
-        let color = 0xFF000000 | (r << 16) | (g << 8) | b;
+        for y in 0..fb.height as usize {
+            // Slight gradient: top is slightly lighter, bottom slightly darker
+            let factor = y as f32 / fb.height as f32;
+            let r = (base_r as f32 * (1.0 - factor * 0.15)) as u32;
+            let g = (base_g as f32 * (1.0 - factor * 0.15)) as u32;
+            let b = (base_b as f32 * (1.0 - factor * 0.10)) as u32;
+            let color = 0xFF000000 | (r << 16) | (g << 8) | b;
 
-        // Fill the stack row buffer with the row color
-        let count = row_pixels.min(1920);
-        for x in 0..count {
-            row_buf[x] = color;
+            // Fill the stack row buffer with the row color
+            let count = row_pixels.min(1920);
+            for x in 0..count {
+                row_buf[x] = color;
+            }
+
+            // Copy the row to the back buffer in one bulk operation
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    row_buf.as_ptr(),
+                    back_buf.add(y * row_pixels),
+                    count,
+                );
+            }
         }
-
-        // Copy the row to the back buffer in one bulk operation
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                row_buf.as_ptr(),
-                back_buf.add(y * row_pixels),
-                count,
-            );
-        }
-    }
     }
 }
 

@@ -224,12 +224,20 @@ pub mod bmp_view {
                 let b = data[o] as u32;
                 let g = data[o + 1] as u32;
                 let r = data[o + 2] as u32;
-                let a = if bytes_pp == 4 { data[o + 3] as u32 } else { 0xFF };
+                let a = if bytes_pp == 4 {
+                    data[o + 3] as u32
+                } else {
+                    0xFF
+                };
                 // Store as ARGB; the fb swizzle happens at draw time via fx().
                 pixels.push((a << 24) | (r << 16) | (g << 8) | b);
             }
         }
-        Some(BmpImage { width: w, height: h, pixels })
+        Some(BmpImage {
+            width: w,
+            height: h,
+            pixels,
+        })
     }
 
     static mut IMAGE: Option<BmpImage> = None;
@@ -248,23 +256,24 @@ pub mod bmp_view {
                 window::focus(id);
                 Ok(())
             }
-            None => {
-                window::create(820, 540, 640, 520, "Image Viewer")
-                    .map(|_| ())
-                    .ok_or("window create failed")
-            }
+            None => window::create(820, 540, 640, 520, "Image Viewer")
+                .map(|_| ())
+                .ok_or("window create failed"),
         }
     }
 
     /// Render into the Image Viewer window (called from wm::tick).
     #[cfg(feature = "qemu_raspi5b")]
     pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
-        let Some(win_id) = window::find_by_title("Image Viewer") else { return };
-        let Some((x, y, w, h)) = window::get_info(win_id) else { return };
+        let Some(win_id) = window::find_by_title("Image Viewer") else {
+            return;
+        };
+        let Some((x, y, w, h)) = window::get_info(win_id) else {
+            return;
+        };
         let focused = window::focused_id() == win_id;
-        let (cx, cy, cw, ch) = crate::wm::window_frame::draw_frame(
-            fb, win_id, x, y, w, h, "Image Viewer", focused,
-        );
+        let (cx, cy, cw, ch) =
+            crate::wm::window_frame::draw_frame(fb, win_id, x, y, w, h, "Image Viewer", focused);
 
         let theme = crate::wm::theme::current();
         unsafe {
@@ -284,18 +293,19 @@ pub mod bmp_view {
                             let sx = px * img.width / dw.max(1);
                             let sy = py * img.height / dh.max(1);
                             let argb = img.pixels[(sy * img.width + sx) as usize];
-                            crate::display::graphics::draw_pixel(
-                                fb, dx + px, dy + py, argb,
-                            );
+                            crate::display::graphics::draw_pixel(fb, dx + px, dy + py, argb);
                         }
                     }
                 }
                 None => {
                     crate::display::graphics::draw_rect(fb, cx, cy, cw, ch, theme.win_bg);
                     crate::display::graphics::draw_text(
-                        fb, cx + 12, cy + 14,
+                        fb,
+                        cx + 12,
+                        cy + 14,
                         "No image loaded — 'image <path-to-bmp>'",
-                        theme.label_text_dim, theme.win_bg,
+                        theme.label_text_dim,
+                        theme.win_bg,
                     );
                 }
             }

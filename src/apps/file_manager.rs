@@ -566,7 +566,14 @@ impl FileManager {
         let sidebar_w = 140u32;
         let sidebar_h = height.saturating_sub(24);
         g::fill_rounded_rect(&info, x, y, sidebar_w, sidebar_h, 0, theme.menu_bg);
-        g::draw_text(&info, x + 10, y + 6, "Places", theme.label_text_dim, theme.menu_bg);
+        g::draw_text(
+            &info,
+            x + 10,
+            y + 6,
+            "Places",
+            theme.label_text_dim,
+            theme.menu_bg,
+        );
         g::draw_rect(&info, x + 6, y + 22, sidebar_w - 12, 1, theme.menu_border);
 
         let places: [(&str, &str); 5] = [
@@ -579,10 +586,24 @@ impl FileManager {
         let mut py = y + 30;
         for (label, path) in places {
             let active = self.current_path == path;
-            let bg = if active { theme.menu_item_hover } else { theme.menu_bg };
+            let bg = if active {
+                theme.menu_item_hover
+            } else {
+                theme.menu_bg
+            };
             g::fill_rounded_rect(&info, x + 4, py, sidebar_w - 8, 20, 4, bg);
-            g::draw_text(&info, x + 10, py + 4, label,
-                if active { theme.label_text } else { theme.label_text_dim }, bg);
+            g::draw_text(
+                &info,
+                x + 10,
+                py + 4,
+                label,
+                if active {
+                    theme.label_text
+                } else {
+                    theme.label_text_dim
+                },
+                bg,
+            );
             py += 24;
         }
 
@@ -593,15 +614,39 @@ impl FileManager {
         g::draw_rect(&info, main_x, y, main_w, tool_h, theme.win_bg);
 
         g::fill_rounded_rect(&info, main_x + 4, y + 3, 26, 20, 5, theme.btn_bg);
-        g::draw_text(&info, main_x + 12, y + 7, "Up", theme.btn_text, theme.btn_bg);
+        g::draw_text(
+            &info,
+            main_x + 12,
+            y + 7,
+            "Up",
+            theme.btn_text,
+            theme.btn_bg,
+        );
         g::fill_rounded_rect(&info, main_x + 34, y + 3, 44, 20, 5, theme.btn_bg);
-        g::draw_text(&info, main_x + 40, y + 7, "Re", theme.btn_text, theme.btn_bg);
+        g::draw_text(
+            &info,
+            main_x + 40,
+            y + 7,
+            "Re",
+            theme.btn_text,
+            theme.btn_bg,
+        );
 
         let path_w = main_w.saturating_sub(90);
         g::fill_rounded_rect(&info, main_x + 84, y + 3, path_w, 20, 10, theme.input_bg);
-        let path_text: alloc::string::String =
-            self.current_path.chars().take((path_w / 8) as usize).collect();
-        g::draw_text(&info, main_x + 92, y + 7, &path_text, theme.input_text, theme.input_bg);
+        let path_text: alloc::string::String = self
+            .current_path
+            .chars()
+            .take((path_w / 8) as usize)
+            .collect();
+        g::draw_text(
+            &info,
+            main_x + 92,
+            y + 7,
+            &path_text,
+            theme.input_text,
+            theme.input_bg,
+        );
         g::draw_rect(&info, main_x, y + tool_h, main_w, 1, theme.menu_border);
 
         // === File list (zebra + selection + icons) ===
@@ -626,12 +671,24 @@ impl FileManager {
             g::draw_rect(&info, main_x, row_y, main_w, row_h, bg);
 
             let marker = if entry.is_dir { "[D]" } else { "[F]" };
-            g::draw_text(&info, main_x + 6, row_y + 4, marker,
-                if entry.is_dir { 0xFFD08770 } else { 0xFF7B88A1 }, bg);
+            g::draw_text(
+                &info,
+                main_x + 6,
+                row_y + 4,
+                marker,
+                if entry.is_dir { 0xFFD08770 } else { 0xFF7B88A1 },
+                bg,
+            );
 
             let name_text: alloc::string::String = entry.name.chars().take(24).collect();
-            g::draw_text(&info, main_x + 34, row_y + 4, &name_text,
-                if entry.is_dir { 0xFF2E3440 } else { 0xFF4C566A }, bg);
+            g::draw_text(
+                &info,
+                main_x + 34,
+                row_y + 4,
+                &name_text,
+                if entry.is_dir { 0xFF2E3440 } else { 0xFF4C566A },
+                bg,
+            );
 
             if !entry.is_dir {
                 let size_kb = entry.size / 1024;
@@ -640,8 +697,14 @@ impl FileManager {
                 } else {
                     alloc::format!("{} B", entry.size)
                 };
-                g::draw_text(&info, main_x + main_w.saturating_sub(90), row_y + 4,
-                    &size_text, 0xFF7B88A1, bg);
+                g::draw_text(
+                    &info,
+                    main_x + main_w.saturating_sub(90),
+                    row_y + 4,
+                    &size_text,
+                    0xFF7B88A1,
+                    bg,
+                );
             }
         }
 
@@ -654,7 +717,14 @@ impl FileManager {
         );
         g::draw_rect(&info, main_x, status_y, main_w, 20, theme.menu_bg);
         g::draw_rect(&info, main_x, status_y, main_w, 1, theme.menu_border);
-        g::draw_text(&info, main_x + 8, status_y + 4, &status, theme.label_text_dim, theme.menu_bg);
+        g::draw_text(
+            &info,
+            main_x + 8,
+            status_y + 4,
+            &status,
+            theme.label_text_dim,
+            theme.menu_bg,
+        );
     }
 }
 
@@ -666,7 +736,14 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
             if win.active {
                 let focused = crate::wm::window::focused_id() == win_id;
                 let (cx, cy, cw, ch) = crate::wm::window_frame::draw_frame(
-                    fb, win_id, win.x, win.y, win.w, win.h, "File Manager", focused,
+                    fb,
+                    win_id,
+                    win.x,
+                    win.y,
+                    win.w,
+                    win.h,
+                    "File Manager",
+                    focused,
                 );
                 let fm = get_file_manager();
                 fm.render(cx, cy, cw, ch);

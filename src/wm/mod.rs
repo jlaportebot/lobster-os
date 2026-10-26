@@ -11,25 +11,25 @@
 //!
 //! All rendering goes through `display::graphics` primitives.
 
-pub mod compositor;
 pub mod alt_tab;
+pub mod compositor;
 pub mod config;
 pub mod context_menu;
 pub mod desktop_icons;
 pub mod dirty;
 pub mod event_router;
-pub mod user_windows;
+pub mod greeter;
 pub mod gui_files;
 pub mod gui_shell;
-pub mod greeter;
-pub mod start_menu;
-pub mod notifications;
-pub mod wallpaper;
 pub mod input;
 pub mod launcher;
+pub mod notifications;
 pub mod panel;
+pub mod start_menu;
 pub mod theme;
 pub mod tray_popups;
+pub mod user_windows;
+pub mod wallpaper;
 pub mod widget;
 pub mod window;
 pub mod window_frame;
@@ -155,7 +155,7 @@ pub fn tick() {
                 // content lands on top of the static apps.
                 crate::wm::user_windows::render_to_windows(&fb);
             }
-                }
+        }
     }
 
     // Draw desktop icons (after windows, before panel)

@@ -78,7 +78,9 @@ pub fn current_user() -> String {
         if CURRENT_USER_LEN == 0 {
             return String::from(DEFAULT_USER);
         }
-        String::from(core::str::from_utf8(&CURRENT_USER[..CURRENT_USER_LEN]).unwrap_or(DEFAULT_USER))
+        String::from(
+            core::str::from_utf8(&CURRENT_USER[..CURRENT_USER_LEN]).unwrap_or(DEFAULT_USER),
+        )
     }
 }
 
@@ -92,7 +94,12 @@ pub fn login(name: &str) {
     }
     let home = home_path();
     crate::shell::set_cwd(&home);
-    let _ = allocate_session(SessionType::Login, "tty1", name, crate::sched::current_pid() as u64);
+    let _ = allocate_session(
+        SessionType::Login,
+        "tty1",
+        name,
+        crate::sched::current_pid() as u64,
+    );
     crate::println!("[login] user {}", name);
 }
 

@@ -6,9 +6,7 @@
 //! ad-hoc chrome. `tick_animations` drives open/close/minimize effects.
 
 use crate::display::fb::get_info;
-use crate::display::graphics::{
-    draw_rect, draw_rect_outline, draw_text, fill_rounded_rect,
-};
+use crate::display::graphics::{draw_rect, draw_rect_outline, draw_text, fill_rounded_rect};
 use crate::wm::theme;
 
 pub const TITLE_H: u32 = 24;
@@ -145,7 +143,14 @@ pub fn draw_frame(
     } else {
         theme.title_bar_unfocused
     };
-    draw_rect(fb, sx + BORDER_W, sy + BORDER_W, sw.saturating_sub(2 * BORDER_W), TITLE_H, tb_color);
+    draw_rect(
+        fb,
+        sx + BORDER_W,
+        sy + BORDER_W,
+        sw.saturating_sub(2 * BORDER_W),
+        TITLE_H,
+        tb_color,
+    );
 
     // Title text
     let tt_color = if focused {
@@ -153,14 +158,28 @@ pub fn draw_frame(
     } else {
         theme.title_text_unfocused
     };
-    draw_text(fb, sx + 10, sy + BORDER_W + (TITLE_H - theme.font_size) / 2, title, tt_color, tb_color);
+    draw_text(
+        fb,
+        sx + 10,
+        sy + BORDER_W + (TITLE_H - theme.font_size) / 2,
+        title,
+        tt_color,
+        tb_color,
+    );
 
     // Close button (top-right)
     let btn_x = sx + sw.saturating_sub(CLOSE_BTN_W + BORDER_W + 4);
     let btn_y = sy + BORDER_W + 4;
     let btn_h = TITLE_H.saturating_sub(8);
     fill_rounded_rect(fb, btn_x, btn_y, CLOSE_BTN_W, btn_h, 6, theme.close_btn);
-    draw_text(fb, btn_x + (CLOSE_BTN_W - 8) / 2, btn_y + (btn_h - theme.font_size) / 2, "x", 0xFFFFFFFF, theme.close_btn);
+    draw_text(
+        fb,
+        btn_x + (CLOSE_BTN_W - 8) / 2,
+        btn_y + (btn_h - theme.font_size) / 2,
+        "x",
+        0xFFFFFFFF,
+        theme.close_btn,
+    );
 
     // Client area
     let cx = sx + BORDER_W;

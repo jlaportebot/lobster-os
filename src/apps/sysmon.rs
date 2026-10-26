@@ -66,7 +66,6 @@ impl SystemMonitor {
         width: u32,
         height: u32,
     ) {
-
         // CPU usage section
         let cpu_y = y + 30;
         graphics::draw_text(info, x + 8, cpu_y, "CPU Usage", 0xAAAACC, 0x1E1E1E);

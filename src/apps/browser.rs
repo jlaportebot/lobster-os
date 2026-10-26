@@ -169,9 +169,24 @@ impl Browser {
                 // Block-level tags break the current line
                 let is_block = matches!(
                     tag_name.to_ascii_lowercase().as_slice(),
-                    b"p" | b"br" | b"div" | b"h1" | b"h2" | b"h3" | b"h4"
-                    | b"h5" | b"h6" | b"li" | b"tr" | b"table" | b"hr"
-                    | b"title" | b"body" | b"html" | b"head" | b"ul" | b"ol"
+                    b"p" | b"br"
+                        | b"div"
+                        | b"h1"
+                        | b"h2"
+                        | b"h3"
+                        | b"h4"
+                        | b"h5"
+                        | b"h6"
+                        | b"li"
+                        | b"tr"
+                        | b"table"
+                        | b"hr"
+                        | b"title"
+                        | b"body"
+                        | b"html"
+                        | b"head"
+                        | b"ul"
+                        | b"ol"
                 );
                 if is_block {
                     push_line!();
@@ -287,12 +302,29 @@ impl Browser {
         let url_h = 20u32;
         let url_w = cw.saturating_sub(200);
         graphics::draw_rect(&fb, cx + 8, url_y, url_w, url_h, theme.input_bg);
-        graphics::draw_rect_outline(&fb, cx + 8, url_y, url_w, url_h,
-            if focused { theme.input_border_focused } else { theme.input_border });
+        graphics::draw_rect_outline(
+            &fb,
+            cx + 8,
+            url_y,
+            url_w,
+            url_h,
+            if focused {
+                theme.input_border_focused
+            } else {
+                theme.input_border
+            },
+        );
         // URL text (clip)
         let url_display: alloc::string::String =
             self.url.chars().take((url_w / 8) as usize).collect();
-        graphics::draw_text(&fb, cx + 12, url_y + 4, &url_display, theme.input_text, theme.input_bg);
+        graphics::draw_text(
+            &fb,
+            cx + 12,
+            url_y + 4,
+            &url_display,
+            theme.input_text,
+            theme.input_bg,
+        );
 
         // Buttons: Back | Fwd | Go
         let mut bx = cx + url_w + 16;
@@ -303,9 +335,23 @@ impl Browser {
         }
 
         // Status line + bookmark count
-        graphics::draw_text(&fb, cx + 8, cy + 34, &self.status, theme.label_text_dim, theme.win_bg);
+        graphics::draw_text(
+            &fb,
+            cx + 8,
+            cy + 34,
+            &self.status,
+            theme.label_text_dim,
+            theme.win_bg,
+        );
         let bm = alloc::format!("\u{2605} {}", self.bookmarks.len());
-        graphics::draw_text(&fb, cx + cw.saturating_sub(120), cy + 34, &bm, 0xFFD08770, theme.win_bg);
+        graphics::draw_text(
+            &fb,
+            cx + cw.saturating_sub(120),
+            cy + 34,
+            &bm,
+            0xFFD08770,
+            theme.win_bg,
+        );
         graphics::draw_rect(&fb, cx, cy + chrome_h, cw, 1, theme.menu_border);
 
         // Page area
@@ -341,7 +387,8 @@ impl Browser {
             let track_h = page_h - 4;
             let thumb_h = (track_h * rows as u32 / self.line_count as u32).max(12);
             let max_scroll = self.line_count - rows;
-            let thumb_y = page_y + 2 + (track_h - thumb_h) * self.scroll as u32 / max_scroll.max(1) as u32;
+            let thumb_y =
+                page_y + 2 + (track_h - thumb_h) * self.scroll as u32 / max_scroll.max(1) as u32;
             graphics::draw_rect(&fb, bar_x, page_y + 2, 4, track_h, theme.menu_border);
             graphics::draw_rect(&fb, bar_x, thumb_y, 4, thumb_h, theme.label_text_dim);
         }
@@ -430,12 +477,15 @@ pub fn scroll(down: bool) {
 /// Called from wm::tick: render into the Browser window's client area.
 #[cfg(feature = "qemu_raspi5b")]
 pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
-    let Some(win_id) = window::find_by_title("Browser") else { return };
-    let Some((x, y, w, h)) = window::get_info(win_id) else { return };
+    let Some(win_id) = window::find_by_title("Browser") else {
+        return;
+    };
+    let Some((x, y, w, h)) = window::get_info(win_id) else {
+        return;
+    };
     let focused = window::focused_id() == win_id;
-    let (cx, cy, cw, ch) = crate::wm::window_frame::draw_frame(
-        fb, win_id, x, y, w, h, "Browser", focused,
-    );
+    let (cx, cy, cw, ch) =
+        crate::wm::window_frame::draw_frame(fb, win_id, x, y, w, h, "Browser", focused);
     unsafe {
         if let Some(b) = INSTANCE.as_ref() {
             b.render(cx, cy, cw, ch, focused);

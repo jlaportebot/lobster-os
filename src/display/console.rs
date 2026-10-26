@@ -761,7 +761,10 @@ impl FbConsole {
             for y in (info.height - pixels_per_line)..info.height {
                 let offset = (y * pitch_words) as usize;
                 for x in 0..info.width as usize {
-                    core::ptr::write_volatile(ptr.add(offset + x), crate::display::graphics::fx(self.bg_color));
+                    core::ptr::write_volatile(
+                        ptr.add(offset + x),
+                        crate::display::graphics::fx(self.bg_color),
+                    );
                 }
             }
         }

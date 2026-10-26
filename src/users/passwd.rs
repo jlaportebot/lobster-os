@@ -145,8 +145,12 @@ pub fn persist() {
 /// Restore /etc/passwd from /sd/etc/passwd (call once /sd is mounted).
 /// Returns true when a persisted database was loaded.
 pub fn load_persisted() -> bool {
-    let Ok(data) = read_file(PERSIST_PATH) else { return false };
-    let Ok(text) = core::str::from_utf8(&data) else { return false };
+    let Ok(data) = read_file(PERSIST_PATH) else {
+        return false;
+    };
+    let Ok(text) = core::str::from_utf8(&data) else {
+        return false;
+    };
     let entries = parse_passwd(text);
     // Require root so a corrupt/empty file can't wipe the defaults.
     if !entries.iter().any(|e| e.uid == 0) {

@@ -83,8 +83,8 @@ pub fn beep(freq_mhz: u64, duration_ms: u64) -> usize {
         // 32-bit phase accumulator: step = freq_mHz * 2^32 / RATE / 1000
         let step = freq_mhz * 0x1_0000_0000u64 / (RATE as u64) / 1000;
         let phase = (i as u64).wrapping_mul(step) >> 16 & 0xFFFF; // 0..65535
-        // Integer sine via the classic parabolic approximation:
-        //   sin(pi * x) ≈ 4x(1-x) for x in [0,1] — good enough for beeps.
+                                                                  // Integer sine via the classic parabolic approximation:
+                                                                  //   sin(pi * x) ≈ 4x(1-x) for x in [0,1] — good enough for beeps.
         let t = phase as u32; // 0..65535 = full cycle
         let quadrant = t >> 14; // 0..3
         let frac = (t & 0x3FFF) as u32; // position within quadrant

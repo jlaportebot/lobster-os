@@ -258,11 +258,11 @@ pub unsafe fn map_user_page(ttbr0_phys: u64, va: u64, pa: u64, flags: u64) {
             // Block entry at L0/L1/L2 — split it into L(n+1) pages
             // This preserves the existing mapping while allowing finer granularity
             let block_size = 1u64 << (30 - level * 9); // L0=1GB, L1=2MB, L2=2MB wait...
-            // Actually: L0 table→L1, L1 table→L2, L2 table→L3
-            // Block sizes: L1 block = 1GB, L2 block = 2MB
+                                                       // Actually: L0 table→L1, L1 table→L2, L2 table→L3
+                                                       // Block sizes: L1 block = 1GB, L2 block = 2MB
             let block_size_shift = 30 - level * 9; // L0→1GB(30), L1→2MB(21), L2→4KB(12)?? No.
-            // For 4KB granule: L0→L1(512GB table), L1→L2(1GB block/table), L2→L3(2MB block/table)
-            // Block sizes: L1 block = 1GB (bits 30..), L2 block = 2MB (bits 21..)
+                                                   // For 4KB granule: L0→L1(512GB table), L1→L2(1GB block/table), L2→L3(2MB block/table)
+                                                   // Block sizes: L1 block = 1GB (bits 30..), L2 block = 2MB (bits 21..)
             let bs = if level == 0 { 1u64 << 30 } else { 1u64 << 21 }; // L0 children are 1GB blocks, L1 children are 2MB blocks
 
             // Get the physical base and flags from the block entry
@@ -353,7 +353,9 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
 
     // Also read the kernel's TTBR0 so we can dual-map user pages
     let kernel_ttbr0: u64;
-    unsafe { core::arch::asm!("mrs {}, TTBR0_EL1", out(reg) kernel_ttbr0); }
+    unsafe {
+        core::arch::asm!("mrs {}, TTBR0_EL1", out(reg) kernel_ttbr0);
+    }
     println!("[elf] Kernel TTBR0: {:#010x}", kernel_ttbr0);
 
     let mut highest_addr: u64 = 0;
@@ -437,7 +439,11 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
                 // First page holds the segment start at (p_vaddr - va).
                 (phdr.p_vaddr - va) as usize
             };
-            let page_offset = if vaddr_delta >= 0 { vaddr_delta as usize } else { 0 };
+            let page_offset = if vaddr_delta >= 0 {
+                vaddr_delta as usize
+            } else {
+                0
+            };
             let copy_start = file_offset as usize;
             let copy_in_page = if page_offset < phdr.p_filesz as usize {
                 let remaining = phdr.p_filesz as usize - page_offset;
@@ -655,7 +661,6 @@ pub fn build_hello_elf_into(buf: &mut [u8]) -> usize {
     total
 }
 
-
 /// Mirror user page mappings into the kernel's TTBR0.
 ///
 /// Walks the user page table (3 levels: L0→L1→L2) and copies leaf entries
@@ -687,10 +692,12 @@ pub fn mirror_user_mappings(kernel_ttbr0: u64, user_ttbr0: u64) {
             if l1e & 0x2 != 0 {
                 // L1 block — copy directly (unlikely for user pages)
                 unsafe {
-                    map_user_page(kernel_ttbr0,
+                    map_user_page(
+                        kernel_ttbr0,
                         (i as u64) << 39 | (j as u64) << 30,
                         l1e & !0xFFF,
-                        l1e & 0x3FF);
+                        l1e & 0x3FF,
+                    );
                 }
                 continue;
             }

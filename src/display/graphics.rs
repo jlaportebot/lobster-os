@@ -259,9 +259,7 @@ pub fn draw_text(fb: &FramebufferInfo, x: u32, y: u32, text: &str, fg: u32, bg: 
                     break;
                 }
                 let row_bits = glyph[row as usize];
-                let base = unsafe {
-                    (fb.virt_addr as *mut u32).add(((py * stride + cx) as usize))
-                };
+                let base = unsafe { (fb.virt_addr as *mut u32).add(((py * stride + cx) as usize)) };
                 for col in 0..CHAR_WIDTH {
                     let px = cx + col;
                     if px >= fb.width {

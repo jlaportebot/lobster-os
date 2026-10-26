@@ -550,8 +550,12 @@ pub fn font_scale_down() {
 /// Tab-bar click handling (screen coords). Returns true if consumed.
 pub fn handle_click(cx: u32, cy: u32) -> bool {
     use crate::wm::window;
-    let Some(win_id) = window::find_by_title("Terminal") else { return false };
-    let Some((x, y, w, h)) = window::get_info(win_id) else { return false };
+    let Some(win_id) = window::find_by_title("Terminal") else {
+        return false;
+    };
+    let Some((x, y, w, h)) = window::get_info(win_id) else {
+        return false;
+    };
     let client_x = x + FRAME_BORDER;
     let client_y = y + FRAME_BORDER + FRAME_TITLE;
     let client_w = w.saturating_sub(2 * FRAME_BORDER);
@@ -562,10 +566,18 @@ pub fn handle_click(cx: u32, cy: u32) -> bool {
     let term = get_terminal();
     let rel_x = cx - client_x;
     // Buttons: tabs 0..tab_count, then '+' (if room)
-    let slots = if term.tab_count < MAX_TABS { term.tab_count + 1 } else { term.tab_count };
+    let slots = if term.tab_count < MAX_TABS {
+        term.tab_count + 1
+    } else {
+        term.tab_count
+    };
     for i in 0..slots {
         let bx = tab_btn_offset(i);
-        if rel_x >= bx && rel_x < bx + TAB_BTN_W && cy >= client_y + 2 && cy < client_y + TAB_BAR_H - 2 {
+        if rel_x >= bx
+            && rel_x < bx + TAB_BTN_W
+            && cy >= client_y + 2
+            && cy < client_y + TAB_BAR_H - 2
+        {
             window::focus(win_id);
             if i < term.tab_count {
                 term.switch_tab(i);
@@ -652,9 +664,8 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
 
         // Uniform themed frame; render the VT into the returned client rect
         let focused = window::focused_id() == id;
-        let (client_x, client_y, client_w, client_h) = crate::wm::window_frame::draw_frame(
-            fb, id, wx, wy, ww, wh, "Terminal", focused,
-        );
+        let (client_x, client_y, client_w, client_h) =
+            crate::wm::window_frame::draw_frame(fb, id, wx, wy, ww, wh, "Terminal", focused);
 
         if client_w < 8 || client_h < 16 {
             continue;
@@ -669,13 +680,28 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
         crate::wm::widget::fill_rect(fb, client_x, client_y, client_w, client_h, 0xFF000000);
 
         // Tab bar: one button per tab + '+' (while under MAX_TABS)
-        crate::wm::widget::fill_rect(fb, client_x, client_y, client_w, TAB_BAR_H, theme.title_bar_unfocused);
-        let slots = if term.tab_count < MAX_TABS { term.tab_count + 1 } else { term.tab_count };
+        crate::wm::widget::fill_rect(
+            fb,
+            client_x,
+            client_y,
+            client_w,
+            TAB_BAR_H,
+            theme.title_bar_unfocused,
+        );
+        let slots = if term.tab_count < MAX_TABS {
+            term.tab_count + 1
+        } else {
+            term.tab_count
+        };
         for i in 0..slots {
             let bx = client_x + tab_btn_offset(i);
             let by = client_y + 2;
             let active = i == term.active_tab;
-            let bg = if active { theme.win_border } else { theme.btn_bg };
+            let bg = if active {
+                theme.win_border
+            } else {
+                theme.btn_bg
+            };
             crate::wm::widget::fill_rect(fb, bx, by, TAB_BTN_W, TAB_BAR_H - 4, bg);
             let label = if i < term.tab_count {
                 (b'1' + i as u8) as char
@@ -723,7 +749,11 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
         if scrollback == 0 && term.dec_tcem {
             let cr = term.screen.cursor_row;
             let cc = term.screen.cursor_col;
-            if cr < term.screen.rows && cc < term.screen.cols && cr < visible_rows && cc < visible_cols {
+            if cr < term.screen.rows
+                && cc < term.screen.cols
+                && cr < visible_rows
+                && cc < visible_cols
+            {
                 let cx = client_x + 4 + (cc as u32 * char_width);
                 let cy = body_y + 4 + (cr as u32 * line_height);
                 crate::wm::widget::fill_rect(fb, cx, cy, char_width, line_height, 0xFFFFFFFF);

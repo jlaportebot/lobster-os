@@ -188,7 +188,11 @@ pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
             tx + 8,
             ty + TILE_H - 22,
             &label,
-            if is_sel { theme.label_text } else { theme.label_text_dim },
+            if is_sel {
+                theme.label_text
+            } else {
+                theme.label_text_dim
+            },
             tile_bg,
         );
 

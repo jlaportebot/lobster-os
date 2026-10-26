@@ -49,10 +49,8 @@ impl Terminal {
             raw as *mut Self
         };
         unsafe {
-            core::ptr::addr_of_mut!((*ptr).parser)
-                .write(parser::Parser::new());
-            core::ptr::addr_of_mut!((*ptr).screen)
-                .write(screen::ScreenBuffer::new());
+            core::ptr::addr_of_mut!((*ptr).parser).write(parser::Parser::new());
+            core::ptr::addr_of_mut!((*ptr).screen).write(screen::ScreenBuffer::new());
             // Scrollback is the ~10 MB field — build it in place, no stack temp.
             screen::Scrollback::new_in_place(core::ptr::addr_of_mut!((*ptr).scrollback));
             core::ptr::addr_of_mut!((*ptr).input_buf).write([0u8; 1024]);

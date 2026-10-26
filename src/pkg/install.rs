@@ -226,10 +226,7 @@ impl Installer {
         // Load the persisted repository config so a fresh Installer knows
         // which repos exist (boot init also seeds the default repo there).
         let _ = repo_manager.load_config();
-        Ok(Self {
-            db,
-            repo_manager,
-        })
+        Ok(Self { db, repo_manager })
     }
 
     /// Get reference to repository manager

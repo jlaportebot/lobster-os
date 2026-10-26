@@ -33,10 +33,10 @@ pub mod uart;
 #[cfg(all(target_arch = "aarch64", feature = "qemu"))]
 pub mod fast_serial;
 
+pub mod lobster_audio;
+pub mod lobster_share;
 #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
 pub mod lobster_storage;
-pub mod lobster_share;
-pub mod lobster_audio;
 
 #[cfg(target_arch = "aarch64")]
 pub mod lobster_net;

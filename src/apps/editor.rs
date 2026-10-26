@@ -499,13 +499,17 @@ mod editor_stub {
         pub fn move_up(&mut self) {
             if self.cursor_y > 0 {
                 self.cursor_y -= 1;
-                self.cursor_x = self.cursor_x.min(self.buffer[self.cursor_y].chars().count());
+                self.cursor_x = self
+                    .cursor_x
+                    .min(self.buffer[self.cursor_y].chars().count());
             }
         }
         pub fn move_down(&mut self) {
             if self.cursor_y + 1 < self.buffer.len() {
                 self.cursor_y += 1;
-                self.cursor_x = self.cursor_x.min(self.buffer[self.cursor_y].chars().count());
+                self.cursor_x = self
+                    .cursor_x
+                    .min(self.buffer[self.cursor_y].chars().count());
             }
         }
         pub fn move_left(&mut self) {
@@ -721,8 +725,14 @@ mod tabs {
             for step in 0..=n {
                 let y = (e.cursor_y + step) % n;
                 let line = &e.buffer[y];
-                let start_col = if step == 0 { e.cursor_x + skip_current as usize } else { 0 };
-                let Some((start_byte, _)) = line.char_indices().nth(start_col) else { continue };
+                let start_col = if step == 0 {
+                    e.cursor_x + skip_current as usize
+                } else {
+                    0
+                };
+                let Some((start_byte, _)) = line.char_indices().nth(start_col) else {
+                    continue;
+                };
                 if let Some(rel) = line[start_byte..].find(query) {
                     hit = Some((y, line[..start_byte + rel].chars().count()));
                     break;
@@ -877,8 +887,12 @@ mod tabs {
     /// Tab-strip click handling (screen coords). Returns true if consumed.
     pub fn handle_click(cx: u32, cy: u32) -> bool {
         use crate::wm::window;
-        let Some(win_id) = window::find_by_title(APP_NAME) else { return false };
-        let Some((x, y, w, _h)) = window::get_info(win_id) else { return false };
+        let Some(win_id) = window::find_by_title(APP_NAME) else {
+            return false;
+        };
+        let Some((x, y, w, _h)) = window::get_info(win_id) else {
+            return false;
+        };
         let client_x = x + FRAME_BORDER;
         let client_y = y + FRAME_BORDER + FRAME_TITLE;
         let client_w = w.saturating_sub(2 * FRAME_BORDER);
@@ -932,7 +946,11 @@ mod tabs {
             },
         };
         let a = app();
-        if let Some(i) = a.bufs.iter().position(|b| b.filename.as_deref() == Some(path)) {
+        if let Some(i) = a
+            .bufs
+            .iter()
+            .position(|b| b.filename.as_deref() == Some(path))
+        {
             a.switch(i);
             return win_id;
         }
@@ -969,12 +987,20 @@ mod tabs {
     #[cfg(feature = "qemu_raspi5b")]
     pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
         use crate::display::graphics as g;
-        let Some(win_id) = crate::wm::window::find_by_title(APP_NAME) else { return };
-        let Some((x, y, w, h)) = crate::wm::window::get_info(win_id) else { return };
+        let Some(win_id) = crate::wm::window::find_by_title(APP_NAME) else {
+            return;
+        };
+        let Some((x, y, w, h)) = crate::wm::window::get_info(win_id) else {
+            return;
+        };
         let focused = crate::wm::window::focused_id() == win_id;
         let a = app();
 
-        let title = if a.bufs[a.active].modified { "Editor *" } else { APP_NAME };
+        let title = if a.bufs[a.active].modified {
+            "Editor *"
+        } else {
+            APP_NAME
+        };
         let (cx, cy, cw, ch) =
             crate::wm::window_frame::draw_frame(fb, win_id, x, y, w, h, title, focused);
         if cw < GUTTER + 16 || ch < TAB_H + ROW_H + CHAR_H {
@@ -997,7 +1023,11 @@ mod tabs {
                 break;
             }
             let active = i == a.active && i < n;
-            let bg = if active { theme.win_border } else { theme.btn_bg };
+            let bg = if active {
+                theme.win_border
+            } else {
+                theme.btn_bg
+            };
             let fg = if active { 0xFFFFFFFF } else { theme.btn_text };
             g::draw_rect(fb, bx, by, bw, TAB_H - 4, bg);
             let label = if i < n {
@@ -1041,7 +1071,11 @@ mod tabs {
         } else if e.cursor_y >= e.top + rows {
             e.top = e.cursor_y + 1 - rows;
         }
-        let left = if e.cursor_x >= cols { e.cursor_x - cols / 2 } else { 0 };
+        let left = if e.cursor_x >= cols {
+            e.cursor_x - cols / 2
+        } else {
+            0
+        };
 
         for r in 0..rows {
             let i = e.top + r;
@@ -1092,14 +1126,24 @@ mod tabs {
             let tlen = p.text.chars().count();
             let shown: String = p.text.chars().skip(tlen.saturating_sub(avail)).collect();
             let line = alloc::format!("{}{}_", label, shown);
-            g::draw_text(fb, cx + 8, py + 2, &line, 0xFFFFFFFF, theme.title_bar_unfocused);
+            g::draw_text(
+                fb,
+                cx + 8,
+                py + 2,
+                &line,
+                0xFFFFFFFF,
+                theme.title_bar_unfocused,
+            );
         }
 
         // ── Status bar ──
         let status_y = cy + ch - ROW_H;
         g::draw_rect(fb, cx, status_y, cw, ROW_H, theme.menu_bg);
         g::draw_rect(fb, cx, status_y, cw, 1, theme.menu_border);
-        let name = e.filename.clone().unwrap_or_else(|| String::from("untitled"));
+        let name = e
+            .filename
+            .clone()
+            .unwrap_or_else(|| String::from("untitled"));
         let dot = if e.modified { " *" } else { "" };
         let status = match a.msg.as_ref() {
             Some(m) => alloc::format!("{}{} | {}", name, dot, m),
@@ -1112,7 +1156,14 @@ mod tabs {
             ),
         };
         let status: String = status.chars().take(max_chars).collect();
-        g::draw_text(fb, cx + 8, status_y + 4, &status, theme.label_text_dim, theme.menu_bg);
+        g::draw_text(
+            fb,
+            cx + 8,
+            status_y + 4,
+            &status,
+            theme.label_text_dim,
+            theme.menu_bg,
+        );
     }
 }
 

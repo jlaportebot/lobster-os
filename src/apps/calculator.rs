@@ -156,13 +156,7 @@ impl Calculator {
             self.operator = None;
             self.waiting_for_operand = true;
             // Tape entry: "lhs op rhs = result"
-            let entry = alloc::format!(
-                "{} {} {} = {}",
-                lhs,
-                op,
-                rhs_display,
-                self.display
-            );
+            let entry = alloc::format!("{} {} {} = {}", lhs, op, rhs_display, self.display);
             if self.history.len() == HISTORY_CAP {
                 self.history.remove(0);
             }
@@ -274,8 +268,16 @@ impl Calculator {
         if !self.history.is_empty() {
             let tape_y = display_y + display_height;
             let shown = self.history.len().min(3);
-            for (i, entry) in self.history[self.history.len() - shown..].iter().rev().enumerate() {
-                let line = if entry.len() > 24 { &entry[entry.len() - 24..] } else { &entry[..] };
+            for (i, entry) in self.history[self.history.len() - shown..]
+                .iter()
+                .rev()
+                .enumerate()
+            {
+                let line = if entry.len() > 24 {
+                    &entry[entry.len() - 24..]
+                } else {
+                    &entry[..]
+                };
                 graphics::draw_text(
                     &info,
                     x + 8,
@@ -390,7 +392,14 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
                 let focused = crate::wm::window::focused_id() == win_id;
                 // Uniform themed frame, then the calculator UI in the client area
                 let (cx, cy, cw, ch) = crate::wm::window_frame::draw_frame(
-                    fb, win_id, win.x, win.y, win.w, win.h, "Calculator", focused,
+                    fb,
+                    win_id,
+                    win.x,
+                    win.y,
+                    win.w,
+                    win.h,
+                    "Calculator",
+                    focused,
                 );
                 let calc = get_calculator();
                 calc.render(cx, cy, cw, ch);

@@ -112,7 +112,6 @@ impl ProcessManager {
         width: u32,
         height: u32,
     ) {
-
         // Column headers
         let header_y = y + 2;
         graphics::draw_rect(info, x, header_y, width, 20, 0x1A1A2A);
@@ -217,7 +216,14 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
             if win.active {
                 let focused = crate::wm::window::focused_id() == win_id;
                 let (cx, cy, cw, ch) = crate::wm::window_frame::draw_frame(
-                    fb, win_id, win.x, win.y, win.w, win.h, "Process Manager", focused,
+                    fb,
+                    win_id,
+                    win.x,
+                    win.y,
+                    win.w,
+                    win.h,
+                    "Process Manager",
+                    focused,
                 );
                 let pm = get_process_manager();
                 pm.render(cx, cy, cw, ch);

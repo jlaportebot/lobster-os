@@ -181,7 +181,14 @@ pub fn draw(fb: &fb::FramebufferInfo) {
         let label_w = (label.len() as u32) * 8;
         let label_x = x + ICON_SIZE / 2 - label_w / 2;
         let label_y = y + ICON_SIZE + 2;
-        graphics::draw_text(fb, label_x, label_y, label, theme.title_text, theme.desktop_bg);
+        graphics::draw_text(
+            fb,
+            label_x,
+            label_y,
+            label,
+            theme.title_text,
+            theme.desktop_bg,
+        );
     }
 }
 
@@ -192,8 +199,10 @@ pub fn hit_test(cx: u32, cy: u32) -> Option<usize> {
 
     for i in 0..count {
         let icon = &icons[i];
-        if cx >= icon.x && cx < icon.x + ICON_SIZE
-            && cy >= icon.y && cy < icon.y + ICON_SIZE + ICON_LABEL_H
+        if cx >= icon.x
+            && cx < icon.x + ICON_SIZE
+            && cy >= icon.y
+            && cy < icon.y + ICON_SIZE + ICON_LABEL_H
         {
             return Some(i);
         }

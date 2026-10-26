@@ -240,8 +240,7 @@ pub fn fetch_url(url: &str) -> Option<(u16, alloc::vec::Vec<u8>)> {
     #[cfg(feature = "qemu_raspi5b")]
     {
         if crate::drivers::lobster_net::is_available() {
-            return crate::drivers::lobster_net::http_fetch(url)
-                .map(|body| (200u16, body));
+            return crate::drivers::lobster_net::http_fetch(url).map(|body| (200u16, body));
         }
     }
 

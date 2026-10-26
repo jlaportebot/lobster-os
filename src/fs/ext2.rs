@@ -420,14 +420,21 @@ pub fn remove_backing_file(parent_ino: u32, name: &str) -> Result<(), VfsError> 
             let mut pos = 0usize;
             let mut changed = false;
             while pos + 12 <= bs {
-                let rec_len = u16::from_le(unsafe { *(block_buf.as_ptr().add(pos + 4) as *const u16) }) as usize;
+                let rec_len =
+                    u16::from_le(unsafe { *(block_buf.as_ptr().add(pos + 4) as *const u16) })
+                        as usize;
                 if rec_len < 12 {
                     break;
                 }
                 let name_len = block_buf[pos + 6] as usize;
                 let ino_le = u32::from_le(unsafe { *(block_buf.as_ptr().add(pos) as *const u32) });
-                if ino_le == target_ino && name_len > 0 && name_len <= 255 && pos + 8 + name_len <= bs {
-                    let existing = core::str::from_utf8(&block_buf[pos + 8..pos + 8 + name_len]).unwrap_or("");
+                if ino_le == target_ino
+                    && name_len > 0
+                    && name_len <= 255
+                    && pos + 8 + name_len <= bs
+                {
+                    let existing =
+                        core::str::from_utf8(&block_buf[pos + 8..pos + 8 + name_len]).unwrap_or("");
                     if existing == name {
                         // Zero the entry (inode 0 = unused) but keep rec_len.
                         for b in block_buf[pos..pos + 8 + name_len].iter_mut() {
@@ -457,7 +464,11 @@ pub fn remove_backing_file(parent_ino: u32, name: &str) -> Result<(), VfsError> 
 
 /// Rename in the backing store = remove old dir entry + add new one with
 /// the same inode. Same-parent rename only (fm renames within the cwd).
-pub fn rename_backing_file(parent_ino: u32, old_name: &str, new_name: &str) -> Result<(), VfsError> {
+pub fn rename_backing_file(
+    parent_ino: u32,
+    old_name: &str,
+    new_name: &str,
+) -> Result<(), VfsError> {
     unsafe {
         let fs = EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)?;
         let entries = fs.read_dir(parent_ino)?;
@@ -478,7 +489,11 @@ pub fn rename_backing_file(parent_ino: u32, old_name: &str, new_name: &str) -> R
         let ft = {
             let inode = fs.read_inode(target_ino)?;
             let mode = u16::from_le(inode.i_mode);
-            if mode & EXT2_S_IFDIR != 0 { EXT2_FT_DIR } else { EXT2_FT_REG_FILE }
+            if mode & EXT2_S_IFDIR != 0 {
+                EXT2_FT_DIR
+            } else {
+                EXT2_FT_REG_FILE
+            }
         };
 
         // Remove the old entry, then link the same inode under the new name.

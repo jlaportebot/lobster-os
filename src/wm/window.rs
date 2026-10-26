@@ -496,14 +496,24 @@ pub fn get_title(id: u32) -> &'static str {
 /// Handle an HID event from the USB subsystem
 pub fn handle_event(evt: crate::usb::hid::HidEvent) {
     match evt {
-        crate::usb::hid::HidEvent::KeyPress { scancode, extended: _ } => {
+        crate::usb::hid::HidEvent::KeyPress {
+            scancode,
+            extended: _,
+        } => {
             handle_keypress(scancode);
         }
-        crate::usb::hid::HidEvent::KeyRelease { scancode: _, extended: _ } => {}
+        crate::usb::hid::HidEvent::KeyRelease {
+            scancode: _,
+            extended: _,
+        } => {}
         crate::usb::hid::HidEvent::MouseMove { dx, dy } => {
             handle_mouse_move(dx, dy);
         }
-        crate::usb::hid::HidEvent::MouseButton { left, right, middle } => {
+        crate::usb::hid::HidEvent::MouseButton {
+            left,
+            right,
+            middle,
+        } => {
             handle_mouse_button(left, right, middle);
         }
     }
@@ -793,7 +803,9 @@ fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
                     // Top edge → maximize
                     maximize(drag_win);
                 }
-                unsafe { SNAP_PREVIEW = None; }
+                unsafe {
+                    SNAP_PREVIEW = None;
+                }
             }
         }
 

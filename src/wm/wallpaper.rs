@@ -28,13 +28,41 @@ pub struct Preset {
 
 /// Built-in wallpaper presets (Nord + friends)
 pub static PRESETS: &[Preset] = &[
-    Preset { name: "Nord Dusk",    top: 0xFF2E3440, bottom: 0xFF3B4252 },
-    Preset { name: "Nord Aurora",  top: 0xFF5E81AC, bottom: 0xFF2E3440 },
-    Preset { name: "Deep Ocean",   top: 0xFF0F2027, bottom: 0xFF203A43 },
-    Preset { name: "Sunset",       top: 0xFF355C7D, bottom: 0xFFC06C84 },
-    Preset { name: "Forest",       top: 0xFF134E5E, bottom: 0xFF71B280 },
-    Preset { name: "Royal",        top: 0xFF141E30, bottom: 0xFF243B55 },
-    Preset { name: "Midnight",     top: 0xFF0B1021, bottom: 0xFF1B2735 },
+    Preset {
+        name: "Nord Dusk",
+        top: 0xFF2E3440,
+        bottom: 0xFF3B4252,
+    },
+    Preset {
+        name: "Nord Aurora",
+        top: 0xFF5E81AC,
+        bottom: 0xFF2E3440,
+    },
+    Preset {
+        name: "Deep Ocean",
+        top: 0xFF0F2027,
+        bottom: 0xFF203A43,
+    },
+    Preset {
+        name: "Sunset",
+        top: 0xFF355C7D,
+        bottom: 0xFFC06C84,
+    },
+    Preset {
+        name: "Forest",
+        top: 0xFF134E5E,
+        bottom: 0xFF71B280,
+    },
+    Preset {
+        name: "Royal",
+        top: 0xFF141E30,
+        bottom: 0xFF243B55,
+    },
+    Preset {
+        name: "Midnight",
+        top: 0xFF0B1021,
+        bottom: 0xFF1B2735,
+    },
 ];
 
 static mut ACTIVE: usize = 0;
@@ -111,7 +139,11 @@ pub fn paint(fb: &crate::display::fb::FramebufferInfo, back_buf: *mut u32) {
     let p = active();
 
     let (tr, tg, tb) = ((p.top >> 16) & 0xFF, (p.top >> 8) & 0xFF, p.top & 0xFF);
-    let (br, bg_, bb) = ((p.bottom >> 16) & 0xFF, (p.bottom >> 8) & 0xFF, p.bottom & 0xFF);
+    let (br, bg_, bb) = (
+        (p.bottom >> 16) & 0xFF,
+        (p.bottom >> 8) & 0xFF,
+        p.bottom & 0xFF,
+    );
 
     let row_pixels = fb.width as usize;
     let mut row_buf: [u32; 1920] = [0; 1920];
@@ -121,7 +153,8 @@ pub fn paint(fb: &crate::display::fb::FramebufferInfo, back_buf: *mut u32) {
         let r = tr as f32 + (br as f32 - tr as f32) * t;
         let g = tg as f32 + (bg_ as f32 - tg as f32) * t;
         let b = tb as f32 + (bb as f32 - tb as f32) * t;
-        let argb = 0xFF000000 | ((r as u32 & 0xFF) << 16) | ((g as u32 & 0xFF) << 8) | (b as u32 & 0xFF);
+        let argb =
+            0xFF000000 | ((r as u32 & 0xFF) << 16) | ((g as u32 & 0xFF) << 8) | (b as u32 & 0xFF);
         let color = pack(argb);
 
         let count = row_pixels.min(1920);
@@ -144,7 +177,11 @@ pub fn paint_to_screen() {
     }
     let p = active();
     let (tr, tg, tb) = ((p.top >> 16) & 0xFF, (p.top >> 8) & 0xFF, p.top & 0xFF);
-    let (br, bg_, bb) = ((p.bottom >> 16) & 0xFF, (p.bottom >> 8) & 0xFF, p.bottom & 0xFF);
+    let (br, bg_, bb) = (
+        (p.bottom >> 16) & 0xFF,
+        (p.bottom >> 8) & 0xFF,
+        p.bottom & 0xFF,
+    );
 
     let row_pixels = fb.width as usize;
     let mut row_buf: [u32; 1920] = [0; 1920];
@@ -155,7 +192,8 @@ pub fn paint_to_screen() {
         let r = tr as f32 + (br as f32 - tr as f32) * t;
         let g = tg as f32 + (bg_ as f32 - tg as f32) * t;
         let b = tb as f32 + (bb as f32 - tb as f32) * t;
-        let argb = 0xFF000000 | ((r as u32 & 0xFF) << 16) | ((g as u32 & 0xFF) << 8) | (b as u32 & 0xFF);
+        let argb =
+            0xFF000000 | ((r as u32 & 0xFF) << 16) | ((g as u32 & 0xFF) << 8) | (b as u32 & 0xFF);
         let color = pack(argb);
         let count = row_pixels.min(1920);
         for x in 0..count {
@@ -188,12 +226,17 @@ pub fn erase_region(x: u32, y: u32, w: u32, h: u32) {
         // directly across the region's columns.
         let p = active();
         let (tr, tg, tb) = ((p.top >> 16) & 0xFF, (p.top >> 8) & 0xFF, p.top & 0xFF);
-        let (br, bg_, bb) = ((p.bottom >> 16) & 0xFF, (p.bottom >> 8) & 0xFF, p.bottom & 0xFF);
+        let (br, bg_, bb) = (
+            (p.bottom >> 16) & 0xFF,
+            (p.bottom >> 8) & 0xFF,
+            p.bottom & 0xFF,
+        );
         let t = row as f32 / fb.height.max(1) as f32;
         let r = tr as f32 + (br as f32 - tr as f32) * t;
         let g = tg as f32 + (bg_ as f32 - tg as f32) * t;
         let b = tb as f32 + (bb as f32 - tb as f32) * t;
-        let argb = 0xFF000000 | ((r as u32 & 0xFF) << 16) | ((g as u32 & 0xFF) << 8) | (b as u32 & 0xFF);
+        let argb =
+            0xFF000000 | ((r as u32 & 0xFF) << 16) | ((g as u32 & 0xFF) << 8) | (b as u32 & 0xFF);
         let mut col = x1;
         while col < x2 {
             crate::display::graphics::draw_pixel(&fb, col, row, argb);
@@ -205,12 +248,17 @@ pub fn erase_region(x: u32, y: u32, w: u32, h: u32) {
 pub fn paint_row(fb: &crate::display::fb::FramebufferInfo, y: u32, dst: &mut [u32]) {
     let p = active();
     let (tr, tg, tb) = ((p.top >> 16) & 0xFF, (p.top >> 8) & 0xFF, p.top & 0xFF);
-    let (br, bg_, bb) = ((p.bottom >> 16) & 0xFF, (p.bottom >> 8) & 0xFF, p.bottom & 0xFF);
+    let (br, bg_, bb) = (
+        (p.bottom >> 16) & 0xFF,
+        (p.bottom >> 8) & 0xFF,
+        p.bottom & 0xFF,
+    );
     let t = y as f32 / fb.height.max(1) as f32;
     let r = tr as f32 + (br as f32 - tr as f32) * t;
     let g = tg as f32 + (bg_ as f32 - tg as f32) * t;
     let b = tb as f32 + (bb as f32 - tb as f32) * t;
-    let argb = 0xFF000000 | ((r as u32 & 0xFF) << 16) | ((g as u32 & 0xFF) << 8) | (b as u32 & 0xFF);
+    let argb =
+        0xFF000000 | ((r as u32 & 0xFF) << 16) | ((g as u32 & 0xFF) << 8) | (b as u32 & 0xFF);
     let color = pack(argb);
     for px in dst.iter_mut().take(fb.width as usize) {
         *px = color;
