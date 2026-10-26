@@ -224,6 +224,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
                     len += 1;
                 }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                // Q4-TODO: user_str gate pending per-AS split
             };
             sys_exec(path_str)
         }
@@ -438,6 +439,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
                     len += 1;
                 }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                // Q4-TODO: user_str gate pending per-AS split
             };
             sys_stat(path_str, stat_ptr)
         }
@@ -453,6 +455,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
                     len += 1;
                 }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                // Q4-TODO: user_str gate pending per-AS split
             };
             sys_stat(path_str, args[1] as *mut u8)
         }
@@ -472,6 +475,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
                     len += 1;
                 }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                // Q4-TODO: user_str gate pending per-AS split
             };
             match crate::fs::vfs::mkdir(path_str) {
                 Ok(_) => 0,
@@ -490,6 +494,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
                     len += 1;
                 }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                // Q4-TODO: user_str gate pending per-AS split
             };
             match crate::fs::vfs::remove(path_str) {
                 Ok(_) => 0,
@@ -508,6 +513,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
                     len += 1;
                 }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                // Q4-TODO: user_str gate pending per-AS split
             };
             match crate::fs::vfs::unlink(path_str) {
                 Ok(_) => 0,
@@ -527,6 +533,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
                     len += 1;
                 }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                // Q4-TODO: user_str gate pending per-AS split
             };
             match crate::fs::vfs::open(
                 path_str,
@@ -550,6 +557,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
                     len += 1;
                 }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                // Q4-TODO: user_str gate pending per-AS split
             };
             match crate::fs::vfs::resolve_path(path_str) {
                 Ok(_) => 0,
@@ -584,6 +592,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
                     len += 1;
                 }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                // Q4-TODO: user_str gate pending per-AS split
             };
             match crate::fs::vfs::resolve_path(path_str) {
                 Ok(_) => {
@@ -650,6 +659,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
                     len += 1;
                 }
                 core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                // Q4-TODO: user_str gate pending per-AS split
             };
             sys_truncate(path_str, length)
         }
@@ -914,6 +924,7 @@ mod linux_compat {
                         len += 1;
                     }
                     core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                    // Q4-TODO: user_str gate pending per-AS split
                 };
                 sys_open_vfs(path_str, flags)
             }
@@ -931,6 +942,7 @@ mod linux_compat {
                         len += 1;
                     }
                     core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                    // Q4-TODO: user_str gate pending per-AS split
                 };
                 sys_open_vfs(path_str, flags)
             }
@@ -1027,6 +1039,7 @@ mod linux_compat {
                         len += 1;
                     }
                     core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+                    // Q4-TODO: user_str gate pending per-AS split
                 };
                 sys_exec(path_str)
             }
@@ -1130,8 +1143,10 @@ fn sys_write(fd: i32, buf_ptr: u64, len: usize) -> u64 {
         if let Some(fd_table) = crate::ipc::get_fd_table(task_idx) {
             if let Some(entry) = fd_table.get(fd as usize) {
                 if entry.kind == crate::ipc::FdKind::PipeWrite {
-                    // Write to pipe
-                    let buf = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, len) };
+                    // Q4: validate the user pointer before dereferencing.
+                    let Some(buf) = crate::sched::uaccess::user_slice(buf_ptr, len as u64) else {
+                        return u64::MAX - 13; // -EFAULT
+                    };
                     let result = crate::ipc::pipe_write(task_idx, fd as usize, buf);
                     return if result < 0 {
                         u64::MAX // Error
@@ -1148,7 +1163,10 @@ fn sys_write(fd: i32, buf_ptr: u64, len: usize) -> u64 {
         return u64::MAX; // -1 (EBADF)
     }
 
-    let buf = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, len) };
+    // Q4: validate the user pointer before dereferencing.
+    let Some(buf) = crate::sched::uaccess::user_slice(buf_ptr, len as u64) else {
+        return u64::MAX - 13; // -EFAULT
+    };
     #[cfg(target_arch = "aarch64")]
     {
         for &byte in buf {
@@ -1173,7 +1191,11 @@ fn sys_read(fd: i32, buf_ptr: u64, len: usize) -> u64 {
             if let Some(entry) = fd_table.get(fd as usize) {
                 if entry.kind == crate::ipc::FdKind::PipeRead {
                     // Read from pipe
-                    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, len) };
+                    // Q4: validate the user pointer before dereferencing.
+                    let Some(buf) = crate::sched::uaccess::user_slice_mut(buf_ptr, len as u64)
+                    else {
+                        return u64::MAX - 13; // -EFAULT
+                    };
                     let result = crate::ipc::pipe_read(task_idx, fd as usize, buf);
                     return if result < 0 {
                         u64::MAX // Error / would-block

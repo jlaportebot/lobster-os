@@ -20,6 +20,7 @@ pub mod process;
 pub mod shared_lib;
 pub mod signal;
 pub mod syscall;
+pub mod uaccess;
 
 /// Maximum number of concurrent tasks
 pub const MAX_TASKS: usize = 32;
