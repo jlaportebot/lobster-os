@@ -451,6 +451,23 @@ impl Scrollback {
         }
     }
 
+    /// Build a Scrollback in `dest` (pointing at uninitialized memory)
+    /// without ever creating a stack temporary of the full 10 MB array.
+    /// Host-test helper for heap construction.
+    #[cfg(all(test, feature = "std"))]
+    pub unsafe fn new_in_place(dest: *mut Self) {
+        let line_default = ScrollbackLine {
+            cells: [Cell::new(); 80],
+            len: 0,
+        };
+        for i in 0..SCROLLBACK_MAX_LINES {
+            core::ptr::addr_of_mut!((*dest).lines[i]).write(line_default);
+        }
+        core::ptr::addr_of_mut!((*dest).head).write(0);
+        core::ptr::addr_of_mut!((*dest).count).write(0);
+        core::ptr::addr_of_mut!((*dest).scroll_offset).write(0);
+    }
+
     /// Push a line into scrollback
     pub fn push_line(&mut self, row: &[Cell; 80]) {
         let mut line = ScrollbackLine {

@@ -950,12 +950,12 @@ fn run_builtin_out(
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "ifconfig" => {
-            cmd_ifconfig();
+            cmd_ifconfig_legacy();
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "ping" => {
-            cmd_ping(args, argc);
+            cmd_ping_legacy(args, argc);
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
@@ -2162,7 +2162,7 @@ fn parse_ip_addr(s: &str) -> Option<[u8; 4]> {
 }
 
 #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
-fn cmd_ifconfig() {
+fn cmd_ifconfig_legacy() {
     let cfg = crate::net::config();
     crate::println!("eth0: LobsterOS Network Interface");
     crate::println!(
@@ -2218,7 +2218,7 @@ fn cmd_ifconfig() {
 }
 
 #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
-fn cmd_ping(args: [&str; MAX_ARGS], argc: usize) {
+fn cmd_ping_legacy(args: [&str; MAX_ARGS], argc: usize) {
     if argc < 2 {
         Uart10::puts("Usage: ping <ip>\r\n");
         return;

@@ -47,20 +47,19 @@ impl Ipv4Header {
         let mut pos = 0;
         for i in 0..header_len {
             if i == 10 || i == 11 {
-                // Skip checksum field
-                buf[pos] = 0;
-                pos += 1;
+                // Zero the checksum field (one byte per iteration — the old
+                // branch advanced pos twice and misaligned every following byte)
                 buf[pos] = 0;
             } else {
                 buf[pos] = match i {
-                    0 => (self.version << 4) | self.dscp >> 4,
-                    1 => (self.dscp & 0x0F) << 4 | self.flags >> 4,
-                    2 => (((self.flags & 0x0F) << 4) | (self.frag_offset >> 8) as u8) as u8,
-                    3 => (self.frag_offset & 0xFF) as u8,
-                    4 => (self.total_len >> 8) as u8,
-                    5 => (self.total_len & 0xFF) as u8,
-                    6 => (self.identification >> 8) as u8,
-                    7 => (self.identification & 0xFF) as u8,
+                    0 => (self.version << 4) | self.ihl,
+                    1 => self.dscp << 2,
+                    2 => (self.total_len >> 8) as u8,
+                    3 => (self.total_len & 0xFF) as u8,
+                    4 => (self.identification >> 8) as u8,
+                    5 => (self.identification & 0xFF) as u8,
+                    6 => ((((self.flags & 0x07) as u16) << 13 | self.frag_offset) >> 8) as u8,
+                    7 => (self.frag_offset & 0xFF) as u8,
                     8 => self.ttl,
                     9 => self.protocol,
                     12..=15 => self.src_addr[i - 12],
@@ -96,14 +95,14 @@ impl Ipv4Header {
         let mut buf = [0u8; 40];
 
         // Build header bytes with zeroed checksum
-        buf[0] = (header.version << 4) | (header.dscp >> 4);
-        buf[1] = (header.dscp & 0x0F) << 4 | (header.flags >> 4);
-        buf[2] = ((header.flags & 0x0F) << 4) | (header.frag_offset >> 8) as u8;
-        buf[3] = (header.frag_offset & 0xFF) as u8;
-        buf[4] = (header.total_len >> 8) as u8;
-        buf[5] = (header.total_len & 0xFF) as u8;
-        buf[6] = (header.identification >> 8) as u8;
-        buf[7] = (header.identification & 0xFF) as u8;
+        buf[0] = (header.version << 4) | header.ihl;
+        buf[1] = header.dscp << 2;
+        buf[2] = (header.total_len >> 8) as u8;
+        buf[3] = (header.total_len & 0xFF) as u8;
+        buf[4] = (header.identification >> 8) as u8;
+        buf[5] = (header.identification & 0xFF) as u8;
+        buf[6] = ((((header.flags & 0x07) as u16) << 13 | header.frag_offset) >> 8) as u8;
+        buf[7] = (header.frag_offset & 0xFF) as u8;
         buf[8] = header.ttl;
         buf[9] = header.protocol;
         buf[10] = 0; // checksum will be computed
@@ -135,24 +134,25 @@ pub fn parse(data: &[u8]) -> Option<Ipv4Header> {
         return None;
     }
 
-    let version_dscp = data[0];
-    let version = version_dscp >> 4;
-    let _dscp = version_dscp & 0x3F;
-
+    let version = data[0] >> 4;
     if version != 4 {
         crate::println!("ipv4: not IPv4 (version={})", version);
         return None;
     }
-
-    let flags_frag = ((data[2] as u16) << 8) | (data[3] as u16);
-    let _flags = (flags_frag >> 8) as u8;
-    let _frag_offset = flags_frag & 0x1FFF;
 
     let ihl = data[0] & 0x0F;
     if ihl < 5 {
         crate::println!("ipv4: invalid IHL ({})", ihl);
         return None;
     }
+
+    // RFC 791 layout: byte1 = DSCP(6)|ECN(2); bytes 6-7 = flags|frag_offset.
+    // (The old code read flags from the TOTAL LENGTH field and DSCP from the
+    //  IHL nibble — both wrong; found by the host-test suite 2026-10-25.)
+    let dscp = data[1] >> 2;
+    let flags_frag = ((data[6] as u16) << 8) | (data[7] as u16);
+    let flags = (flags_frag >> 13) as u8;
+    let frag_offset = flags_frag & 0x1FFF;
 
     let header_len = (ihl as usize) * 4;
     if data.len() < header_len {
@@ -178,11 +178,11 @@ pub fn parse(data: &[u8]) -> Option<Ipv4Header> {
     let header = Ipv4Header {
         version,
         ihl,
-        dscp: (version_dscp & 0x0F) << 2, // Adjust dscp
+        dscp,
         total_len,
         identification,
-        flags: (flags_frag >> 13) as u8,
-        frag_offset: flags_frag & 0x1FFF,
+        flags,
+        frag_offset,
         ttl,
         protocol,
         checksum,
@@ -331,7 +331,15 @@ mod tests {
             src_addr: [192, 168, 1, 1],
             dst_addr: [192, 168, 1, 2],
         };
+        // Serialize the full header so the checksum covers the same bytes parse
+        // will read (the old test left flags/frag/id/total-len at 0 while
+        // checksumming a header with flags=0x4, total_len=40 — mismatch).
         let checksum = Ipv4Header::compute_checksum(&header);
+        data[2] = (header.total_len >> 8) as u8;
+        data[3] = (header.total_len & 0xFF) as u8;
+        let flags_frag = (((header.flags & 0x07) as u16) << 13) | header.frag_offset;
+        data[6] = (flags_frag >> 8) as u8;
+        data[7] = (flags_frag & 0xFF) as u8;
         data[10] = (checksum >> 8) as u8;
         data[11] = (checksum & 0xFF) as u8;
         data[12..16].copy_from_slice(&[192, 168, 1, 1]);

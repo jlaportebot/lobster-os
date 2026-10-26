@@ -257,7 +257,10 @@ unsafe impl GlobalAlloc for LobsterAllocator {
     }
 }
 
-/// Register the global allocator
+/// Register the global allocator (bare-metal builds only — host `std` test
+/// builds use the system allocator, since the custom heap needs the MMU
+/// page tables that only exist on target).
+#[cfg(not(feature = "std"))]
 #[global_allocator]
 static ALLOCATOR: LobsterAllocator = LobsterAllocator;
 

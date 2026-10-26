@@ -1219,6 +1219,7 @@ static mut KERNEL_SP: u64 = 0;
 ///
 /// # Safety
 /// Called from kernel context at EL1h only.
+#[cfg(all(target_arch = "aarch64"))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn run_and_wait(_pid: u64) -> i64 {
     core::arch::naked_asm!(
@@ -1245,7 +1246,7 @@ pub unsafe extern "C" fn run_and_wait(_pid: u64) -> i64 {
         // Cooperative-exit resume target: exception handler erets here with
         // exit code in x0. Restore regs/SP and return to the caller.
         ".global COOP_RESUME_ADDR",
-        ".Lcoop_resume:",
+        "COOP_RESUME_ADDR:",
         "ldr x18, =KERNEL_CALLEE_SAVE",
         "ldp x19, x20, [x18, #0]",
         "ldp x21, x22, [x18, #16]",
@@ -1316,11 +1317,12 @@ pub unsafe extern "C" fn run_and_wait_body(_pid: u64) -> i64 {
 }
 
 /// Resolve the resume label address (asm helper).
+#[cfg(target_arch = "aarch64")]
 fn coop_resume_label() -> u64 {
     let addr: u64;
     unsafe {
         core::arch::asm!(
-            "ldr {0}, =.Lcoop_resume",
+            "ldr {0}, =COOP_RESUME_ADDR",
             out(reg) addr,
         );
     }

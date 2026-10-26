@@ -84,16 +84,19 @@ pub fn tick() {
         let fb = get_info();
         if fb.width > 0 {
             crate::wm::input::pump_events_user_only();
-            crate::apps::sysmon::render_to_windows(&fb);
-            crate::apps::calculator::render_to_windows(&fb);
-            crate::apps::file_manager::render_to_windows(&fb);
-            crate::apps::process_manager::render_to_windows(&fb);
-            crate::apps::browser::render_to_windows(&fb);
-            crate::apps::editor::render_to_windows(&fb);
-            crate::apps::notes::render_to_windows(&fb);
-            crate::apps::settings::render_settings_window(&fb);
-            crate::apps::image_viewer::bmp_view::render_to_windows(&fb);
-            crate::wm::user_windows::render_to_windows(&fb);
+            #[cfg(feature = "qemu_raspi5b")]
+            {
+                crate::apps::sysmon::render_to_windows(&fb);
+                crate::apps::calculator::render_to_windows(&fb);
+                crate::apps::file_manager::render_to_windows(&fb);
+                crate::apps::process_manager::render_to_windows(&fb);
+                crate::apps::browser::render_to_windows(&fb);
+                crate::apps::editor::render_to_windows(&fb);
+                crate::apps::notes::render_to_windows(&fb);
+                crate::apps::settings::render_settings_window(&fb);
+                crate::apps::image_viewer::bmp_view::render_to_windows(&fb);
+                crate::wm::user_windows::render_to_windows(&fb);
+            }
         }
         return;
     }

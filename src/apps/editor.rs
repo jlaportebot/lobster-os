@@ -966,6 +966,7 @@ mod tabs {
     }
 
     /// Render the Editor window (QEMU direct-FB path).
+    #[cfg(feature = "qemu_raspi5b")]
     pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
         use crate::display::graphics as g;
         let Some(win_id) = crate::wm::window::find_by_title(APP_NAME) else { return };

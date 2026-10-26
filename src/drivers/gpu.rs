@@ -912,16 +912,20 @@ fn parse_detailed_timing(data: &[u8]) -> EdidDetailedTiming {
         return EdidDetailedTiming::default();
     }
 
-    let h_active = u16::from_le_bytes([data[2], data[4] & 0xF0]);
-    let h_blanking = u16::from_le_bytes([data[3], data[4] & 0x0F]);
-    let v_active = u16::from_le_bytes([data[5], data[7] & 0xF0]);
-    let v_blanking = u16::from_le_bytes([data[6], data[7] & 0x0F]);
-    let h_sync_offset = u16::from_le_bytes([data[8], data[11] & 0xC0]);
-    let h_sync_pulse = u16::from_le_bytes([data[9], data[11] & 0x30]);
+    // High-nibble fields: EDID packs the HIGH byte's value in the LOW nibble of the
+    // upper byte (e.g. h_active = data[2] | ((data[4] & 0xF0) << 4)). The old
+    // from_le_bytes([low, data & mask]) decode produced 128 instead of 1920 for
+    // every mode — caught by the host-test suite 2026-10-25.
+    let h_active = (data[2] as u16) | ((data[4] & 0xF0) as u16) << 4;
+    let h_blanking = (data[3] as u16) | ((data[4] & 0x0F) as u16) << 8;
+    let v_active = (data[5] as u16) | ((data[7] & 0xF0) as u16) << 4;
+    let v_blanking = (data[6] as u16) | ((data[7] & 0x0F) as u16) << 8;
+    let h_sync_offset = (data[8] as u16) | ((data[11] & 0xC0) as u16) << 2;
+    let h_sync_pulse = (data[9] as u16) | ((data[11] & 0x30) as u16) << 4;
     let v_sync_offset = (data[10] & 0xF0) >> 4;
     let v_sync_pulse = data[10] & 0x0F;
-    let h_image_size = u16::from_le_bytes([data[12], data[14] & 0xF0]);
-    let v_image_size = u16::from_le_bytes([data[13], data[14] & 0x0F]);
+    let h_image_size = (data[12] as u16) | ((data[14] & 0xF0) as u16) << 4;
+    let v_image_size = (data[13] as u16) | ((data[14] & 0x0F) as u16) << 8;
     let h_border = data[15];
     let v_border = data[16];
     let flags = data[17];
@@ -998,6 +1002,12 @@ pub fn read_edid() -> Result<EdidInfo, &'static str> {
 
 /// Get the preferred (native) resolution from EDID
 pub fn edid_preferred_resolution() -> Option<(u32, u32)> {
+    // Host `std` test builds have no mailbox hardware.
+    #[cfg(feature = "std")]
+    {
+        return None;
+    }
+    #[cfg(not(feature = "std"))]
     match read_edid() {
         Ok(edid) => {
             // First detailed timing is typically the preferred mode
@@ -1575,11 +1585,14 @@ mod tests {
         // Pixel clock: 148.5 MHz = 14850 * 10kHz = 0x3A02 (little-endian)
         edid[54] = 0x02;
         edid[55] = 0x3A;
-        // H active: 1920 = 0x0780 -> low byte 0x80, high nibble 0x07
-        // H blanking: 280 = 0x0118 -> low byte 0x18, high nibble 0x01
+        // H active: 1920 = 0x0780 -> low byte 0x80, high nibble 0x7
+        // H blanking: 280 = 0x0118 -> low byte 0x18, high nibble 0x1
+        // Byte 4 packs BOTH high nibbles: (0x7 << 4) | 0x1 = 0x71
+        // (the old fixture wrote 0x07, shifted 4 bits off — every EDID test
+        //  was asserting against a garbage mode)
         edid[56] = 0x80;
         edid[57] = 0x18;
-        edid[58] = 0x07;
+        edid[58] = 0x71;
         // V active: 1080 = 0x0438 -> low byte 0x38, high nibble 0x04
         // V blanking: 45 = 0x002D -> low byte 0x2D, high nibble 0x00
         edid[59] = 0x38;

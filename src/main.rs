@@ -69,8 +69,9 @@ extern "C" {
     static __bss_end: u64;
 }
 
-/// Kernel entry point for AArch64 — called from boot.S with x0 = DTB pointer
-#[cfg(target_arch = "aarch64")]
+/// Kernel entry point for AArch64 — called from boot.S with x0 = DTB pointer.
+/// Not built for host `std` test binaries (their C runtime owns _start).
+#[cfg(all(target_arch = "aarch64", not(feature = "std")))]
 #[no_mangle]
 pub extern "C" fn _start(dtb_ptr: *const u8) -> ! {
     kernel_main(dtb_ptr)

@@ -307,10 +307,12 @@ fn pbkdf2_hmac_sha1(
     let mut dk = alloc::vec::Vec::with_capacity(dk_len);
 
     for block_idx in 1..=l {
-        // Build salt || block_index (big-endian)
+        // Build salt || block_index (big-endian, 4 bytes per RFC 2898 — usize's
+        // 8-byte to_be_bytes produced a wrong U1 for every input, silently)
+        let block_idx_be = (block_idx as u32).to_be_bytes();
         let mut salt_block = alloc::vec::Vec::with_capacity(salt.len() + 4);
         salt_block.extend_from_slice(salt);
-        salt_block.extend_from_slice(&block_idx.to_be_bytes());
+        salt_block.extend_from_slice(&block_idx_be);
 
         // U_1 = HMAC-SHA1(password, salt || block_index)
         let mut u = sha1::hmac_sha1(password, &salt_block);
@@ -3242,14 +3244,14 @@ mod tests {
 
     #[test]
     fn test_hmac_sha1_key_data() {
-        // HMAC-SHA1("key", "data") from RFC 2202 test case 2
-        // = 4f4ca3d5d68ba7fa0a6d9e5e4a8b8c9d0e1f2a3b
+        // HMAC-SHA1("key", "data") — verified against Python
+        // hmac.new(b"key", b"data", hashlib.sha1)
         let mac = hmac_sha1(b"key", b"data");
         assert_eq!(
             mac,
             [
-                0x4f, 0x4c, 0xa3, 0xd5, 0xd6, 0x8b, 0xa7, 0xfa, 0x0a, 0x6d, 0x9e, 0x5e, 0x4a, 0x8b,
-                0x8c, 0x9d, 0x0e, 0x1f, 0x2a, 0x3b
+                0x10, 0x41, 0x52, 0xc5, 0xbf, 0xdc, 0xa0, 0x7b, 0xc6, 0x33, 0xee, 0xbd, 0x46, 0x19,
+                0x9f, 0x02, 0x55, 0xc9, 0xf4, 0x9d
             ]
         );
     }
@@ -3263,10 +3265,11 @@ mod tests {
         let pmk = pbkdf2_hmac_sha1(b"password", b"IEEE", 4096, 32);
         assert_eq!(pmk.len(), 32);
         // This is a known test vector - verify against expected value
+        // Verified against Python hashlib.pbkdf2_hmac('sha1', b'password', b'IEEE', 4096, 32)
         let expected = [
-            0xf4, 0x2c, 0x6f, 0xc5, 0x23, 0x2a, 0x7b, 0x2c, 0x8e, 0x76, 0x06, 0x9c, 0xea, 0xa3,
-            0x41, 0x9f, 0x9e, 0x8b, 0x5d, 0x6f, 0x7a, 0x8c, 0x9e, 0x0f, 0x1b, 0x2c, 0x3d, 0x4e,
-            0x5f, 0x6a, 0x7b, 0x8c,
+            0xf4, 0x2c, 0x6f, 0xc5, 0x2d, 0xf0, 0xeb, 0xef, 0x9e, 0xbb, 0x4b, 0x90, 0xb3, 0x8a,
+            0x5f, 0x90, 0x2e, 0x83, 0xfe, 0x1b, 0x13, 0x5a, 0x70, 0xe2, 0x3a, 0xed, 0x76, 0x2e,
+            0x97, 0x10, 0xa1, 0x2e,
         ];
         assert_eq!(pmk, expected);
     }

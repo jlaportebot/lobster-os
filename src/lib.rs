@@ -103,7 +103,6 @@ pub mod wm;
 // x86_64 stubs for host testing
 #[cfg(target_arch = "x86_64")]
 pub mod sched {
-    use crate::sync::Spinlock;
 
     pub const MAX_TASKS: usize = 32;
     pub const TICK_MS: u64 = 10;
@@ -130,7 +129,7 @@ pub mod sched {
         Zombie,
     }
 
-    pub type Pid = u32;
+    pub type Pid = u64;
 
     #[derive(Clone, Copy)]
     pub struct Task {
@@ -139,15 +138,29 @@ pub mod sched {
         pub priority: Priority,
         pub is_user: bool,
         pub ipc_ns: u32,
+        /// Bitmask of pending signals (bit N = signal N). Host stub: unused.
+        pub pending_signals: u64,
+        /// Root page-table physical address. Host stub: always 0.
+        pub ttbr0_phys: u64,
+        /// Real user/group IDs (host stub: root).
+        pub uid: u32,
+        pub gid: u32,
+        /// Effective user/group IDs (host stub: root).
+        pub euid: u32,
+        pub egid: u32,
+        /// Supplementary groups (host stub: none).
+        pub groups: [u32; 4],
+        pub group_count: u32,
     }
 
-    static TASK_TABLE: Spinlock<[Option<Task>; MAX_TASKS]> = Spinlock::new([None; MAX_TASKS]);
+    pub static mut TASK_TABLE: [Option<Task>; MAX_TASKS] = [None; MAX_TASKS];
 
     pub fn find_task_index(pid: Pid) -> Option<usize> {
-        let table = TASK_TABLE.lock();
-        table
-            .iter()
-            .position(|t| t.as_ref().map(|task| task.pid == pid).unwrap_or(false))
+        unsafe {
+            TASK_TABLE
+                .iter()
+                .position(|t| t.as_ref().map(|task| task.pid == pid).unwrap_or(false))
+        }
     }
 
     pub fn current_pid() -> Pid {
@@ -162,12 +175,50 @@ pub mod sched {
         0
     }
 
+    /// x86_64 host-test stub: no timer-driven scheduler on the host.
+    pub fn on_timer_tick() {}
+
+    /// x86_64 host-test stub: nothing to kill on the host.
+    pub fn kill(_pid: Pid) -> Result<(), &'static str> {
+        Err("not implemented on x86_64")
+    }
+
+    /// x86_64 host-test stub: no OOM victims on the host.
+    pub fn get_oom_victim() -> Option<Pid> {
+        None
+    }
+
     pub mod dlinker {}
     pub mod elf {}
     pub mod init {}
-    pub mod process {}
-    pub mod signal {}
-    pub mod syscall {}
+    pub mod process {
+        /// x86_64 host-test stub: no address spaces to map SHM into.
+        pub fn mmap_shm(
+            _ttbr0: u64,
+            _base_phys: u64,
+            _size_pages: usize,
+            _writable: bool,
+        ) -> Option<u64> {
+            None
+        }
+        /// x86_64 host-test stub: nothing faults on the host.
+        pub fn handle_page_fault(_va: u64, _is_write: bool) -> bool {
+            false
+        }
+    }
+    pub mod signal {
+        pub const SIGKILL: u32 = 9;
+        /// x86_64 host-test stub: no EL0 tasks to signal on the host.
+        pub fn kill(_pid: super::Pid, _sig: u32) -> Result<(), &'static str> {
+            Err("not implemented on x86_64")
+        }
+    }
+    pub mod syscall {
+        /// x86_64 host-test stub: syscall dispatch is aarch64-only.
+        pub fn dispatch(_nr: u64, _a: u64, _b: u64, _c: u64, _d: u64, _e: u64, _f: u64) -> u64 {
+            0
+        }
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -928,7 +979,10 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
                 }
                 crate::println!("[boot] session restore: {}", cmd);
                 if let Some(rest) = cmd.strip_prefix("image ") {
+                    #[cfg(feature = "qemu_raspi5b")]
                     let _ = crate::apps::image_viewer::open_image(rest.trim());
+                    #[cfg(not(feature = "qemu_raspi5b"))]
+                    let _ = rest;
                 } else {
                     let _ = crate::wm::start_menu::launch_by_name(cmd);
                 }
@@ -1127,7 +1181,7 @@ mod crypto_tests {
             mac,
             [
                 0xb6, 0x17, 0x31, 0x86, 0x55, 0x05, 0x72, 0x64, 0xe2, 0x8b, 0xc0, 0xb6, 0xfb, 0x37,
-                0x8c, 0x8e, 0xf1, 0x46, 0x4e, 0xdc
+                0x8c, 0x8e, 0xf1, 0x46, 0xbe, 0x00
             ]
         );
     }

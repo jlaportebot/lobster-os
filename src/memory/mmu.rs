@@ -263,6 +263,7 @@ unsafe fn enable_mmu_and_caches(ttbr0: u64, ttbr1: u64) {
     crate::arch::cpu::isb();
 
     // Invalidate all TLB entries
+    #[cfg(target_arch = "aarch64")]
     core::arch::asm!("tlbi vmalle1is");
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
@@ -565,6 +566,7 @@ unsafe fn map_page_via_virt(root_virt: *mut [u64; PT_ENTRIES], va: u64, pa: u64,
             // after this replacement will find valid mappings.
             (*table)[idx] = next_phys | PTE_VALID | PTE_TABLE;
             let block_va = va & !((1u64 << current_shift) - 1);
+            #[cfg(target_arch = "aarch64")]
             core::arch::asm!("tlbi vaae1is, {0}", in(reg) block_va >> 12);
             crate::arch::cpu::dsb();
             crate::arch::cpu::isb();
@@ -584,7 +586,8 @@ pub unsafe fn map_page_virt(va: u64, pa: u64, flags: u64) {
     let root = ttbr1_root_virt as *mut [u64; PT_ENTRIES];
     map_page_via_virt(root, va, pa, flags);
     // Flush TLB for this page
-    core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
+    #[cfg(target_arch = "aarch64")]
+            core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
 }
@@ -607,7 +610,8 @@ pub unsafe fn unmap_page_virt(va: u64) {
 
     let idx = pt_index(va, 3);
     (*table)[idx] = 0; // Invalidate
-    core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
+    #[cfg(target_arch = "aarch64")]
+            core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
 }
@@ -634,7 +638,8 @@ pub unsafe fn protect_page_virt(va: u64, flags: u64) {
         let pa = old & !(PAGE_SIZE - 1);
         (*table)[idx] = pa | flags;
     }
-    core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
+    #[cfg(target_arch = "aarch64")]
+            core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
 }

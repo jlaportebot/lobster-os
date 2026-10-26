@@ -260,6 +260,8 @@ impl InstalledPackage {
         if !files_str.is_empty() {
             for path in files_str.split(',') {
                 if !path.is_empty() {
+                    // The DB string carries only paths; derive is_config from
+                    // the /etc/ prefix (matches how packages mark config files).
                     files.push(PackageFile {
                         path: String::from(path),
                         mode: 0o644,
@@ -268,7 +270,7 @@ impl InstalledPackage {
                         size: 0,
                         checksum: [0; 32],
                         data: Vec::new(),
-                        is_config: false,
+                        is_config: path.starts_with("/etc/"),
                         is_symlink: false,
                         symlink_target: None,
                     });
@@ -324,10 +326,15 @@ impl RepositoryIndex {
         self.packages.iter().find(|p| p.name == name)
     }
 
+    /// Case-insensitive search over name and description (package-manager
+    /// convention; the old exact-case contains never matched "gnu" → "GNU").
     pub fn search(&self, query: &str) -> Vec<&RepoPackage> {
+        let q = query.to_lowercase();
         self.packages
             .iter()
-            .filter(|p| p.name.contains(query) || p.description.contains(query))
+            .filter(|p| {
+                p.name.to_lowercase().contains(&q) || p.description.to_lowercase().contains(&q)
+            })
             .collect()
     }
 }
@@ -340,11 +347,20 @@ mod tests {
 
     #[test]
     fn test_package_arch_from_str() {
-        assert_eq!(PackageArch::from_str("aarch64"), PackageArch::Aarch64);
-        assert_eq!(PackageArch::from_str("x86_64"), PackageArch::X86_64);
-        assert_eq!(PackageArch::from_str("armv7"), PackageArch::Armv7);
-        assert_eq!(PackageArch::from_str("riscv64"), PackageArch::Riscv64);
-        assert_eq!(PackageArch::from_str("unknown"), PackageArch::Any);
+        assert_eq!(
+            PackageArch::from_str("aarch64"),
+            Ok(PackageArch::Aarch64)
+        );
+        assert_eq!(
+            PackageArch::from_str("x86_64"),
+            Ok(PackageArch::X86_64)
+        );
+        assert_eq!(PackageArch::from_str("armv7"), Ok(PackageArch::Armv7));
+        assert_eq!(
+            PackageArch::from_str("riscv64"),
+            Ok(PackageArch::Riscv64)
+        );
+        assert_eq!(PackageArch::from_str("unknown"), Ok(PackageArch::Any));
     }
 
     #[test]

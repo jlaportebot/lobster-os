@@ -156,7 +156,10 @@ pub fn init() {
 
 /// Write a log entry to the kernel log buffer
 pub fn klog_write(level: LogLevel, message: &str) {
+    #[cfg(target_arch = "aarch64")]
     let timestamp = crate::arch::timer::Timer::uptime_ms();
+    #[cfg(not(target_arch = "aarch64"))]
+    let timestamp = 0;
     let entry = LogEntry {
         level,
         timestamp_ms: timestamp,
@@ -177,7 +180,10 @@ pub fn klog_dump() {
             break;
         }
         // Print directly to console (bypass klog to avoid recursion)
+        #[cfg(target_arch = "aarch64")]
         crate::drivers::uart::Uart10::puts(core::str::from_utf8(&buf[..read_len]).unwrap_or(""));
+        #[cfg(not(target_arch = "aarch64"))]
+        let _ = core::str::from_utf8(&buf[..read_len]);
         seq = new_seq;
     }
 }

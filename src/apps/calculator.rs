@@ -88,7 +88,16 @@ impl Calculator {
                         return;
                     }
                 }
-                '%' => self.previous % current,
+                '%' => {
+                    if current != 0 {
+                        self.previous % current
+                    } else {
+                        self.display = String::from("Error: mod by 0");
+                        self.operator = None;
+                        self.waiting_for_operand = true;
+                        return;
+                    }
+                }
                 _ => current,
             };
 
@@ -102,6 +111,31 @@ impl Calculator {
         self.previous = 0;
         self.operator = None;
         self.waiting_for_operand = true;
+    }
+
+    /// Compute `lhs op rhs` exactly as `compute()` does, without touching state.
+    /// Returns None for division/modulo by zero (matches the "Error" display).
+    fn apply_op(lhs: i64, op: char, rhs: i64) -> Option<i64> {
+        match op {
+            '+' => Some(lhs.wrapping_add(rhs)),
+            '-' => Some(lhs.wrapping_sub(rhs)),
+            '*' => Some(lhs.wrapping_mul(rhs)),
+            '/' => {
+                if rhs == 0 {
+                    None
+                } else {
+                    Some(lhs / rhs)
+                }
+            }
+            '%' => {
+                if rhs == 0 {
+                    None
+                } else {
+                    Some(lhs % rhs)
+                }
+            }
+            _ => Some(rhs),
+        }
     }
 
     fn backspace(&mut self) {
@@ -362,5 +396,32 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
                 calc.render(cx, cy, cw, ch);
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_op_handles_all_operators() {
+        assert_eq!(Calculator::apply_op(5, '+', 3), Some(8));
+        assert_eq!(Calculator::apply_op(5, '-', 3), Some(2));
+        assert_eq!(Calculator::apply_op(5, '*', 3), Some(15));
+        assert_eq!(Calculator::apply_op(6, '/', 3), Some(2));
+        assert_eq!(Calculator::apply_op(5, '%', 3), Some(2));
+    }
+
+    #[test]
+    fn apply_op_returns_none_for_div_and_mod_by_zero() {
+        // Regression: `5 % 0` used to panic the whole kernel (audit Q1a).
+        assert_eq!(Calculator::apply_op(5, '/', 0), None);
+        assert_eq!(Calculator::apply_op(5, '%', 0), None);
+        assert_eq!(Calculator::apply_op(0, '%', 0), None);
+    }
+
+    #[test]
+    fn apply_op_unknown_operator_falls_back_to_rhs() {
+        assert_eq!(Calculator::apply_op(10, '?', 4), Some(4));
     }
 }

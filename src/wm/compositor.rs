@@ -2159,6 +2159,8 @@ mod tests {
             visible: true,
             has_alpha: false,
             opacity: 255,
+            content_ptr: core::ptr::null_mut(),
+            content_size: 0,
         };
         let bounds = layer.bounds();
         assert_eq!(bounds.x, 100);
@@ -2167,14 +2169,18 @@ mod tests {
         assert_eq!(bounds.h, 600);
     }
 
+    #[cfg(all(test, feature = "qemu_raspi5b", target_arch = "aarch64"))]
     #[test]
     fn test_hotplug_state_enum() {
+        use crate::drivers::gpu::HotplugState;
         assert_eq!(HotplugState::Disconnected as u8, 0);
         assert_eq!(HotplugState::Connected as u8, 1);
     }
 
+    #[cfg(all(test, feature = "qemu_raspi5b", target_arch = "aarch64"))]
     #[test]
     fn test_hdmi_audio_infoframe_default() {
+        use crate::drivers::gpu::HdmiAudioInfoFrame;
         let info = HdmiAudioInfoFrame {
             coding_type: 1, // PCM
             sample_rate: 3, // 48kHz

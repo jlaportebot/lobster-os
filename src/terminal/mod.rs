@@ -34,6 +34,33 @@ impl Terminal {
         }
     }
 
+    /// Heap-allocate a Terminal (host tests: the 10k-line scrollback is ~10 MB,
+    /// far too large for a test thread's stack). Constructs field-by-field
+    /// through a raw pointer — no large stack temporary is ever created.
+    #[cfg(all(test, feature = "std"))]
+    pub fn new_boxed() -> Box<Self> {
+        use std::alloc::{alloc, handle_alloc_error, Layout};
+        let layout = Layout::new::<Self>();
+        let ptr = unsafe {
+            let raw = alloc(layout);
+            if raw.is_null() {
+                handle_alloc_error(layout);
+            }
+            raw as *mut Self
+        };
+        unsafe {
+            core::ptr::addr_of_mut!((*ptr).parser)
+                .write(parser::Parser::new());
+            core::ptr::addr_of_mut!((*ptr).screen)
+                .write(screen::ScreenBuffer::new());
+            // Scrollback is the ~10 MB field — build it in place, no stack temp.
+            screen::Scrollback::new_in_place(core::ptr::addr_of_mut!((*ptr).scrollback));
+            core::ptr::addr_of_mut!((*ptr).input_buf).write([0u8; 1024]);
+            core::ptr::addr_of_mut!((*ptr).input_len).write(0);
+            Box::from_raw(ptr)
+        }
+    }
+
     /// Feed a byte to the VT100 parser
     pub fn feed_byte(&mut self, byte: u8) {
         self.parser.feed(byte, &mut self.screen);
@@ -134,6 +161,7 @@ impl Terminal {
     /// Cycle window focus (Alt+Tab)
     fn cycle_focus(&mut self) {
         // This would integrate with WM to cycle focus
+        #[cfg(target_arch = "aarch64")]
         crate::wm::window::cycle_focus();
     }
 
@@ -176,14 +204,17 @@ mod tests {
 
     #[test]
     fn test_terminal_creation() {
-        let term = Terminal::new();
+        let term = Box::leak(Terminal::new_boxed());
         assert_eq!(term.screen.cols, COLS);
         assert_eq!(term.screen.rows, ROWS);
     }
 
     #[test]
     fn test_feed_byte() {
-        let mut term = Terminal::new();
+        // Terminal embeds a 10k-line scrollback (~10 MB) — construct it on the
+        // HEAP, not the stack, or the test thread's stack overflows.
+        // Box::leak avoids a drop at 10 MB; process exit reclaims it.
+        let mut term = Box::leak(Terminal::new_boxed());
         term.feed_byte(b'H');
         term.feed_byte(b'i');
         term.feed_byte(b'\n');

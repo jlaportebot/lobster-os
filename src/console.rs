@@ -1,6 +1,6 @@
 //! Console abstraction — print! / println! macros using UART (AArch64)
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(feature = "std")))]
 use crate::drivers::uart::Uart10;
 use core::fmt;
 
@@ -9,10 +9,12 @@ struct ConsoleWriter;
 
 impl fmt::Write for ConsoleWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(all(target_arch = "aarch64", not(feature = "std")))]
         Uart10::puts(s);
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", not(feature = "std")))]
         crate::arch::x86_64::console::serial_write_str(s);
+        #[cfg(feature = "std")]
+        let _ = s; // host test builds: swallow console output
         Ok(())
     }
 }
@@ -27,8 +29,10 @@ pub fn init() {
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
+    #[cfg(all(target_arch = "aarch64", not(feature = "std")))]
     crate::arch::cpu::disable_irqs();
     let _ = ConsoleWriter.write_fmt(args);
+    #[cfg(all(target_arch = "aarch64", not(feature = "std")))]
     crate::arch::cpu::enable_irqs();
 }
 

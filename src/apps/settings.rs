@@ -424,6 +424,7 @@ pub mod settings_ui {
         }
     }
 
+    #[cfg(feature = "qemu_raspi5b")]
     pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
         let Some(win_id) = window::find_by_title("Settings") else { return };
         let Some((x, y, w, h)) = window::get_info(win_id) else { return };
