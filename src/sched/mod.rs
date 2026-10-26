@@ -110,6 +110,94 @@ pub struct TrapFrame {
     pub spsr: u64, // Saved Program Status Register
 }
 
+/// Q3: FP/SIMD register context for a task (v0–v31 as 128-bit + FPCR + FPSR).
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct FpContext {
+    pub q: [[u128; 2]; 32],
+    pub fpcr: u32,
+    pub fpsr: u32,
+}
+
+impl FpContext {
+    pub const fn zeroed() -> Self {
+        Self {
+            q: [[0; 2]; 32],
+            fpcr: 0,
+            fpsr: 0,
+        }
+    }
+
+    /// Save the live FP/SIMD state into `self`.
+    ///
+    /// # Safety
+    /// Call at EL1 with FP enabled, while the task's FP state is still live
+    /// (before any kernel code touches vector registers).
+    pub unsafe fn save(&mut self) {
+        let fpcr_tmp: u64;
+        let fpsr_tmp: u64;
+        unsafe {
+            core::arch::asm!(
+                "stp q0, q1, [{q}, #0]",
+                "stp q2, q3, [{q}, #32]",
+                "stp q4, q5, [{q}, #64]",
+                "stp q6, q7, [{q}, #96]",
+                "stp q8, q9, [{q}, #128]",
+                "stp q10, q11, [{q}, #160]",
+                "stp q12, q13, [{q}, #192]",
+                "stp q14, q15, [{q}, #224]",
+                "stp q16, q17, [{q}, #256]",
+                "stp q18, q19, [{q}, #288]",
+                "stp q20, q21, [{q}, #320]",
+                "stp q22, q23, [{q}, #352]",
+                "stp q24, q25, [{q}, #384]",
+                "stp q26, q27, [{q}, #416]",
+                "stp q28, q29, [{q}, #448]",
+                "stp q30, q31, [{q}, #480]",
+                "mrs {fpcr}, FPCR",
+                "mrs {fpsr}, FPSR",
+                q = in(reg) self.q.as_mut_ptr() as u64,
+                fpcr = out(reg) fpcr_tmp,
+                fpsr = out(reg) fpsr_tmp,
+            );
+            self.fpcr = fpcr_tmp as u32;
+            self.fpsr = fpsr_tmp as u32;
+        }
+    }
+
+    /// Restore the FP/SIMD state from `self`.
+    ///
+    /// # Safety
+    /// Must be the last FP-touching operation before returning to EL0.
+    pub unsafe fn restore(&self) {
+        unsafe {
+            core::arch::asm!(
+                "ldp q0, q1, [{q}, #0]",
+                "ldp q2, q3, [{q}, #32]",
+                "ldp q4, q5, [{q}, #64]",
+                "ldp q6, q7, [{q}, #96]",
+                "ldp q8, q9, [{q}, #128]",
+                "ldp q10, q11, [{q}, #160]",
+                "ldp q12, q13, [{q}, #192]",
+                "ldp q14, q15, [{q}, #224]",
+                "ldp q16, q17, [{q}, #256]",
+                "ldp q18, q19, [{q}, #288]",
+                "ldp q20, q21, [{q}, #320]",
+                "ldp q22, q23, [{q}, #352]",
+                "ldp q24, q25, [{q}, #384]",
+                "ldp q26, q27, [{q}, #416]",
+                "ldp q28, q29, [{q}, #448]",
+                "ldp q30, q31, [{q}, #480]",
+                "msr FPCR, {fpcr}",
+                "msr FPSR, {fpsr}",
+                q = in(reg) self.q.as_ptr() as u64,
+                fpcr = in(reg) (self.fpcr as u64),
+                fpsr = in(reg) (self.fpsr as u64),
+            );
+        }
+    }
+}
+
 const _: () = {
     assert!(
         core::mem::size_of::<TrapFrame>() == 272,
@@ -231,6 +319,10 @@ pub struct Task {
     // ── Register context ──
     /// Saved register context
     pub regs: TrapFrame,
+    /// Q3: saved FP/SIMD state — saved when a user task yields its slice,
+    /// restored before eret back to EL0. Kernel NEON between exceptions is
+    /// fine; user FP state is what must survive.
+    pub fp: FpContext,
     /// Kernel stack pointer (top of stack, grows down)
     pub kernel_sp: u64,
     /// Kernel stack base (for deallocation)
@@ -462,6 +554,7 @@ pub fn create_kernel_task(entry: fn() -> !, priority: Priority) -> Option<Pid> {
         time_slice: time_slice_for(priority),
         nice: 0,
         regs,
+        fp: FpContext::zeroed(),
         kernel_sp: kern_sp,
         kernel_stack_base: kern_base,
         user_sp: 0,
@@ -542,6 +635,7 @@ pub fn create_user_process(entry: u64, ttbr0: u64, priority: Priority) -> Option
         time_slice: time_slice_for(priority),
         nice: 0,
         regs,
+        fp: FpContext::zeroed(),
         kernel_sp: kern_sp,
         kernel_stack_base: kern_base,
         user_sp,
@@ -1327,6 +1421,11 @@ pub unsafe extern "C" fn run_and_wait_body(_pid: u64) -> i64 {
             // kernel's page table still active.
             let frame = task.regs;
 
+            // Q3: put the task's FP/SIMD state back in the registers right
+            // before the eret — the kernel's NEON zero-init patterns (struct
+            // clears in memset-like paths) must not leak into user code.
+            task.fp.restore();
+
             // Restore context — this eret's into EL0 and never returns.
             // When the process exits, the exception handler erets to the
             // trampoline's resume label with the exit code in x0.
@@ -1526,6 +1625,9 @@ pub unsafe fn save_slice_frame(pid: Pid, regs: *const u64, elr: u64, spsr: u64) 
     if regs.is_null() {
         return;
     }
+    // Q3: snapshot the user's live FP/SIMD state before the kernel runs any
+    // vector code on the next slice's behalf.
+    t.fp.save();
     let f = &mut t.regs;
     f.x0 = *regs.add(0);
     f.x1 = *regs.add(1);

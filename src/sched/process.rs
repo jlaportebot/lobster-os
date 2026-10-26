@@ -90,6 +90,8 @@ pub fn fork() -> i64 {
         time_slice: parent_task.time_slice,
         nice: parent_task.nice,
         regs: parent_task.regs,
+        // Q3: fork copies the parent's saved FP state too.
+        fp: parent_task.fp,
         kernel_sp: 0, // Will allocate new kernel stack
         kernel_stack_base: 0,
         user_sp: parent_task.user_sp,
