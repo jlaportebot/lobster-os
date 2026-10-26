@@ -283,16 +283,19 @@ fn boot_secondary_core(core_id: u64) {
             "[smp] Core {} skipped (QEMU mode - no secondary core support)",
             core_id
         );
-        return;
     }
 
     // Wait for the core to come online (with timeout)
-    let mut timeout = 1_000_000;
-    while !is_core_online(core_id as usize) && timeout > 0 {
-        cpu::delay_us(10);
-        timeout -= 1;
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    {
+        let mut timeout = 1_000_000;
+        while !is_core_online(core_id as usize) && timeout > 0 {
+            cpu::delay_us(10);
+            timeout -= 1;
+        }
     }
 
+    #[cfg(not(feature = "qemu_raspi5b"))]
     if is_core_online(core_id as usize) {
         println!("[smp] Core {} online", core_id);
     } else {

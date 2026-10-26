@@ -1028,9 +1028,13 @@ pub fn composite() {
     // The boot splash already painted the desktop background.
     #[cfg(feature = "qemu_raspi5b")]
     {
+        // QEMU headless: nothing else to do (see comment above).
         return;
     }
 
+    // Prevents clippy unreachable-code on the qemu build while keeping the
+    // real work compiled for hardware builds.
+    #[allow(unreachable_code)]
     let frame_start = crate::arch::timer::Timer::system_time_us();
     let frame_number = unsafe { FRAME_COUNTER };
     unsafe {

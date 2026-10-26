@@ -307,6 +307,7 @@ pub fn init(width: u32, height: u32, bpp: u32) -> Result<FramebufferInfo, FbErro
             return Err(FbError::BufferAllocationFailed);
         }
 
+        #[cfg_attr(not(feature = "qemu_raspi5b"), allow(unused_mut))]
         let mut info = FramebufferInfo {
             base_addr: fb_addr,
             size: fb_size,

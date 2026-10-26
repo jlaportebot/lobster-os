@@ -13,11 +13,7 @@
 
 use crate::ipc::{pty_ioctl, pty_master_read, pty_master_write};
 use crate::println;
-use crate::terminal::{
-    parser::Parser,
-    screen::{Cell, ScreenBuffer},
-    COLS, ROWS,
-};
+use crate::terminal::{parser::Parser, screen::ScreenBuffer, COLS, ROWS};
 use crate::wm::widget::{WidgetId, WidgetTable};
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
@@ -475,7 +471,7 @@ pub fn create_terminal_window(
                 let chars: Vec<char> = line.chars().collect();
                 for (col, ch) in chars.iter().enumerate() {
                     if col < term.screen.cols {
-                        term.screen.cells[row][col] = Cell {
+                        term.screen.cells[row][col] = crate::terminal::screen::Cell {
                             ch: *ch,
                             fg: 0x00FFFFFF,
                             bg: 0x00000000,

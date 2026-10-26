@@ -1617,7 +1617,9 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
         "curl" => cmd_curl(args, argc),
         "wget" => cmd_wget(args, argc),
         "ip" => cmd_ip(args, argc),
+        #[cfg(feature = "qemu")]
         "ifconfig" => cmd_ifconfig(args, argc),
+        #[cfg(feature = "qemu")]
         "ping" => cmd_ping(args, argc),
         "host" => cmd_host(args, argc),
         "netstat" => cmd_netstat(),
@@ -1631,7 +1633,7 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
         // S3: toggle architectural-timer preemption
         "preempt" => cmd_preempt(args, argc),
         // Text editor
-        "vi" | "edit" | "ed" | "nano" | "code" => cmd_editor(args, argc),
+        "vi" | "ed" | "nano" | "code" => cmd_editor(args, argc),
         // Text processing
         "grep" => cmd_grep(args, argc),
         "sort" => cmd_sort(args, argc),
@@ -4808,13 +4810,11 @@ fn cmd_head(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     match crate::fs::vfs::read_file(&path) {
         Ok(data) => {
             let text = core::str::from_utf8(&data).unwrap_or("");
-            let mut count = 0;
-            for line in text.lines() {
+            for (count, line) in text.lines().enumerate() {
                 if count >= n {
                     break;
                 }
                 crate::println!("{}", line);
-                count += 1;
             }
             0
         }

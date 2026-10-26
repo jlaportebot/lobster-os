@@ -1218,7 +1218,8 @@ static mut KERNEL_SP: u64 = 0;
 /// Saved kernel callee-saved registers (x19-x30) at run_and_wait entry.
 /// eret-into-user clobbers all GPRs; the cooperative exit must restore these
 /// before resuming the caller, or the caller branches through garbage.
-
+/// (Consumed by the run_and_wait trampoline in the function below.)
+///
 /// Run a user process synchronously in cooperative mode.
 ///
 /// This function:
@@ -1240,7 +1241,7 @@ static mut KERNEL_SP: u64 = 0;
 ///
 /// # Safety
 /// Called from kernel context at EL1h only.
-#[cfg(all(target_arch = "aarch64"))]
+#[cfg(target_arch = "aarch64")]
 #[unsafe(naked)]
 pub unsafe extern "C" fn run_and_wait(_pid: u64) -> i64 {
     core::arch::naked_asm!(

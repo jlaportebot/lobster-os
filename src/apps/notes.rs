@@ -7,7 +7,6 @@
 use crate::display::fb::get_info;
 use crate::display::graphics as g;
 use crate::wm::theme;
-use crate::wm::window;
 
 const NOTES_DIR: &str = "/sd/home/user/notes";
 const MAX_NOTES: usize = 16;
@@ -245,13 +244,13 @@ pub fn init() {
 
 #[cfg(feature = "qemu_raspi5b")]
 pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
-    let Some(win_id) = window::find_by_title("Notes") else {
+    let Some(win_id) = crate::wm::window::find_by_title("Notes") else {
         return;
     };
-    let Some((x, y, w, h)) = window::get_info(win_id) else {
+    let Some((x, y, w, h)) = crate::wm::window::get_info(win_id) else {
         return;
     };
-    let focused = window::focused_id() == win_id;
+    let focused = crate::wm::window::focused_id() == win_id;
     let (cx, cy, cw, ch) =
         crate::wm::window_frame::draw_frame(fb, win_id, x, y, w, h, "Notes", focused);
     unsafe {

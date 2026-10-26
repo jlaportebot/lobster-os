@@ -622,17 +622,15 @@ pub fn mkdir(path: &str) -> Result<u64, VfsError> {
 
     // Persist into the ext2 backing store when the parent dir is ext2-backed
     // (so directories survive reboots, matching file write-through).
-    unsafe {
-        if let Some(parent) = get_node(parent_id) {
-            let (p_ino, p_fs) = (parent.backing_ino, parent.backing_fs);
-            if p_ino != 0 && p_fs != 0 {
-                match crate::fs::ext2::create_backing_dir(p_ino, name) {
-                    Ok(new_ino) => {
-                        set_node_backing(node_id, p_fs, new_ino);
-                    }
-                    Err(e) => {
-                        println!("[vfs] ext2 mkdir '{}' failed: {:?}", name, e);
-                    }
+    if let Some(parent) = get_node(parent_id) {
+        let (p_ino, p_fs) = (parent.backing_ino, parent.backing_fs);
+        if p_ino != 0 && p_fs != 0 {
+            match crate::fs::ext2::create_backing_dir(p_ino, name) {
+                Ok(new_ino) => {
+                    set_node_backing(node_id, p_fs, new_ino);
+                }
+                Err(e) => {
+                    println!("[vfs] ext2 mkdir '{}' failed: {:?}", name, e);
                 }
             }
         }
@@ -844,8 +842,6 @@ pub fn seek(fd: usize, offset: i64, whence: u32) -> Result<u64, VfsError> {
         Ok(new_offset)
     }
 }
-
-/// List directory contents
 
 /// If `path` is inside the host shared folder (/share or /share/...),
 /// return the share-relative remainder ("" for the root).
@@ -1208,67 +1204,61 @@ pub fn mount(path: &str, fs_id: u32, root_inode: u64) -> Result<(), VfsError> {
 /// Tag a VFS node with its ext2 backing store (fs id + inode) so reads and
 /// writes route through the ext2 instance instead of the inline buffer.
 pub fn set_node_backing(node_id: u64, fs_id: u32, ext2_ino: u32) {
-    unsafe {
-        if let Some(node) = get_node_mut(node_id) {
-            node.backing_fs = fs_id;
-            node.backing_ino = ext2_ino;
-        }
+    if let Some(node) = get_node_mut(node_id) {
+        node.backing_fs = fs_id;
+        node.backing_ino = ext2_ino;
     }
 }
 
 /// Hydrate a node's inline buffer from its ext2 backing store (once).
 pub fn hydrate_node(node_id: u64) -> Result<(), VfsError> {
-    unsafe {
-        let (fs_id, ino) = {
-            let node = get_node(node_id).ok_or(VfsError::NotFound)?;
-            if node.hydrated || node.backing_fs == 0 || node.backing_ino == 0 {
-                return Ok(());
-            }
-            if node.metadata.file_type != FileType::RegularFile {
-                if let Some(mut_node) = get_node_mut(node_id) {
-                    mut_node.hydrated = true;
-                }
-                return Ok(());
-            }
-            (node.backing_fs, node.backing_ino)
-        };
-        let data = crate::fs::ext2::read_backing_file(ino)?;
-        if let Some(node) = get_node_mut(node_id) {
-            node.set_data(&data)?;
-            node.hydrated = true;
+    let (fs_id, ino) = {
+        let node = get_node(node_id).ok_or(VfsError::NotFound)?;
+        if node.hydrated || node.backing_fs == 0 || node.backing_ino == 0 {
+            return Ok(());
         }
-        let _ = fs_id;
+        if node.metadata.file_type != FileType::RegularFile {
+            if let Some(mut_node) = get_node_mut(node_id) {
+                mut_node.hydrated = true;
+            }
+            return Ok(());
+        }
+        (node.backing_fs, node.backing_ino)
+    };
+    let data = crate::fs::ext2::read_backing_file(ino)?;
+    if let Some(node) = get_node_mut(node_id) {
+        node.set_data(&data)?;
+        node.hydrated = true;
     }
+    let _ = fs_id;
     Ok(())
 }
 
 /// Whether a backing-store directory has been materialized into the VFS.
 pub fn node_dir_expanded(node_id: u64) -> bool {
-    unsafe { get_node(node_id).map(|n| n.hydrated).unwrap_or(false) }
+    get_node(node_id).map(|n| n.hydrated).unwrap_or(false)
 }
 
 /// Lazy directory expansion: called during path resolution when a node is an
 /// unexpanded ext2-backed directory.
 fn maybe_expand_dir(node_id: u64) {
-    unsafe {
-        let (is_dir, backing, ino, expanded, fs_id) = {
-            let node = match get_node(node_id) {
-                Some(n) => n,
-                None => return,
-            };
-            (
-                node.metadata.file_type == FileType::Directory,
-                node.backing_fs != 0 && node.backing_ino != 0,
-                node.backing_ino,
-                node.hydrated,
-                node.backing_fs,
-            )
+    let (is_dir, backing, ino, expanded, fs_id) = {
+        let node = match get_node(node_id) {
+            Some(n) => n,
+            None => return,
         };
-        if is_dir && backing && !expanded {
-            let _ = crate::fs::ext2::expand_dir(ino, node_id, fs_id);
-            if let Some(mut_node) = get_node_mut(node_id) {
-                mut_node.hydrated = true;
-            }
+        (
+            node.metadata.file_type == FileType::Directory,
+            node.backing_fs != 0 && node.backing_ino != 0,
+            node.backing_ino,
+            node.hydrated,
+            node.backing_fs,
+        )
+    };
+    if is_dir && backing && !expanded {
+        let _ = crate::fs::ext2::expand_dir(ino, node_id, fs_id);
+        if let Some(mut_node) = get_node_mut(node_id) {
+            mut_node.hydrated = true;
         }
     }
 }
@@ -1277,45 +1267,43 @@ fn maybe_expand_dir(node_id: u64) {
 /// files created under an ext2-backed directory (no backing inode yet),
 /// create the file in ext2 first and tag the node.
 pub fn writeback_node(node_id: u64) -> Result<(), VfsError> {
-    unsafe {
-        let (ino, data, name, parent_id, file_type) = {
-            let node = get_node(node_id).ok_or(VfsError::NotFound)?;
-            // Persist any regular file with content whose parent dir is
-            // ext2-backed — both hydrated (modified existing) files and new
-            // files created this boot.
-            if node.metadata.file_type != FileType::RegularFile {
-                return Ok(());
-            }
-            let name: alloc::string::String = alloc::string::String::from(node.name_str());
-            (
-                node.backing_ino,
-                node.data().to_vec(),
-                name,
-                node.parent_id,
-                node.metadata.file_type,
-            )
-        };
-        let _ = file_type;
+    let (ino, data, name, parent_id, file_type) = {
+        let node = get_node(node_id).ok_or(VfsError::NotFound)?;
+        // Persist any regular file with content whose parent dir is
+        // ext2-backed — both hydrated (modified existing) files and new
+        // files created this boot.
+        if node.metadata.file_type != FileType::RegularFile {
+            return Ok(());
+        }
+        let name: alloc::string::String = alloc::string::String::from(node.name_str());
+        (
+            node.backing_ino,
+            node.data().to_vec(),
+            name,
+            node.parent_id,
+            node.metadata.file_type,
+        )
+    };
+    let _ = file_type;
 
-        if ino != 0 {
-            crate::fs::ext2::write_backing_file(ino, &data)?;
-        } else if data.is_empty() {
-            return Ok(()); // nothing to persist for zero-length new files
-        } else {
-            // New file under an ext2-backed directory: create + persist it.
-            let (parent_ino, parent_fs) = {
-                let parent = get_node(parent_id).ok_or(VfsError::NotFound)?;
-                (parent.backing_ino, parent.backing_fs)
-            };
-            if parent_ino != 0 && parent_fs != 0 {
-                match crate::fs::ext2::create_backing_file(parent_ino, &name, &data) {
-                    Ok(new_ino) => {
-                        set_node_backing(node_id, parent_fs, new_ino);
-                    }
-                    Err(e) => {
-                        println!("[vfs] ext2 create '{}' failed: {:?}", name, e);
-                        return Err(e);
-                    }
+    if ino != 0 {
+        crate::fs::ext2::write_backing_file(ino, &data)?;
+    } else if data.is_empty() {
+        return Ok(()); // nothing to persist for zero-length new files
+    } else {
+        // New file under an ext2-backed directory: create + persist it.
+        let (parent_ino, parent_fs) = {
+            let parent = get_node(parent_id).ok_or(VfsError::NotFound)?;
+            (parent.backing_ino, parent.backing_fs)
+        };
+        if parent_ino != 0 && parent_fs != 0 {
+            match crate::fs::ext2::create_backing_file(parent_ino, &name, &data) {
+                Ok(new_ino) => {
+                    set_node_backing(node_id, parent_fs, new_ino);
+                }
+                Err(e) => {
+                    println!("[vfs] ext2 create '{}' failed: {:?}", name, e);
+                    return Err(e);
                 }
             }
         }

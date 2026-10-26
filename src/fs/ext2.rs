@@ -420,14 +420,17 @@ pub fn remove_backing_file(parent_ino: u32, name: &str) -> Result<(), VfsError> 
             let mut pos = 0usize;
             let mut changed = false;
             while pos + 12 <= bs {
-                let rec_len =
-                    u16::from_le(unsafe { *(block_buf.as_ptr().add(pos + 4) as *const u16) })
-                        as usize;
+                let rec_len = u16::from_le_bytes([block_buf[pos + 4], block_buf[pos + 5]]) as usize;
                 if rec_len < 12 {
                     break;
                 }
                 let name_len = block_buf[pos + 6] as usize;
-                let ino_le = u32::from_le(unsafe { *(block_buf.as_ptr().add(pos) as *const u32) });
+                let ino_le = u32::from_le_bytes([
+                    block_buf[pos],
+                    block_buf[pos + 1],
+                    block_buf[pos + 2],
+                    block_buf[pos + 3],
+                ]);
                 if ino_le == target_ino
                     && name_len > 0
                     && name_len <= 255

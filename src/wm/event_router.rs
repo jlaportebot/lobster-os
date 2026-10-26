@@ -171,7 +171,7 @@ pub fn route_move(x: u32, y: u32, dx: i16, dy: i16) {
     // is held (drag/resize/press-capture in progress) or a modal is up.
     if config::focus_follows_z() {
         let (l, r, m) = input::mouse_buttons();
-        if !(l || r || m) && !context_menu::is_visible() {
+        if !(context_menu::is_visible() || l || r || m) {
             if let Some(id) = window::chrome_window_at(x, y) {
                 if id != window::focused_id() {
                     window::focus(id);

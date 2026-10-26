@@ -23,9 +23,7 @@ pub fn handle_key(scancode: u8) -> bool {
         return false;
     }
 
-    let fm = match crate::apps::file_manager::get_file_manager() {
-        fm => fm,
-    };
+    let fm = crate::apps::file_manager::get_file_manager();
 
     match scancode {
         0x52 => {

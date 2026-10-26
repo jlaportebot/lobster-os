@@ -152,8 +152,7 @@ impl Browser {
                     self.lines[self.line_count] = line;
                     self.line_count += 1;
                 }
-                line = [0u8; LINE_LEN];
-                line_idx = 0;
+                // Loop ends here; the reset assignments were dead (last use).
             };
         }
 

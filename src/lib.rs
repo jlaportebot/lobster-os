@@ -1039,7 +1039,10 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::display::splash::update_progress(10, "Boot complete");
 
     let mut watchdog_counter: u64 = 0;
+    #[cfg(feature = "qemu_raspi5b")]
     let mut last_timer_tick: u64 = crate::arch::timer::Timer::system_time_us();
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    let _unused_tick_guard: () = ();
     loop {
         // Drive window manager (runs every iteration on QEMU)
         crate::wm::tick();

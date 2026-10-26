@@ -490,7 +490,7 @@ pub fn hit_test(sx: u32, sy: u32) -> Option<(u64, u32, u32, bool)> {
             order[n] = (i, crate::wm::compositor::layer_z_order(wm_id));
             n += 1;
         }
-        order[..n].sort_by(|a, b| b.1.cmp(&a.1));
+        order[..n].sort_by_key(|&(_, z)| core::cmp::Reverse(z));
         for &(i, _) in &order[..n] {
             let slot = &WINDOWS[i];
             if !slot.active {

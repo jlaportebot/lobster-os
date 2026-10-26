@@ -44,14 +44,14 @@ impl Ipv4Header {
         let mut buf = [0u8; 40];
 
         // Copy header bytes, zeroing checksum field
-        let mut pos = 0;
-        for i in 0..header_len {
+        for (pos, byte) in buf.iter_mut().enumerate().take(header_len) {
+            let i = pos;
             if i == 10 || i == 11 {
                 // Zero the checksum field (one byte per iteration — the old
                 // branch advanced pos twice and misaligned every following byte)
-                buf[pos] = 0;
+                *byte = 0;
             } else {
-                buf[pos] = match i {
+                *byte = match i {
                     0 => (self.version << 4) | self.ihl,
                     1 => self.dscp << 2,
                     2 => (self.total_len >> 8) as u8,
@@ -67,7 +67,6 @@ impl Ipv4Header {
                     _ => 0,
                 };
             }
-            pos += 1;
         }
 
         // Sum 16-bit words

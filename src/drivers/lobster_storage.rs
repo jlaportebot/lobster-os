@@ -109,6 +109,7 @@ unsafe fn do_cmd(cmd: u32, block: u64) -> Result<(), BlockError> {
 /// The block count lives in a static (patched once at boot from the device
 /// probe) so the device object itself is a const-constructible unit and can
 /// live in a `static`, satisfying the `&'static dyn BlockDevice` registry.
+#[derive(Default)]
 pub struct LobsterDisk;
 
 /// Block count published by `detect()` (0 = no media).

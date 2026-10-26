@@ -773,7 +773,6 @@ mod linux_compat {
     const LINUX_KILL: u64 = 129;
     const LINUX_TGKILL: u64 = 131;
     const LINUX_TKILL: u64 = 130;
-    const LINUX_IOCTL_: u64 = 29;
     const LINUX_WRITEV_: u64 = 66;
     const LINUX_PREAD64: u64 = 67;
     const LINUX_PWRITE64: u64 = 68;
@@ -786,7 +785,6 @@ mod linux_compat {
     const LINUX_MUNLOCK: u64 = 228;
     const LINUX_GETTIMEOFDAY: u64 = 169;
     const LINUX_SETTIMEOFDAY: u64 = 170;
-    const LINUX_TIME: u64 = 169;
     const LINUX_CLOCK_GETTIME: u64 = 113;
     const LINUX_CLOCK_SETTIME: u64 = 112;
     const LINUX_UNAME: u64 = 160;
@@ -836,7 +834,7 @@ mod linux_compat {
             LINUX_SYSINFO => 0,
             LINUX_MLOCK | LINUX_MUNLOCK => 0,
             LINUX_MINCORE => 0,
-            LINUX_IOCTL | LINUX_IOCTL_ => 0,
+            LINUX_IOCTL => 0,
             LINUX_FSYNC | LINUX_FDATASYNC => 0,
             LINUX_FACCESSAT => 0,
             LINUX_STATFS | LINUX_FSTATFS => 0,
@@ -879,7 +877,7 @@ mod linux_compat {
                 0
             }
 
-            LINUX_CLOCK_GETTIME | LINUX_GETTIMEOFDAY | LINUX_TIME => {
+            LINUX_CLOCK_GETTIME | LINUX_GETTIMEOFDAY => {
                 // Return system uptime in appropriate format
                 let now_us = crate::arch::timer::Timer::system_time_us();
                 if syscall_num == LINUX_CLOCK_GETTIME {
@@ -1050,13 +1048,8 @@ mod linux_compat {
             LINUX_SHUTDOWN => 0,
 
             _ => {
-                // Unknown — log and return -1
-                #[cfg(feature = "debug_syscalls")]
-                println!(
-                    "[syscall] Unhandled Linux syscall #{} from PID {}",
-                    syscall_num,
-                    sched::current_pid()
-                );
+                // Unknown Linux syscall — silent in release (the old
+                // debug_syscalls feature-gated log is gone with the feature).
                 let _ = syscall_num;
                 u64::MAX
             }
@@ -1069,8 +1062,8 @@ fn sys_open_vfs(path: &str, flags: u32) -> u64 {
     match crate::fs::vfs::open(path, flags) {
         Ok(fd) => fd as u64,
         Err(_e) => {
-            #[cfg(feature = "debug_syscalls")]
-            println!("[syscall] open({}) failed: {:?}", path, e);
+            // Open failure is signalled by the return value (the old
+            // debug_syscalls-gated print is gone with the feature).
             u64::MAX
         }
     }
