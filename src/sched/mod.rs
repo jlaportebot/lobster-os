@@ -101,12 +101,21 @@ pub struct TrapFrame {
     pub x28: u64,
     pub x29: u64,
     pub x30: u64, // x30 = LR
-    // Special registers
+    // Special registers — exactly matching the 272-byte boot.S frame:
+    // x0..x30 (31 regs) + sp + elr + spsr = 34 * 8 = 272 bytes.
+    // ESR is deliberately NOT here: including it grew the struct to 280 bytes and
+    // sigreturn/restore wrote 8 bytes past the asm frame (audit Q1c).
     pub sp: u64,
     pub elr: u64,  // Exception Link Register (return address)
     pub spsr: u64, // Saved Program Status Register
-    pub esr: u64,  // Exception Syndrome Register (for fault info)
 }
+
+const _: () = {
+    assert!(core::mem::size_of::<TrapFrame>() == 272, "TrapFrame must match the 272-byte asm exception frame");
+    assert!(core::mem::offset_of!(TrapFrame, elr) == 256, "ELR must live at frame offset 256 (boot.S SAVE/RESTORE)");
+    assert!(core::mem::offset_of!(TrapFrame, spsr) == 264, "SPSR must live at frame offset 264 (boot.S SAVE/RESTORE)");
+    assert!(core::mem::offset_of!(TrapFrame, sp) == 248, "SP must live at frame offset 248");
+};
 
 impl TrapFrame {
     pub const fn new() -> Self {
@@ -145,7 +154,6 @@ impl TrapFrame {
             sp: 0,
             elr: 0,
             spsr: 0,
-            esr: 0,
         }
     }
 }
