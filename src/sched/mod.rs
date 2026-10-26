@@ -1729,6 +1729,29 @@ pub fn reap_zombies() -> usize {
                     // S6: tear down any user windows the app left open
                     // (frames + WM chrome) before freeing the task.
                     crate::wm::user_windows::close_all_for_pid(task.pid);
+                    // Q4: destroy the process's own page-table tree — frees
+                    // the L1/L2/L3 tables and stops the dual-mapped kernel
+                    // entries from leaking user frames past task death.
+                    // (close_all_for_pid already frees window frames and
+                    // unmaps the window mirror; this reclaims the tree.)
+                    if task.ttbr0_phys != 0 && task.is_user {
+                        crate::memory::process_vmem::destroy_address_space(
+                            &crate::memory::process_vmem::AddressSpace {
+                                ttbr0_phys: task.ttbr0_phys,
+                                vmas: [crate::memory::process_vmem::Vma {
+                                    start: 0,
+                                    size: 0,
+                                    prot: 0,
+                                    file_offset: 0,
+                                    shared: false,
+                                    in_use: false,
+                                };
+                                    crate::memory::process_vmem::MAX_VMAS],
+                                vma_count: 0,
+                                brk: 0,
+                            },
+                        );
+                    }
                     // Free kernel stack
                     for page in 0..KERN_STACK_PAGES {
                         let offset = (page as u64) * PAGE_SIZE;
