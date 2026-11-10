@@ -1,3 +1,5 @@
+<!-- SUPERSEDED 2026-11-09: docs/ROADMAP.md is the single source of truth. Kept for history. -->
+
 # LobsterOS Desktop — Master Plan v2 (everyday-driver OS)
 **North star:** a Rust, Pi 5-native desktop OS you can *daily drive*: boot to desktop,
 browse, download/install apps (incl. interpreters like Python), write and run code,
