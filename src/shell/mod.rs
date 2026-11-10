@@ -546,17 +546,20 @@ pub fn poll() -> bool {
     }
 
     let mut line_buf = [0u8; MAX_CMD_LEN];
+    // has_line() distinguishes "no complete line yet" from "an empty line
+    // was submitted" — the latter must still reprint the prompt.
+    if !serial_input::has_line() {
+        return false;
+    }
     let len = serial_input::read_line(&mut line_buf);
-    if len > 0 {
+    {
         let cmd_str = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
         let _result = execute_command(cmd_str.trim());
         // Re-print prompt after command (with CWD)
         let prompt = build_prompt();
         Uart10::puts(&prompt);
-        true
-    } else {
-        false
     }
+    true
 }
 
 /// Build a dynamic prompt that shows CWD (like a real shell)

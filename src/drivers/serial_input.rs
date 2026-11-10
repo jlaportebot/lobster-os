@@ -167,7 +167,10 @@ unsafe fn process_byte(byte: u8) {
             if ECHO_ENABLED {
                 Uart10::puts("\r\n");
             }
-            if INPUT_LEN > 0 && LINE_COUNT == 0 {
+            // An empty line is still a line: the shell must reprint its
+            // prompt so the user (and the test harness) sees that the
+            // command finished.
+            if LINE_COUNT == 0 {
                 let copy_len = INPUT_LEN.min(LINE_BUF_SIZE - LINE_LEN);
                 LINE_BUF[LINE_LEN..LINE_LEN + copy_len].copy_from_slice(&INPUT_BUF[..copy_len]);
                 LINE_LEN += copy_len;
