@@ -10,9 +10,8 @@ use crate::display::graphics;
 use crate::wm::theme;
 use crate::wm::window;
 
-/// Rendered page: lines of text after HTML stripping
-const MAX_LINES: usize = 400;
-const LINE_LEN: usize = 110;
+use super::browser_text::{validate_url, History, Page, MAX_LINES};
+
 /// Visible rows in the page area
 const VISIBLE_ROWS: usize = 28;
 
@@ -20,11 +19,9 @@ pub struct Browser {
     pub url: alloc::string::String,
     pub loaded: bool,
     pub loading: bool,
-    lines: [[u8; LINE_LEN]; MAX_LINES],
-    line_count: usize,
+    page: Page,
     scroll: usize,
-    history: alloc::vec::Vec<alloc::string::String>,
-    history_idx: usize,
+    history: History,
     status: alloc::string::String,
     /// Persisted bookmark list (one URL per line, /sd/etc/browser/bookmarks)
     bookmarks: alloc::vec::Vec<alloc::string::String>,
@@ -42,11 +39,9 @@ impl Browser {
             url: alloc::string::String::from("http://example.com"),
             loaded: false,
             loading: false,
-            lines: [[0; LINE_LEN]; MAX_LINES],
-            line_count: 0,
+            page: Page::new(),
             scroll: 0,
-            history: alloc::vec::Vec::new(),
-            history_idx: 0,
+            history: History::new(),
             status: alloc::string::String::new(),
             bookmarks: alloc::vec::Vec::new(),
         }
@@ -102,191 +97,87 @@ impl Browser {
     /// Persist the browsing history to /sd/etc/browser/history (last 20).
     fn persist_history(&self) {
         let mut body = alloc::string::String::new();
-        let start = self.history.len().saturating_sub(20);
-        for h in &self.history[start..] {
+        let entries = self.history.entries();
+        let start = entries.len().saturating_sub(20);
+        for h in &entries[start..] {
             body.push_str(h);
             body.push('\n');
         }
         let _ = crate::fs::vfs::write_file("/sd/etc/browser/history", body.as_bytes());
     }
 
-    /// Fetch and render the current URL.
+    /// Fetch `url`, render it, and record it in the history.
     pub fn navigate(&mut self, url: &str) {
+        if self.load(url) {
+            self.history.visit(url);
+            self.persist_history();
+        }
+    }
+
+    /// Fetch and render `url` without touching the history.
+    /// Returns true if the page was loaded. Never panics: every failure is
+    /// reported to the user through the status line.
+    fn load(&mut self, url: &str) -> bool {
         self.url = alloc::string::String::from(url);
+        if let Err(e) = validate_url(url) {
+            self.loading = false;
+            self.status = alloc::format!("Cannot load: {}", e.message());
+            return false;
+        }
         self.loading = true;
         self.status = alloc::format!("Loading {}...", url);
 
         match crate::drivers::lobster_net::http_fetch(url) {
             Some(body) => {
-                self.render_html(&body);
+                self.page.render_html(&body);
                 self.loaded = true;
                 self.loading = false;
                 self.scroll = 0;
-                self.status = alloc::format!("Done ({} bytes)", body.len());
-                // Push history
-                self.history.truncate(self.history_idx);
-                self.history.push(alloc::string::String::from(url));
-                self.history_idx = self.history.len();
-                self.persist_history();
+                self.status = if self.page.truncated {
+                    alloc::format!(
+                        "Done ({} bytes) - page truncated at {} lines",
+                        body.len(),
+                        MAX_LINES
+                    )
+                } else {
+                    alloc::format!("Done ({} bytes)", body.len())
+                };
+                true
             }
             None => {
                 self.loading = false;
                 self.status = alloc::format!("Failed to load {}", url);
+                false
             }
         }
-    }
-
-    /// Strip HTML tags into plain text lines. Block tags break lines;
-    /// entity-decodes the common four.
-    fn render_html(&mut self, html: &[u8]) {
-        self.line_count = 0;
-        let mut col = 0usize;
-        let mut i = 0usize;
-        let n = html.len();
-        let mut line_idx = 0usize;
-        let mut line = [0u8; LINE_LEN];
-
-        macro_rules! push_line {
-            () => {
-                if line_idx > 0 && self.line_count < MAX_LINES {
-                    self.lines[self.line_count] = line;
-                    self.line_count += 1;
-                }
-                // Loop ends here; the reset assignments were dead (last use).
-            };
-        }
-
-        while i < n && self.line_count < MAX_LINES {
-            let c = html[i];
-            if c == b'<' {
-                // Find tag end
-                let mut j = i + 1;
-                while j < n && html[j] != b'>' {
-                    j += 1;
-                }
-                let tag: &[u8] = &html[(i + 1)..j.min(n)];
-                let tag_name_vec: alloc::vec::Vec<u8> = tag
-                    .iter()
-                    .take_while(|&&b| b.is_ascii_alphabetic())
-                    .cloned()
-                    .collect();
-                let tag_name: &[u8] = &tag_name_vec;
-                // Block-level tags break the current line
-                let is_block = matches!(
-                    tag_name.to_ascii_lowercase().as_slice(),
-                    b"p" | b"br"
-                        | b"div"
-                        | b"h1"
-                        | b"h2"
-                        | b"h3"
-                        | b"h4"
-                        | b"h5"
-                        | b"h6"
-                        | b"li"
-                        | b"tr"
-                        | b"table"
-                        | b"hr"
-                        | b"title"
-                        | b"body"
-                        | b"html"
-                        | b"head"
-                        | b"ul"
-                        | b"ol"
-                );
-                if is_block {
-                    push_line!();
-                }
-                i = j + 1;
-                continue;
-            }
-            // Entities (common HTML)
-            if c == b'&' && i + 5 < n {
-                let e = &html[i..(i + 6).min(n)];
-                if e.starts_with(b"&") {
-                    line[line_idx] = b'&';
-                    line_idx += 1;
-                    i += 5;
-                    continue;
-                }
-                if e.starts_with(b"<") {
-                    line[line_idx] = b'<';
-                    line_idx += 1;
-                    i += 4;
-                    continue;
-                }
-                if e.starts_with(b">") {
-                    line[line_idx] = b'>';
-                    line_idx += 1;
-                    i += 4;
-                    continue;
-                }
-                if e.starts_with(b"&#34;") {
-                    line[line_idx] = b'"';
-                    line_idx += 1;
-                    i += 5;
-                    continue;
-                }
-                if e.starts_with(b"&#39;") {
-                    line[line_idx] = b'\'';
-                    line_idx += 1;
-                    i += 5;
-                    continue;
-                }
-                if e.starts_with(b"&nbsp;") {
-                    line[line_idx] = b' ';
-                    line_idx += 1;
-                    i += 6;
-                    continue;
-                }
-            }
-            // Text byte (skip control chars except newline/space)
-            if c == b'\n' {
-                push_line!();
-            } else if (c >= 0x20 && c < 0x7F) || c == 0x09 {
-                if line_idx >= LINE_LEN {
-                    push_line!();
-                }
-                line[line_idx] = if c == 0x09 { b' ' } else { c };
-                line_idx += 1;
-                col += 1;
-                // Collapse long whitespace runs
-                if c == b' ' && col > 1 && line_idx >= 2 && line[line_idx - 2] == b' ' {
-                    line_idx -= 1;
-                }
-            }
-            i += 1;
-        }
-        push_line!();
     }
 
     pub fn scroll_up(&mut self) {
         self.scroll = self.scroll.saturating_sub(3);
     }
     pub fn scroll_down(&mut self) {
-        if self.scroll + VISIBLE_ROWS < self.line_count {
+        if self.scroll + VISIBLE_ROWS < self.page.line_count {
             self.scroll += 3;
         }
     }
 
     pub fn back(&mut self) -> bool {
-        if self.history_idx > 1 {
-            self.history_idx -= 1;
-            let url = self.history[self.history_idx - 1].clone();
-            self.navigate(&url);
-            true
-        } else {
-            false
+        match self.history.back() {
+            Some(url) => {
+                self.load(&url);
+                true
+            }
+            None => false,
         }
     }
 
     pub fn forward(&mut self) -> bool {
-        if self.history_idx < self.history.len() {
-            let url = self.history[self.history_idx].clone();
-            self.history_idx += 1;
-            self.navigate(&url);
-            true
-        } else {
-            false
+        match self.history.forward() {
+            Some(url) => {
+                self.load(&url);
+                true
+            }
+            None => false,
         }
     }
 
@@ -369,11 +260,10 @@ impl Browser {
         let rows = ((page_h / char_h) as usize).min(VISIBLE_ROWS);
         for r in 0..rows {
             let idx = self.scroll + r;
-            if idx >= self.line_count {
+            if idx >= self.page.line_count {
                 break;
             }
-            let text = core::str::from_utf8(&self.lines[idx]).unwrap_or("");
-            let text = text.trim_end_matches('\0');
+            let text = self.page.line_str(idx);
             if !text.is_empty() {
                 graphics::draw_text(
                     &fb,
@@ -386,14 +276,19 @@ impl Browser {
             }
         }
 
-        // Scroll indicator
-        if self.line_count > rows {
+        // Scroll indicator (all arithmetic saturating: tiny windows must not wrap)
+        let line_count = self.page.line_count;
+        if line_count > rows && cw > 6 {
             let bar_x = cx + cw - 6;
-            let track_h = page_h - 4;
-            let thumb_h = (track_h * rows as u32 / self.line_count as u32).max(12);
-            let max_scroll = self.line_count - rows;
-            let thumb_y =
-                page_y + 2 + (track_h - thumb_h) * self.scroll as u32 / max_scroll.max(1) as u32;
+            let track_h = page_h.saturating_sub(4);
+            let thumb_h = (track_h.saturating_mul(rows as u32) / line_count as u32)
+                .max(12)
+                .min(track_h);
+            let max_scroll = line_count - rows;
+            let thumb_y = page_y
+                + 2
+                + (track_h - thumb_h).saturating_mul(self.scroll.min(max_scroll) as u32)
+                    / max_scroll.max(1) as u32;
             graphics::draw_rect(&fb, bar_x, page_y + 2, 4, track_h, theme.menu_border);
             graphics::draw_rect(&fb, bar_x, thumb_y, 4, thumb_h, theme.label_text_dim);
         }
