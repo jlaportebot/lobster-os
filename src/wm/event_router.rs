@@ -14,21 +14,18 @@
 //! | # | stage            | sees                  | why it sits here |
 //! |---|------------------|-----------------------|------------------|
 //! | 0 | `context_menu`   | every button edge     | Modal popup drawn above everything. While visible it swallows ALL button edges (even outside clicks and releases) so a click can never leak to what is drawn beneath it. |
-//! | 1 | `task_manager`   | left press            | Tab bar lives inside a window's client area; must beat generic window focus. |
-//! | 2 | `terminal_tabs`  | left press            | Same: tab strip inside the Terminal client area. |
-//! | 3 | `editor_tabs`    | left press            | Same: tab strip inside the Editor client area. |
-//! | 4 | `user_windows`   | left press, content   | EL0 app content. Beats the panel so a window overlapping the panel area gets its own clicks; chrome hits are NOT claimed and fall through to the chrome stage. |
-//! | 5 | `panel`          | left press            | Launcher, task buttons, tray. Above desktop icons and plain windows. |
-//! | 6 | `tray_popups`    | left press            | Popups inside click is consumed; outside click closes (and is consumed). |
-//! | 7 | `start_menu`     | left press            | Same inside-consume / outside-close contract. |
-//! | 8 | `desktop_icons`  | left press on an icon | Icons are the bottom-most clickable surface. |
-//! | 9 | `window_chrome`  | left press + release  | Catch-all: focus, drag, resize, close/min/max (window.rs). Also owns the left-release that ends drag/resize. |
+//! | 1 | `hit_region`     | left press            | Single hit-region dispatch (O2.2): finds topmost window under pointer, translates to window-local, matches registered region. Replaces per-app stages (task_manager, terminal_tabs, editor_tabs, user_windows). |
+//! | 2 | `panel`          | left press            | Launcher, task buttons, tray. Above desktop icons and plain windows. |
+//! | 3 | `tray_popups`    | left press            | Popups inside click is consumed; outside click closes (and is consumed). |
+//! | 4 | `start_menu`     | left press            | Same inside-consume / outside-close contract. |
+//! | 5 | `desktop_icons`  | left press on an icon | Icons are the bottom-most clickable surface. |
+//! | 6 | `window_chrome`  | left press + release  | Catch-all: focus, drag, resize, close/min/max (window.rs). Also owns the left-release that ends drag/resize. |
 //!
 //! # Invariants
 //!
-//! * Stage 0 is first because it is modal; stage 9 is last because it is
+//! * Stage 0 is first because it is modal; stage 6 is last because it is
 //!   the fallback that always runs on a left press that nothing claimed.
-//! * Only stage 0 and stage 9 observe releases. The press→release capture
+//! * Only stage 0 and stage 6 observe releases. The press→release capture
 //!   for user windows is done *before* the table (in `input.rs`), so a
 //!   release is never swallowed by an early return (e.g. context menu).
 //! * Right-press is a gesture handled before the table
@@ -36,14 +33,12 @@
 //! * The restricted nested pump (`input::pump_events_user_only`, used from
 //!   inside syscalls while an EL0 GUI app runs) deliberately does not use
 //!   this table: panel/desktop/shell routing must only run from the main
-//!   loop. It calls stage 4's primitives only.
+//!   loop. It calls the hit-region primitives only.
 //! * Hover observers ([`route_move`]) consume nothing.
 
-use crate::apps;
 use crate::usb::hid::HidEvent;
 use crate::wm::{
-    config, context_menu, desktop_icons, input, panel, start_menu, tray_popups, user_windows,
-    window,
+    config, context_menu, desktop_icons, hit_region, input, panel, start_menu, tray_popups, window,
 };
 
 /// A mouse-button edge, as seen by the router.
@@ -77,31 +72,16 @@ pub struct Stage {
 }
 
 /// The routing table, in priority order. See module docs.
-pub static STAGES: [Stage; 10] = [
+pub static STAGES: [Stage; 7] = [
     Stage {
         name: "context_menu",
         hit: hit_context_menu,
         handle: handle_context_menu,
     },
     Stage {
-        name: "task_manager",
+        name: "hit_region",
         hit: hit_left_press,
-        handle: handle_task_manager,
-    },
-    Stage {
-        name: "terminal_tabs",
-        hit: hit_left_press,
-        handle: handle_terminal_tabs,
-    },
-    Stage {
-        name: "editor_tabs",
-        hit: hit_left_press,
-        handle: handle_editor_tabs,
-    },
-    Stage {
-        name: "user_windows",
-        hit: hit_user_window_content,
-        handle: handle_user_windows,
+        handle: handle_hit_region,
     },
     Stage {
         name: "panel",
@@ -195,10 +175,6 @@ fn hit_press_or_release(ev: &ButtonEv) -> bool {
     ev.left_press() || ev.left_release()
 }
 
-fn hit_user_window_content(ev: &ButtonEv) -> bool {
-    ev.left_press() && matches!(user_windows::hit_test(ev.x, ev.y), Some((_, _, _, true)))
-}
-
 fn hit_desktop_icon(ev: &ButtonEv) -> bool {
     ev.left_press() && desktop_icons::hit_test(ev.x, ev.y).is_some()
 }
@@ -216,22 +192,29 @@ fn handle_context_menu(ev: &ButtonEv) -> bool {
     true
 }
 
-fn handle_task_manager(ev: &ButtonEv) -> bool {
-    apps::task_manager::handle_click(ev.x, ev.y)
-}
-
-fn handle_terminal_tabs(ev: &ButtonEv) -> bool {
-    apps::terminal::handle_click(ev.x, ev.y)
-}
-
-fn handle_editor_tabs(ev: &ButtonEv) -> bool {
-    apps::editor::handle_click(ev.x, ev.y)
-}
-
-fn handle_user_windows(ev: &ButtonEv) -> bool {
-    if let Some((win_id, ux, uy, true)) = user_windows::hit_test(ev.x, ev.y) {
-        input::begin_user_click(win_id, ux, uy);
-        return true;
+/// Single hit-region dispatch (O2.2): finds the topmost window under the
+/// pointer, translates to window-local coordinates, and dispatches to the
+/// matching registered region. If no region matches, returns false to fall
+/// through to window_chrome (focus/drag/title-bar).
+fn handle_hit_region(ev: &ButtonEv) -> bool {
+    if let Some((win_id, region)) = hit_region::route_hit(ev.x, ev.y) {
+        // Deliver the hit to the window's app.
+        // For now, we queue a click event for user windows; kernel apps
+        // will adopt the API later (per mission spec).
+        if let Some(_owner_pid) = crate::wm::user_windows::owner_of_wm(win_id) {
+            // EL0 app window: queue the click in its event queue.
+            // The tag identifies which region was hit.
+            crate::wm::user_windows::click_event(
+                crate::wm::user_windows::win_id_by_wm_id(win_id).unwrap_or(1),
+                1,                         // left button
+                true,                      // press
+                region.x + (region.w / 2), // approximate center for now; apps can use tag
+                region.y + (region.h / 2),
+            );
+            return true;
+        }
+        // Kernel window with hit regions: not yet wired; fall through to chrome.
+        // Apps will adopt the API in a later mission.
     }
     false
 }

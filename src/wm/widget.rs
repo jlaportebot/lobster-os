@@ -797,3 +797,29 @@ fn draw_rect_outline(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color
         }
     }
 }
+
+// ─── Hit-Region Registration (O2.2) ────────────────────────────────────
+
+/// Register a hit region for the currently drawing window.
+/// Call this from an app's render function while drawing its window content.
+/// Coordinates are window-local (client area origin).
+/// `tag` is an app-defined identifier (e.g., widget ID).
+/// `kind` describes the region type for dispatch hints.
+/// Returns false if no window is currently being rendered or registry is full.
+pub fn register_hit_region(
+    win_id: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    tag: u32,
+    kind: crate::wm::hit_region::HitKind,
+) -> bool {
+    crate::wm::hit_region::register(win_id, x, y, w, h, tag, kind)
+}
+
+/// Clear all hit regions for a window.
+/// Call at the start of each frame or when the window is destroyed.
+pub fn clear_hit_regions(win_id: u32) {
+    crate::wm::hit_region::clear(win_id);
+}

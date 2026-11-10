@@ -227,6 +227,8 @@ pub fn damage_window(window_id: u32) {
 /// marked damaged. Falls back to `fallback` when the compositor is off.
 #[must_use]
 pub fn window_target(window_id: u32, fallback: &FramebufferInfo) -> FramebufferInfo {
+    // Clear hit regions at the start of each frame for this window (O2.2)
+    crate::wm::hit_region::clear(window_id);
     let Some((x, y, w, h)) = window::get_info(window_id) else {
         return *fallback;
     };

@@ -265,6 +265,8 @@ pub fn create(x: u32, y: u32, w: u32, h: u32, title: &str) -> Option<u32> {
 pub fn destroy(id: u32) {
     #[cfg(feature = "qemu_raspi5b")]
     crate::wm::scene::release_window(id);
+    // Clear hit regions for this window
+    crate::wm::hit_region::on_window_destroyed(id);
     // Find the window index first
     let win_idx = {
         let windows = WINDOWS.lock();
