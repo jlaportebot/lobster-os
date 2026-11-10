@@ -159,7 +159,7 @@ fn get_system_monitor() -> &'static mut SystemMonitor {
 
 /// Render System Monitor to its window (QEMU direct-to-framebuffer mode)
 #[cfg(feature = "qemu_raspi5b")]
-pub fn render_to_windows(_fb: &crate::display::fb::FramebufferInfo) {
+pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
     // Find the System Monitor window by title
     if let Some(win_id) = crate::wm::window::find_by_title("System Monitor") {
         if let Some(win) = crate::wm::window::get(win_id) {
@@ -170,6 +170,9 @@ pub fn render_to_windows(_fb: &crate::display::fb::FramebufferInfo) {
                 let cy = win.y + 24;
                 let cw = win.w.saturating_sub(4);
                 let ch = win.h.saturating_sub(26);
+                // The monitor draws through fb::get_info(); selecting the window's
+                // surface as the render target routes it there.
+                let _surface = crate::wm::scene::window_target(win_id, fb);
                 monitor.render(cx, cy, cw, ch);
             }
         }

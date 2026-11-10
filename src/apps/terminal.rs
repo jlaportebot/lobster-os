@@ -660,6 +660,7 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
 
         // Uniform themed frame; render the VT into the returned client rect
         let focused = window::focused_id() == id;
+        let fb = &crate::wm::scene::window_target(id, fb);
         let (client_x, client_y, client_w, client_h) =
             crate::wm::window_frame::draw_frame(fb, id, wx, wy, ww, wh, "Terminal", focused);
 

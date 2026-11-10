@@ -8,7 +8,7 @@ use crate::wm::theme;
 use crate::wm::widget::{Button, Label};
 
 // ─── Panel Dimensions ──────────────────────────────────────────────────
-const PANEL_HEIGHT: u32 = 36;
+pub const PANEL_HEIGHT: u32 = 36;
 const LAUNCHER_WIDTH: u32 = 48;
 const CLOCK_WIDTH: u32 = 120;
 const TRAY_ITEM_WIDTH: u32 = 40;

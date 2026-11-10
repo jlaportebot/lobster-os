@@ -140,6 +140,18 @@ pub fn history(i: usize) -> Option<&'static Notification> {
     }
 }
 
+/// True while the toast stack is changing on screen: a toast is sliding in,
+/// or the number of visible toasts differs from the last call.
+pub fn needs_redraw() -> bool {
+    static LAST_VISIBLE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+    // SAFETY: TOASTS is only touched from the single render thread.
+    let toasts = unsafe { &*core::ptr::addr_of!(TOASTS) };
+    let visible = toasts.iter().flatten().count();
+    let is_sliding = toasts.iter().flatten().any(|toast| toast.progress < 100);
+    let previous = LAST_VISIBLE.swap(visible, core::sync::atomic::Ordering::Relaxed);
+    is_sliding || previous != visible
+}
+
 /// Advance toast animations + expire old toasts. Called from wm::tick.
 pub fn tick() {
     let now = now_ms();

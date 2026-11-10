@@ -1,60 +1,121 @@
-//! 2D graphics primitives for the framebuffer
+//! 2D drawing primitives.
+//!
+//! Every primitive takes a render target ([`FramebufferInfo`]) and screen
+//! coordinates. A target may be the device framebuffer, the compositor's
+//! back buffer, or a window surface; it carries an origin and a clip
+//! rectangle, and all writes go through [`span`], which is the only place
+//! that turns coordinates into a pointer. Nothing can write outside the
+//! target's clip.
+//!
+//! Colours are `0xAARRGGBB`. [`fx`] converts to the byte order the
+//! BCM2835-style framebuffer scans out; surfaces store converted pixels so
+//! compositing is a plain copy.
 
 use super::console::FONT;
 use super::console::{CHAR_HEIGHT, CHAR_WIDTH};
 use super::fb::FramebufferInfo;
 
-/// Draw a single pixel
-pub fn draw_pixel(fb: &FramebufferInfo, x: u32, y: u32, color: u32) {
-    if x >= fb.width || y >= fb.height {
-        return;
-    }
-    let offset = (y * (fb.pitch / 4) + x) as usize;
-    unsafe {
-        let ptr = (fb.virt_addr as *mut u32).add(offset);
-        core::ptr::write_volatile(ptr, fx(color));
+const FULL_ALPHA: u32 = 255;
+const OPAQUE: u32 = 0xFF00_0000;
+
+/// A clipped horizontal run of pixels inside a render target.
+struct Span {
+    ptr: *mut u32,
+    len: usize,
+    /// Pixels cut off on the left by clipping.
+    skipped: usize,
+}
+
+impl Span {
+    fn pixels(&mut self) -> &mut [u32] {
+        // SAFETY: `span` only builds a Span whose `ptr..ptr+len` lies inside
+        // the target buffer (the clip rectangle is contained in the buffer
+        // by `FramebufferInfo`'s constructors), and the kernel renders from
+        // a single thread, so no other reference to these pixels is live.
+        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 }
 
-/// Draw a filled rectangle
-/// Swizzle a human-authored ARGB color (0xAARRGGBB) into the framebuffer's
-/// native 32-bit layout. The emulated display reads byte0 as RED, so the
-/// value stored in memory must be 0xAABBGGRR.
+/// Clip the run `[x, x + w)` on row `y` to the target.
+fn span(fb: &FramebufferInfo, x: u32, y: u32, w: u32) -> Option<Span> {
+    if y < fb.clip_y0 || y >= fb.clip_y1 || fb.virt_addr == 0 {
+        return None;
+    }
+    let x0 = x.max(fb.clip_x0);
+    let x1 = x.saturating_add(w).min(fb.clip_x1);
+    if x0 >= x1 {
+        return None;
+    }
+    let stride = (fb.pitch / 4) as usize;
+    let offset = (y - fb.origin_y) as usize * stride + (x0 - fb.origin_x) as usize;
+    // SAFETY: (x0, y) is inside the clip rectangle, which lies inside the
+    // buffer starting at `virt_addr`, so the offset stays in bounds.
+    let ptr = unsafe { (fb.virt_addr as *mut u32).add(offset) };
+    Some(Span {
+        ptr,
+        len: (x1 - x0) as usize,
+        skipped: (x0 - x) as usize,
+    })
+}
+
+/// Convert `0xAARRGGBB` to the framebuffer's stored pixel format
+/// (`0xAABBGGRR`, alpha forced opaque).
 #[inline]
+#[must_use]
 pub fn fx(argb: u32) -> u32 {
     let r = (argb >> 16) & 0xFF;
     let g = (argb >> 8) & 0xFF;
     let b = argb & 0xFF;
-    0xFF000000 | (b << 16) | (g << 8) | r
+    OPAQUE | (b << 16) | (g << 8) | r
 }
 
-pub fn draw_rect(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
-    // Fast path: clip once, then write raw scanlines with a hoisted swizzle.
-    // Avoids the per-pixel bounds check + fx() of draw_pixel, cutting large
-    // fills (window bodies, terminals, panels) by an order of magnitude.
-    if x >= fb.width || y >= fb.height || w == 0 || h == 0 {
-        return;
+/// Blend stored-format `src` over stored-format `dst` with coverage 0..=255.
+#[inline]
+fn blend(dst: u32, src: u32, alpha: u32) -> u32 {
+    let inverse = FULL_ALPHA - alpha;
+    let mix = |shift: u32| {
+        let s = (src >> shift) & 0xFF;
+        let d = (dst >> shift) & 0xFF;
+        ((s * alpha + d * inverse + 127) / FULL_ALPHA) << shift
+    };
+    OPAQUE | mix(16) | mix(8) | mix(0)
+}
+
+fn fill_span(fb: &FramebufferInfo, x: u32, y: u32, w: u32, pixel: u32) {
+    if let Some(mut run) = span(fb, x, y, w) {
+        run.pixels().fill(pixel);
     }
-    let x_end = (x + w).min(fb.width);
-    let y_end = (y + h).min(fb.height);
-    let stride = fb.pitch / 4;
+}
+
+pub fn draw_pixel(fb: &FramebufferInfo, x: u32, y: u32, color: u32) {
+    fill_span(fb, x, y, 1, fx(color));
+}
+
+/// Fill a solid rectangle.
+pub fn draw_rect(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
     let pixel = fx(color);
-    unsafe {
-        let base = (fb.virt_addr as *mut u32).add((y * stride + x) as usize);
-        let mut row = base;
-        for _py in y..y_end {
-            let mut px = row;
-            for _px in x..x_end {
-                core::ptr::write_volatile(px, pixel);
-                px = px.add(1);
+    let y_start = y.max(fb.clip_y0);
+    let y_end = y.saturating_add(h).min(fb.clip_y1);
+    for row in y_start..y_end {
+        fill_span(fb, x, row, w, pixel);
+    }
+}
+
+/// Fill a rectangle, blending `color` over what is there (alpha 0..=255).
+pub fn blend_rect(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32, alpha: u8) {
+    let pixel = fx(color);
+    let y_start = y.max(fb.clip_y0);
+    let y_end = y.saturating_add(h).min(fb.clip_y1);
+    for row in y_start..y_end {
+        if let Some(mut run) = span(fb, x, row, w) {
+            for dst in run.pixels() {
+                *dst = blend(*dst, pixel, u32::from(alpha));
             }
-            row = row.add(stride as usize);
         }
     }
 }
 
-/// Draw a rectangle outline
-/// Fill a rounded rectangle (corner radius clamped to half of w/h).
+/// Filled rounded rectangle (solid).
 pub fn fill_rounded_rect(
     fb: &FramebufferInfo,
     x: u32,
@@ -64,100 +125,84 @@ pub fn fill_rounded_rect(
     radius: u32,
     color: u32,
 ) {
+    if w == 0 || h == 0 {
+        return;
+    }
     let r = radius.min(w / 2).min(h / 2);
-    // Body: everything between the corner bands
     draw_rect(fb, x, y + r, w, h - 2 * r, color);
-    // Top band: two corner cutouts — draw full rows then carve by drawing
-    // nothing; instead draw the full band and let corners overwrite later.
-    // Simpler correct approach: scanline the rounded region.
     for dy in 0..r {
-        // For each row in the top band, horizontal inset follows the circle
         let inset = corner_inset(r, dy);
         draw_rect(fb, x + inset, y + dy, w - 2 * inset, 1, color);
         draw_rect(fb, x + inset, y + h - 1 - dy, w - 2 * inset, 1, color);
     }
 }
 
-/// Horizontal inset for a rounded-corner scanline: distance from the corner
-/// box edge to the circle at row `dy` (0..r). Uses integer circle math.
+/// Horizontal inset of a rounded corner at `dy` rows from the edge.
 fn corner_inset(r: u32, dy: u32) -> u32 {
-    // (r-dy)^2 + inset^2 = r^2  =>  inset = sqrt(r^2 - (r-dy)^2)
     let a = r - dy;
     let val = (r * r).saturating_sub(a * a);
-    // integer sqrt (r <= 1024 keeps this cheap)
     let mut s = 0u32;
     while s * s < val {
         s += 1;
     }
-    s
+    r.saturating_sub(s)
 }
 
+/// One-pixel rectangle outline.
 pub fn draw_rect_outline(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
-    // Top edge
-    for dx in 0..w {
-        draw_pixel(fb, x + dx, y, color);
+    if w == 0 || h == 0 {
+        return;
     }
-    // Bottom edge
-    for dx in 0..w {
-        draw_pixel(fb, x + dx, y + h - 1, color);
-    }
-    // Left edge
-    for dy in 0..h {
-        draw_pixel(fb, x, y + dy, color);
-    }
-    // Right edge
-    for dy in 0..h {
-        draw_pixel(fb, x + w - 1, y + dy, color);
-    }
+    draw_rect(fb, x, y, w, 1, color);
+    draw_rect(fb, x, y + h - 1, w, 1, color);
+    draw_rect(fb, x, y, 1, h, color);
+    draw_rect(fb, x + w - 1, y, 1, h, color);
 }
 
-/// Draw a line using Bresenham's algorithm
+/// Bresenham line.
 pub fn draw_line(fb: &FramebufferInfo, x0: u32, y0: u32, x1: u32, y1: u32, color: u32) {
-    let mut dx = (x1 as i64 - x0 as i64).abs();
-    let mut dy = (y1 as i64 - y0 as i64).abs();
-    let sx: i64 = if x0 < x1 { 1 } else { -1 };
-    let sy: i64 = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx - dy;
-    let mut cx = x0 as i64;
-    let mut cy = y0 as i64;
-
+    let (x0, y0, x1, y1) = (i64::from(x0), i64::from(y0), i64::from(x1), i64::from(y1));
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let step_x = if x0 < x1 { 1 } else { -1 };
+    let step_y = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    let (mut cx, mut cy) = (x0, y0);
     loop {
-        if cx >= 0 && cy >= 0 {
-            draw_pixel(fb, cx as u32, cy as u32, color);
-        }
-        if cx == x1 as i64 && cy == y1 as i64 {
+        draw_pixel(fb, cx as u32, cy as u32, color);
+        if cx == x1 && cy == y1 {
             break;
         }
-        let e2 = 2 * err;
-        if e2 > -dy {
-            err -= dy;
-            dx -= 1; // consume one step in x
-            cx += sx;
+        let doubled = 2 * err;
+        if doubled >= dy {
+            err += dy;
+            cx += step_x;
         }
-        if e2 < dx {
+        if doubled <= dx {
             err += dx;
-            dy -= 1; // consume one step in y
-            cy += sy;
+            cy += step_y;
         }
     }
 }
 
-/// Draw a circle using midpoint circle algorithm
+/// Circle outline (midpoint algorithm).
 pub fn draw_circle(fb: &FramebufferInfo, cx: u32, cy: u32, r: u32, color: u32) {
-    let mut x = r as i64;
+    let (cx, cy) = (i64::from(cx), i64::from(cy));
+    let mut x = i64::from(r);
     let mut y = 0i64;
-    let mut err = 1i64 - r as i64;
-
+    let mut err = 1 - x;
+    let plot = |px: i64, py: i64| {
+        if px >= 0 && py >= 0 {
+            draw_pixel(fb, px as u32, py as u32, color);
+        }
+    };
     while x >= y {
-        draw_pixel(fb, (cx as i64 + x) as u32, (cy as i64 + y) as u32, color);
-        draw_pixel(fb, (cx as i64 + y) as u32, (cx as i64 + x) as u32, color);
-        draw_pixel(fb, (cx as i64 - x) as u32, (cy as i64 + y) as u32, color);
-        draw_pixel(fb, (cx as i64 - y) as u32, (cy as i64 + x) as u32, color);
-        draw_pixel(fb, (cx as i64 + x) as u32, (cy as i64 - y) as u32, color);
-        draw_pixel(fb, (cx as i64 + y) as u32, (cy as i64 - x) as u32, color);
-        draw_pixel(fb, (cx as i64 - x) as u32, (cy as i64 - y) as u32, color);
-        draw_pixel(fb, (cx as i64 - y) as u32, (cy as i64 - x) as u32, color);
-
+        for (dx, dy) in [(x, y), (y, x)] {
+            plot(cx + dx, cy + dy);
+            plot(cx - dx, cy + dy);
+            plot(cx + dx, cy - dy);
+            plot(cx - dx, cy - dy);
+        }
         y += 1;
         if err < 0 {
             err += 2 * y + 1;
@@ -168,29 +213,36 @@ pub fn draw_circle(fb: &FramebufferInfo, cx: u32, cy: u32, r: u32, color: u32) {
     }
 }
 
-/// Fill a rectangular region (fast memset-like fill)
-pub fn fill_region(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
-    let pitch_words = fb.pitch / 4;
-    unsafe {
-        let base = fb.virt_addr as *mut u32;
-        for dy in 0..h {
-            let py = y + dy;
-            if py >= fb.height {
-                break;
-            }
-            let row_offset = (py * pitch_words) as usize;
-            for dx in 0..w {
-                let px = x + dx;
-                if px >= fb.width {
-                    break;
-                }
-                core::ptr::write_volatile(base.add(row_offset + px as usize), fx(color));
-            }
+/// Filled circle.
+pub fn fill_circle(fb: &FramebufferInfo, cx: u32, cy: u32, r: u32, color: u32) {
+    let r = i64::from(r);
+    for dy in -r..=r {
+        let row = i64::from(cy) + dy;
+        if row < 0 {
+            continue;
         }
+        let mut half = 0i64;
+        while (half + 1) * (half + 1) + dy * dy <= r * r {
+            half += 1;
+        }
+        let left = (i64::from(cx) - half).max(0);
+        let width = i64::from(cx) + half - left + 1;
+        draw_rect(fb, left as u32, row as u32, width as u32, 1, color);
     }
 }
 
-/// Draw a 1-bit bitmap with foreground/background colors
+/// Fill a region with a solid colour (alias of [`draw_rect`]).
+pub fn fill_region(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
+    draw_rect(fb, x, y, w, h, color);
+}
+
+/// Fill a rectangle (alias of [`draw_rect`]).
+pub fn fill_rect(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
+    draw_rect(fb, x, y, w, h, color);
+}
+
+/// Draw a 1-bit-per-pixel bitmap (MSB first) in `fg` on `bg`.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_bitmap(
     fb: &FramebufferInfo,
     x: u32,
@@ -201,85 +253,112 @@ pub fn draw_bitmap(
     fg: u32,
     bg: u32,
 ) {
-    let bytes_per_row = (bmp_w + 7) / 8;
+    let bytes_per_row = bmp_w.div_ceil(8);
     for row in 0..bmp_h {
-        if (y + row) >= fb.height {
-            break;
-        }
         for col in 0..bmp_w {
-            let byte_idx = (row * bytes_per_row + col / 8) as usize;
-            if byte_idx >= bitmap.len() {
-                break;
-            }
-            let bit = (bitmap[byte_idx] >> (7 - (col % 8))) & 1;
-            let color = if bit != 0 { fg } else { bg };
-            draw_pixel(fb, x + col, y + row, color);
+            let Some(byte) = bitmap.get((row * bytes_per_row + col / 8) as usize) else {
+                return;
+            };
+            let is_set = (byte >> (7 - (col % 8))) & 1 != 0;
+            draw_pixel(fb, x + col, y + row, if is_set { fg } else { bg });
         }
     }
 }
 
-/// Blit a pixel buffer to the framebuffer
+/// Copy `0xAARRGGBB` pixels to the target (opaque).
 pub fn blit(fb: &FramebufferInfo, x: u32, y: u32, src: &[u32], src_w: u32, src_h: u32) {
     for row in 0..src_h {
-        let py = y + row;
-        if py >= fb.height {
-            break;
-        }
-        for col in 0..src_w {
-            let px = x + col;
-            if px >= fb.width {
-                break;
-            }
-            let src_idx = (row * src_w + col) as usize;
-            if src_idx >= src.len() {
-                break;
-            }
-            draw_pixel(fb, px, py, src[src_idx]);
+        let Some(mut run) = span(fb, x, y + row, src_w) else {
+            continue;
+        };
+        let start = (row * src_w) as usize + run.skipped;
+        let Some(line) = src.get(start..start + run.len) else {
+            return;
+        };
+        for (dst, &color) in run.pixels().iter_mut().zip(line) {
+            *dst = fx(color);
         }
     }
 }
 
-/// Draw a text string using the baked-in font
+/// Copy stored-format pixels (another surface's rows) to the target.
+pub fn blit_stored(fb: &FramebufferInfo, x: u32, y: u32, src: &[u32], src_w: u32, src_h: u32) {
+    for row in 0..src_h {
+        let Some(mut run) = span(fb, x, y + row, src_w) else {
+            continue;
+        };
+        let start = (row * src_w) as usize + run.skipped;
+        let Some(line) = src.get(start..start + run.len) else {
+            return;
+        };
+        run.pixels().copy_from_slice(line);
+    }
+}
+
+/// Draw an 8-bit coverage mask in `color`, blending over the target.
+/// Used for anti-aliased glyphs and icons.
+pub fn draw_alpha_mask(
+    fb: &FramebufferInfo,
+    x: u32,
+    y: u32,
+    mask: &[u8],
+    mask_w: u32,
+    mask_h: u32,
+    color: u32,
+) {
+    let pixel = fx(color);
+    for row in 0..mask_h {
+        let Some(mut run) = span(fb, x, y + row, mask_w) else {
+            continue;
+        };
+        let start = (row * mask_w) as usize + run.skipped;
+        let Some(line) = mask.get(start..start + run.len) else {
+            return;
+        };
+        for (dst, &coverage) in run.pixels().iter_mut().zip(line) {
+            match coverage {
+                0 => {}
+                255 => *dst = pixel,
+                partial => *dst = blend(*dst, pixel, u32::from(partial)),
+            }
+        }
+    }
+}
+
+/// Draw one 8x16 bitmap-font glyph row-by-row.
+fn draw_glyph(fb: &FramebufferInfo, x: u32, y: u32, glyph: &[u8], fg: u32, bg: Option<u32>) {
+    for row in 0..CHAR_HEIGHT {
+        let Some(mut run) = span(fb, x, y + row, CHAR_WIDTH) else {
+            continue;
+        };
+        let bits = glyph[row as usize];
+        let first_col = run.skipped as u32;
+        for (index, dst) in run.pixels().iter_mut().enumerate() {
+            let col = first_col + index as u32;
+            if (bits >> (7 - col)) & 1 != 0 {
+                *dst = fg;
+            } else if let Some(background) = bg {
+                *dst = background;
+            }
+        }
+    }
+}
+
+/// Draw text with the built-in 8x16 monospace bitmap font.
+/// A `bg` of 0 means transparent background.
 pub fn draw_text(fb: &FramebufferInfo, x: u32, y: u32, text: &str, fg: u32, bg: u32) {
-    // Transparent background: pass bg == 0 to skip background pixels
-    // entirely (caller guarantees the surface is already painted). Hoisted
-    // swizzles + direct row writes keep glyph rendering cheap.
-    let transparent_bg = bg == 0;
     let fg_px = fx(fg);
-    let bg_px = fx(bg);
-    let stride = fb.pitch / 4;
+    let bg_px = (bg != 0).then(|| fx(bg));
     let mut cx = x;
     for c in text.chars() {
-        let code = c as usize;
-        if code < 128 {
-            let glyph = &FONT[code];
-            for row in 0..CHAR_HEIGHT {
-                let py = y + row;
-                if py >= fb.height {
-                    break;
-                }
-                let row_bits = glyph[row as usize];
-                let base = unsafe { (fb.virt_addr as *mut u32).add((py * stride + cx) as usize) };
-                for col in 0..CHAR_WIDTH {
-                    let px = cx + col;
-                    if px >= fb.width {
-                        break;
-                    }
-                    let is_fg = (row_bits >> (7 - col)) & 1 != 0;
-                    let value = if is_fg { fg_px } else { bg_px };
-                    if is_fg || !transparent_bg {
-                        unsafe {
-                            core::ptr::write_volatile(base.add(col as usize), value);
-                        }
-                    }
-                }
-            }
+        if let Some(glyph) = FONT.get(c as usize) {
+            draw_glyph(fb, cx, y, glyph, fg_px, bg_px);
         }
-        cx += CHAR_WIDTH;
+        cx = cx.saturating_add(CHAR_WIDTH);
     }
 }
 
-/// Draw text centered at a given x position
+/// Draw 8x16 text horizontally centred on `center_x`.
 pub fn draw_text_centered(
     fb: &FramebufferInfo,
     center_x: u32,
@@ -288,12 +367,22 @@ pub fn draw_text_centered(
     fg: u32,
     bg: u32,
 ) {
-    let text_width = (text.len() as u32) * CHAR_WIDTH;
+    let text_width = (text.chars().count() as u32) * CHAR_WIDTH;
     let x = center_x.saturating_sub(text_width / 2);
     draw_text(fb, x, y, text, fg, bg);
 }
 
-/// Fill a rectangular region with a solid color
-pub fn fill_rect(fb: &FramebufferInfo, x: u32, y: u32, w: u32, h: u32, color: u32) {
-    fill_region(fb, x, y, w, h, color);
+/// Copy one row of stored-format pixels, treating 0 as "nothing here".
+pub fn blit_stored_keyed(fb: &FramebufferInfo, x: u32, y: u32, src: &[u32]) {
+    let Some(mut run) = span(fb, x, y, src.len() as u32) else {
+        return;
+    };
+    let Some(line) = src.get(run.skipped..run.skipped + run.len) else {
+        return;
+    };
+    for (dst, &pixel) in run.pixels().iter_mut().zip(line) {
+        if pixel != 0 {
+            *dst = pixel;
+        }
+    }
 }

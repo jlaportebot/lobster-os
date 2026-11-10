@@ -1001,6 +1001,7 @@ mod tabs {
         } else {
             APP_NAME
         };
+        let fb = &crate::wm::scene::window_target(win_id, fb);
         let (cx, cy, cw, ch) =
             crate::wm::window_frame::draw_frame(fb, win_id, x, y, w, h, title, focused);
         if cw < GUTTER + 16 || ch < TAB_H + ROW_H + CHAR_H {

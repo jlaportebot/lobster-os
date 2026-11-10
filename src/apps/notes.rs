@@ -251,6 +251,7 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
         return;
     };
     let focused = crate::wm::window::focused_id() == win_id;
+    let fb = &crate::wm::scene::window_target(win_id, fb);
     let (cx, cy, cw, ch) =
         crate::wm::window_frame::draw_frame(fb, win_id, x, y, w, h, "Notes", focused);
     unsafe {

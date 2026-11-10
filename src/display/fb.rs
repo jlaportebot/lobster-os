@@ -64,7 +64,19 @@ pub struct FramebufferInfo {
     pub height: u32,
     pub pitch: u32,
     pub bpp: u32,
+    /// Address of the pixel at (`origin_x`, `origin_y`).
     pub virt_addr: u64,
+    /// Screen coordinates of the buffer's first pixel. Zero for the device
+    /// framebuffer; a window surface's origin is the window's position, so
+    /// code can keep drawing in screen coordinates.
+    pub origin_x: u32,
+    pub origin_y: u32,
+    /// Writable region in screen coordinates (`x0,y0` inclusive, `x1,y1`
+    /// exclusive). Always inside the buffer; drawing outside it is dropped.
+    pub clip_x0: u32,
+    pub clip_y0: u32,
+    pub clip_x1: u32,
+    pub clip_y1: u32,
 }
 
 impl FramebufferInfo {
@@ -77,7 +89,57 @@ impl FramebufferInfo {
             pitch: 0,
             bpp: 0,
             virt_addr: 0,
+            origin_x: 0,
+            origin_y: 0,
+            clip_x0: 0,
+            clip_y0: 0,
+            clip_x1: 0,
+            clip_y1: 0,
         }
+    }
+
+    /// A render target backed by an off-screen pixel buffer of
+    /// `buf_w` x `buf_h` whose first pixel sits at screen position
+    /// (`origin_x`, `origin_y`). `self` supplies the screen dimensions.
+    ///
+    /// # Safety
+    /// `pixels` must point to at least `buf_w * buf_h` writable `u32`s that
+    /// stay valid for as long as the returned target is drawn to.
+    #[must_use]
+    pub unsafe fn surface(
+        &self,
+        pixels: *mut u32,
+        origin_x: u32,
+        origin_y: u32,
+        buf_w: u32,
+        buf_h: u32,
+    ) -> Self {
+        Self {
+            base_addr: 0,
+            size: u64::from(buf_w) * u64::from(buf_h) * 4,
+            width: self.width,
+            height: self.height,
+            pitch: buf_w * 4,
+            bpp: 32,
+            virt_addr: pixels as u64,
+            origin_x,
+            origin_y,
+            clip_x0: origin_x,
+            clip_y0: origin_y,
+            clip_x1: origin_x.saturating_add(buf_w),
+            clip_y1: origin_y.saturating_add(buf_h),
+        }
+    }
+
+    /// The same target with its clip narrowed to the given screen rectangle.
+    #[must_use]
+    pub fn clipped(&self, x0: u32, y0: u32, x1: u32, y1: u32) -> Self {
+        let mut target = *self;
+        target.clip_x0 = self.clip_x0.max(x0);
+        target.clip_y0 = self.clip_y0.max(y0);
+        target.clip_x1 = self.clip_x1.min(x1).max(target.clip_x0);
+        target.clip_y1 = self.clip_y1.min(y1).max(target.clip_y0);
+        target
     }
 
     /// Total pixels
@@ -320,6 +382,12 @@ pub fn init(width: u32, height: u32, bpp: u32) -> Result<FramebufferInfo, FbErro
             },
             bpp: resp_bpp,
             virt_addr: fb_addr + PHYS_MAP_OFFSET,
+            origin_x: 0,
+            origin_y: 0,
+            clip_x0: 0,
+            clip_y0: 0,
+            clip_x1: resp_width,
+            clip_y1: resp_height,
         };
 
         // On QEMU raspi5b, the framebuffer is in VC RAM (physical 0x3C100000)
@@ -377,9 +445,29 @@ pub fn init_default() -> Result<FramebufferInfo, FbError> {
 /// Global framebuffer info
 static mut FB_INFO: FramebufferInfo = FramebufferInfo::empty();
 
-/// Get the global framebuffer info
+/// While the compositor is building a frame, drawing is redirected here.
+static mut RENDER_TARGET: Option<FramebufferInfo> = None;
+
+/// The current render target: the compositor's back buffer while a frame is
+/// being composed, otherwise the device framebuffer.
 pub fn get_info() -> FramebufferInfo {
+    // SAFETY: both statics are only written from the single kernel render
+    // thread (boot, `set_info`, `set_render_target`); this is a plain copy.
+    unsafe { RENDER_TARGET.unwrap_or(FB_INFO) }
+}
+
+/// The device framebuffer, regardless of any redirect.
+pub fn device_info() -> FramebufferInfo {
+    // SAFETY: see `get_info`.
     unsafe { FB_INFO }
+}
+
+/// Redirect (`Some`) or restore (`None`) what [`get_info`] returns.
+pub fn set_render_target(target: Option<FramebufferInfo>) {
+    // SAFETY: see `get_info`.
+    unsafe {
+        RENDER_TARGET = target;
+    }
 }
 
 /// Store framebuffer info globally

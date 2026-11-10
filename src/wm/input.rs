@@ -52,6 +52,22 @@ pub fn poll_count() -> u32 {
 
 static PUMPED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
+/// Key and button events seen by the last pump (pointer motion excluded).
+/// These change app content; motion alone only moves the cursor.
+static ACTIONS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Number of key/button events handled by the last pump.
+pub fn action_count() -> u32 {
+    ACTIONS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+fn count_event(event: &HidEvent) {
+    PUMPED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if !matches!(event, HidEvent::MouseMove { .. }) {
+        ACTIONS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Events the restricted pump could not handle (keys, non-user-window
 /// clicks). Replayed ahead of fresh HID input by the next full pump.
 const DEFER_CAP: usize = 32;
@@ -86,10 +102,11 @@ fn next_deferred() -> Option<HidEvent> {
 pub fn pump_events() {
     // Drain up to 8 events per pump to stay responsive
     PUMPED.store(0, core::sync::atomic::Ordering::Relaxed);
+    ACTIONS.store(0, core::sync::atomic::Ordering::Relaxed);
     for _ in 0..8 {
         let event = next_deferred().or_else(hid::poll);
-        if event.is_some() {
-            PUMPED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if let Some(seen) = event.as_ref() {
+            count_event(seen);
         }
         match event {
             Some(HidEvent::KeyPress { scancode, extended }) => {
@@ -237,7 +254,7 @@ pub fn pump_events_user_only() {
     for _ in 0..8 {
         let event = hid::poll();
         let Some(ev) = event else { break };
-        PUMPED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        count_event(&ev);
         match ev {
             HidEvent::MouseMove { dx, dy } => move_cursor_only(dx, dy),
             HidEvent::MouseButton { left, .. } => {

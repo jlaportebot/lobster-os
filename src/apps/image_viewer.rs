@@ -272,6 +272,7 @@ pub mod bmp_view {
             return;
         };
         let focused = window::focused_id() == win_id;
+        let fb = &crate::wm::scene::window_target(win_id, fb);
         let (cx, cy, cw, ch) =
             crate::wm::window_frame::draw_frame(fb, win_id, x, y, w, h, "Image Viewer", focused);
 

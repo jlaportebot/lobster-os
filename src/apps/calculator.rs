@@ -391,6 +391,7 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
             if win.active {
                 let focused = crate::wm::window::focused_id() == win_id;
                 // Uniform themed frame, then the calculator UI in the client area
+                let fb = &crate::wm::scene::window_target(win_id, fb);
                 let (cx, cy, cw, ch) = crate::wm::window_frame::draw_frame(
                     fb,
                     win_id,
