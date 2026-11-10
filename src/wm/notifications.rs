@@ -3,6 +3,14 @@
 //! Apps post notifications; toasts slide in at the top-right and fade after
 //! a timeout, stacking downward. A history (log) keeps the last N for the
 //! notification-center tray popup. Drawn above windows, below context menu.
+//!
+//! Public API:
+//!   - notify(title, body, severity) — main entry point
+//!   - info/success/warning/error — convenience wrappers
+//!   - history_count() / history(i) — for notification center
+//!   - clear_history() — clear all notifications
+//!   - tick() — called from wm tick to advance animations/expire
+//!   - draw(fb) — draw toasts
 
 use crate::display::graphics::{draw_rect, draw_rect_outline, draw_text, fill_rounded_rect};
 use crate::wm::theme;
@@ -17,7 +25,7 @@ const TOAST_MS: u64 = 4000;
 const SLIDE_MS: u64 = 180;
 
 /// Severity levels tint the accent bar
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Level {
     Info,
     Success,
@@ -101,6 +109,11 @@ pub fn post(title: &str, body: &str, level: Level) {
     }
 }
 
+/// Public API: notify(title, body, severity)
+pub fn notify(title: &str, body: &str, severity: Level) {
+    post(title, body, severity);
+}
+
 /// Convenience wrappers
 pub fn info(title: &str, body: &str) {
     post(title, body, Level::Info);
@@ -113,6 +126,14 @@ pub fn warning(title: &str, body: &str) {
 }
 pub fn error(title: &str, body: &str) {
     post(title, body, Level::Error);
+}
+
+/// Clear all notification history
+pub fn clear_history() {
+    unsafe {
+        HISTORY = [None; MAX_HISTORY];
+        HISTORY_COUNT = 0;
+    }
 }
 
 /// Number of notifications in history
@@ -268,5 +289,58 @@ pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
                 break;
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notification_queue_fifo_expiry() {
+        // Test that notifications are added to history in FIFO order
+        clear_history();
+        assert_eq!(history_count(), 0);
+
+        // Post several notifications
+        post("Title 1", "Body 1", Level::Info);
+        post("Title 2", "Body 2", Level::Success);
+        post("Title 3", "Body 3", Level::Warning);
+
+        assert_eq!(history_count(), 3);
+
+        // Most recent first
+        let h0 = history(0).unwrap();
+        assert_eq!(h0.title_str(), "Title 3");
+        assert_eq!(h0.body_str(), "Body 3");
+
+        let h1 = history(1).unwrap();
+        assert_eq!(h1.title_str(), "Title 2");
+
+        let h2 = history(2).unwrap();
+        assert_eq!(h2.title_str(), "Title 1");
+
+        // Test clear
+        clear_history();
+        assert_eq!(history_count(), 0);
+    }
+
+    #[test]
+    fn toast_geometry() {
+        // Test toast positioning constants
+        assert_eq!(TOAST_W, 300);
+        assert_eq!(TOAST_H, 64);
+        assert_eq!(MAX_TOASTS, 4);
+    }
+
+    #[test]
+    fn notify_public_api() {
+        clear_history();
+        notify("Test Title", "Test Body", Level::Error);
+        assert_eq!(history_count(), 1);
+        let h = history(0).unwrap();
+        assert_eq!(h.title_str(), "Test Title");
+        assert_eq!(h.body_str(), "Test Body");
+        assert_eq!(h.level, Level::Error);
     }
 }

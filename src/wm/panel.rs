@@ -26,6 +26,7 @@ struct PanelState {
     tray_network: TrayItem,
     tray_volume: TrayItem,
     tray_battery: TrayItem,
+    tray_quicksettings: TrayItem,
     workspace_label: Label,
     last_clock_update: u64,
     /// CPU load history for the panel mini-graph (0..=100 each)
@@ -52,6 +53,7 @@ enum TrayKind {
     Network,
     Volume,
     Battery,
+    QuickSettings,
 }
 
 static mut PANEL_STATE: PanelState = PanelState {
@@ -71,6 +73,10 @@ static mut PANEL_STATE: PanelState = PanelState {
     tray_battery: TrayItem {
         widget: Button::ZERO,
         kind: TrayKind::Battery,
+    },
+    tray_quicksettings: TrayItem {
+        widget: Button::ZERO,
+        kind: TrayKind::QuickSettings,
     },
     workspace_label: Label::ZERO,
     last_clock_update: 0,
@@ -112,7 +118,7 @@ pub fn init(fb: &FramebufferInfo) {
         PANEL_STATE.workspace_label = workspace;
 
         // System tray items (right side, left of clock)
-        let tray_x_start = fb.width - CLOCK_WIDTH - 8 - 3 * (TRAY_ITEM_WIDTH + 4);
+        let tray_x_start = fb.width - CLOCK_WIDTH - 8 - 4 * (TRAY_ITEM_WIDTH + 4);
 
         let mut net = TrayItem {
             widget: Button::ZERO,
@@ -147,6 +153,17 @@ pub fn init(fb: &FramebufferInfo) {
         bat.widget.set_text("🔋");
         PANEL_STATE.tray_battery = bat;
 
+        let mut qs = TrayItem {
+            widget: Button::ZERO,
+            kind: TrayKind::QuickSettings,
+        };
+        qs.widget.x = tray_x_start + 3 * (TRAY_ITEM_WIDTH + 4);
+        qs.widget.y = panel_y + 4;
+        qs.widget.w = TRAY_ITEM_WIDTH;
+        qs.widget.h = PANEL_HEIGHT - 8;
+        qs.widget.set_text("⚙");
+        PANEL_STATE.tray_quicksettings = qs;
+
         PANEL_STATE.task_count = 0;
         PANEL_STATE.last_clock_update = 0;
         PANEL_STATE.visible = true;
@@ -171,7 +188,7 @@ pub fn draw(fb: &FramebufferInfo) {
         // 0xFFFF…). Re-anchor them from the live fb each draw.
         let tray_x_start = fb
             .width
-            .saturating_sub(CLOCK_WIDTH + 8 + 3 * (TRAY_ITEM_WIDTH + 4));
+            .saturating_sub(CLOCK_WIDTH + 8 + 4 * (TRAY_ITEM_WIDTH + 4));
         PANEL_STATE.clock_label.x = fb.width.saturating_sub(CLOCK_WIDTH + 8);
         PANEL_STATE.clock_label.y = panel_y + 8;
         PANEL_STATE.tray_network.widget.x = tray_x_start;
@@ -180,6 +197,8 @@ pub fn draw(fb: &FramebufferInfo) {
         PANEL_STATE.tray_volume.widget.y = panel_y + 4;
         PANEL_STATE.tray_battery.widget.x = tray_x_start + 2 * (TRAY_ITEM_WIDTH + 4);
         PANEL_STATE.tray_battery.widget.y = panel_y + 4;
+        PANEL_STATE.tray_quicksettings.widget.x = tray_x_start + 3 * (TRAY_ITEM_WIDTH + 4);
+        PANEL_STATE.tray_quicksettings.widget.y = panel_y + 4;
 
         // Panel background
         draw_rect(fb, 0, panel_y, fb.width, PANEL_HEIGHT, theme.taskbar_bg);
@@ -221,6 +240,7 @@ pub fn draw(fb: &FramebufferInfo) {
         draw_button(fb, &PANEL_STATE.tray_network.widget, 0, panel_y);
         draw_button(fb, &PANEL_STATE.tray_volume.widget, 0, panel_y);
         draw_button(fb, &PANEL_STATE.tray_battery.widget, 0, panel_y);
+        draw_button(fb, &PANEL_STATE.tray_quicksettings.widget, 0, panel_y);
 
         // Draw clock
         update_clock(fb);
@@ -515,6 +535,9 @@ pub fn handle_click(px: u32, py: u32) -> Option<u32> {
         }
         if PANEL_STATE.tray_battery.widget.hit_test(px, py) {
             return Some(0xFFFFFFFC);
+        }
+        if PANEL_STATE.tray_quicksettings.widget.hit_test(px, py) {
+            return Some(0xFFFFFFFA);
         }
 
         None

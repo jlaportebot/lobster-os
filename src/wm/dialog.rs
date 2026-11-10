@@ -559,25 +559,22 @@ fn handle_button_action(dialog: &mut Dialog, btn_idx: usize) {
             let result = if btn_idx == 0 {
                 // OK - get selected file or typed filename
                 if *mode == FilePickerMode::Save {
-                    dialog
-                        .text_input
-                        .as_ref()
-                        .and_then(|i| {
-                            let filename = i.text_str().trim();
-                            if filename.is_empty() {
-                                return None;
-                            }
-                            let path = &dialog.kind;
-                            if let DialogKind::FilePicker { path, .. } = path {
-                                Some(alloc::format!(
-                                    "{}/{}",
-                                    path.trim_end_matches('/'),
-                                    filename
-                                ))
-                            } else {
-                                Some(filename.to_string())
-                            }
-                        })
+                    dialog.text_input.as_ref().and_then(|i| {
+                        let filename = i.text_str().trim();
+                        if filename.is_empty() {
+                            return None;
+                        }
+                        let path = &dialog.kind;
+                        if let DialogKind::FilePicker { path, .. } = path {
+                            Some(alloc::format!(
+                                "{}/{}",
+                                path.trim_end_matches('/'),
+                                filename
+                            ))
+                        } else {
+                            Some(filename.to_string())
+                        }
+                    })
                 } else {
                     // Open mode - get selected entry
                     dialog.file_selected.and_then(|idx| {
