@@ -21,6 +21,7 @@ pub mod event_router;
 pub mod greeter;
 pub mod gui_files;
 pub mod gui_shell;
+pub mod hit_region;
 pub mod input;
 pub mod launcher;
 pub mod notifications;

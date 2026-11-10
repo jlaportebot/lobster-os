@@ -571,6 +571,19 @@ pub fn owner_of_wm(wm_id: u32) -> Option<u64> {
     None
 }
 
+/// Find the user window ID (1-based) for a given WM window ID.
+/// Returns None if no user window is associated with that WM window.
+pub fn win_id_by_wm_id(wm_id: u32) -> Option<u64> {
+    unsafe {
+        for (i, slot) in WINDOWS.iter().enumerate() {
+            if slot.active && slot.wm_id == Some(wm_id) {
+                return Some((i + 1) as u64);
+            }
+        }
+    }
+    None
+}
+
 /// Focus the WM window of a user window (on click).
 pub fn focus_window(win_id: u64) {
     unsafe {
