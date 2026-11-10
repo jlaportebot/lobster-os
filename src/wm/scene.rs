@@ -349,6 +349,7 @@ fn draw_overlays(target: &FramebufferInfo) {
     crate::wm::alt_tab::draw(target);
     crate::wm::notifications::draw(target);
     crate::wm::context_menu::draw();
+    crate::wm::dialog::draw(target);
 }
 
 /// Copy a finished rectangle of the back buffer to the device.

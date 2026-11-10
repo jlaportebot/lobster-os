@@ -16,6 +16,7 @@ pub mod compositor;
 pub mod config;
 pub mod context_menu;
 pub mod desktop_icons;
+pub mod dialog;
 pub mod dirty;
 pub mod event_router;
 pub mod greeter;
@@ -65,6 +66,8 @@ pub fn init() {
     panel::init(&fb);
     println!("[wm] Step 6b: desktop_icons::init...");
     desktop_icons::init();
+    println!("[wm] Step 6c: dialog::init...");
+    dialog::init();
     println!(
         "[wm] Window manager initialized ({}x{})",
         fb.width, fb.height
@@ -220,6 +223,7 @@ fn tick_hardware() {
     alt_tab::draw(&fb);
     notifications::draw(&fb);
     context_menu::draw();
+    dialog::draw(&fb);
 }
 
 /// Handle keyboard shortcuts (called from input module)

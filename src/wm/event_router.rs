@@ -38,7 +38,8 @@
 
 use crate::usb::hid::HidEvent;
 use crate::wm::{
-    config, context_menu, desktop_icons, hit_region, input, panel, start_menu, tray_popups, window,
+    config, context_menu, desktop_icons, dialog, hit_region, input, panel, start_menu, tray_popups,
+    window,
 };
 
 /// A mouse-button edge, as seen by the router.
@@ -72,7 +73,12 @@ pub struct Stage {
 }
 
 /// The routing table, in priority order. See module docs.
-pub static STAGES: [Stage; 7] = [
+pub static STAGES: [Stage; 8] = [
+    Stage {
+        name: "dialog",
+        hit: hit_dialog,
+        handle: handle_dialog,
+    },
     Stage {
         name: "context_menu",
         hit: hit_context_menu,
@@ -179,6 +185,11 @@ fn hit_desktop_icon(ev: &ButtonEv) -> bool {
     ev.left_press() && desktop_icons::hit_test(ev.x, ev.y).is_some()
 }
 
+/// Dialog modal: hits on any button edge when a dialog is open.
+fn hit_dialog(_: &ButtonEv) -> bool {
+    dialog::is_open()
+}
+
 // ─── Stage handlers ──────────────────────────────────────────────────
 
 /// Modal: updates hover, runs a clicked action, and consumes everything.
@@ -188,6 +199,15 @@ fn handle_context_menu(ev: &ButtonEv) -> bool {
         if let Some(action) = context_menu::handle_click(ev.x, ev.y) {
             input::handle_context_action(action);
         }
+    }
+    true
+}
+
+/// Modal dialog: consumes all clicks and keys when open.
+fn handle_dialog(ev: &ButtonEv) -> bool {
+    // Dialog handles its own click/key logic
+    if ev.left_press() || ev.left_release() {
+        dialog::handle_click(ev.x, ev.y);
     }
     true
 }

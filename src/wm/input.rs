@@ -281,6 +281,14 @@ fn handle_key_press(scancode: u8, _extended: bool) {
     let shift = hid::shift_held();
     let ch = hid::scancode_to_ascii(scancode, shift);
 
+    // Modal dialog: consumes all keys when open
+    if crate::wm::dialog::is_open() {
+        if crate::wm::dialog::handle_key(scancode) {
+            crate::wm::dirty::mark();
+            return;
+        }
+    }
+
     // Alt+Tab: window switcher overlay
     if hid::alt_held() && scancode == 0x2B {
         if crate::wm::alt_tab::is_visible() {
