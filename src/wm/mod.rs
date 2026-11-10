@@ -25,7 +25,6 @@ pub mod input;
 pub mod launcher;
 pub mod notifications;
 pub mod panel;
-#[cfg(feature = "qemu_raspi5b")]
 pub mod scene;
 pub mod start_menu;
 pub mod theme;
