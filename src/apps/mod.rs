@@ -4,6 +4,7 @@ pub mod app_store;
 pub mod browser;
 pub mod browser_text;
 pub mod calculator;
+pub mod calculator_engine;
 pub mod editor;
 pub mod file_manager;
 pub mod image_viewer;

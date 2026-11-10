@@ -1,11 +1,11 @@
 //! Calculator app — basic arithmetic with a clean GUI
 //!
-//! Supports: +, -, *, /, %, clear, decimal points, backspace
+//! Supports: +, -, *, /, %, clear, decimal points, backspace, history tape
+//! Uses shared window frame (src/wm/window_frame.rs)
 
+use crate::apps::calculator_engine::CalculatorEngine;
 use crate::display::fb;
 use crate::display::graphics;
-use alloc::format;
-use alloc::string::String;
 
 const APP_NAME: &str = "Calculator";
 
@@ -14,199 +14,70 @@ const BUTTONS: &[&[&str]] = &[
     &["7", "8", "9", "*"],
     &["4", "5", "6", "-"],
     &["1", "2", "3", "+"],
-    &["0", ".", "=", ""],
+    &["+/-", "0", ".", "="],
 ];
 
-const NUM_BUTTONS: usize = 19;
+const NUM_BUTTONS: usize = 20;
 
 /// Calculator app state
 pub struct Calculator {
-    display: String,
-    previous: i64,
-    operator: Option<char>,
-    waiting_for_operand: bool,
+    engine: CalculatorEngine,
     running: bool,
     button_rects: [(u32, u32, u32, u32); NUM_BUTTONS],
-    /// Rolling tape of past evaluations (newest last), shown under the
-    /// display when non-empty. B6.2.
-    history: alloc::vec::Vec<alloc::string::String>,
 }
-
-/// Max tape entries kept.
-const HISTORY_CAP: usize = 8;
 
 impl Calculator {
     pub fn new() -> Self {
         Self {
-            display: String::from("0"),
-            previous: 0,
-            operator: None,
-            waiting_for_operand: true,
+            engine: CalculatorEngine::new(),
             running: true,
             button_rects: [(0, 0, 0, 0); NUM_BUTTONS],
-            history: alloc::vec::Vec::new(),
         }
     }
 
-    fn input_digit(&mut self, digit: char) {
-        if self.waiting_for_operand {
-            self.display.clear();
-            self.waiting_for_operand = false;
-        }
-        if self.display.len() < 16 {
-            if self.display == "0" && digit != '.' {
-                self.display.clear();
-            }
-            self.display.push(digit);
-        }
-    }
-
-    fn input_operator(&mut self, op: char) {
-        if let Ok(value) = self.display.parse::<i64>() {
-            if self.operator.is_some() && !self.waiting_for_operand {
-                self.compute();
-            }
-            self.previous = value;
-            self.operator = Some(op);
-            self.waiting_for_operand = true;
-        }
-    }
-
-    fn compute(&mut self) {
-        if let (Some(op), Ok(current)) = (self.operator, self.display.parse::<i64>()) {
-            let result = match op {
-                '+' => self.previous + current,
-                '-' => self.previous - current,
-                '*' => self.previous * current,
-                '/' => {
-                    if current != 0 {
-                        self.previous / current
-                    } else {
-                        self.display = String::from("Error: div by 0");
-                        self.operator = None;
-                        self.waiting_for_operand = true;
-                        return;
-                    }
-                }
-                '%' => {
-                    if current != 0 {
-                        self.previous % current
-                    } else {
-                        self.display = String::from("Error: mod by 0");
-                        self.operator = None;
-                        self.waiting_for_operand = true;
-                        return;
-                    }
-                }
-                _ => current,
-            };
-
-            self.display = format!("{}", result);
-            self.previous = result;
-        }
-    }
-
-    fn clear(&mut self) {
-        self.display = String::from("0");
-        self.previous = 0;
-        self.operator = None;
-        self.waiting_for_operand = true;
-    }
-
-    /// Compute `lhs op rhs` exactly as `compute()` does, without touching state.
-    /// Returns None for division/modulo by zero (matches the "Error" display).
-    fn apply_op(lhs: i64, op: char, rhs: i64) -> Option<i64> {
-        match op {
-            '+' => Some(lhs.wrapping_add(rhs)),
-            '-' => Some(lhs.wrapping_sub(rhs)),
-            '*' => Some(lhs.wrapping_mul(rhs)),
-            '/' => {
-                if rhs == 0 {
-                    None
-                } else {
-                    Some(lhs / rhs)
-                }
-            }
-            '%' => {
-                if rhs == 0 {
-                    None
-                } else {
-                    Some(lhs % rhs)
-                }
-            }
-            _ => Some(rhs),
-        }
-    }
-
-    fn backspace(&mut self) {
-        if self.display.len() > 1 {
-            self.display.pop();
-        } else {
-            self.display = String::from("0");
-            self.waiting_for_operand = true;
-        }
-    }
-
-    fn equals(&mut self) {
-        if self.operator.is_some() {
-            let lhs = self.previous;
-            let op = self.operator.unwrap();
-            let rhs_display = self.display.clone();
-            self.compute();
-            self.operator = None;
-            self.waiting_for_operand = true;
-            // Tape entry: "lhs op rhs = result"
-            let entry = alloc::format!("{} {} {} = {}", lhs, op, rhs_display, self.display);
-            if self.history.len() == HISTORY_CAP {
-                self.history.remove(0);
-            }
-            self.history.push(entry);
-        }
-    }
-
-    /// Keyboard input when the Calculator window is focused (B6.2).
+    /// Keyboard input when the Calculator window is focused.
     /// Returns true if the key was consumed.
     pub fn handle_key(&mut self, scancode: u8, ch: Option<char>) -> bool {
         let consumed = match ch {
             Some('0'..='9') => {
-                self.input_digit(ch.unwrap());
+                self.engine.input_digit(ch.unwrap());
                 true
             }
             Some('.') => {
-                self.input_digit('.');
+                self.engine.input_decimal();
                 true
             }
             Some('+') => {
-                self.input_operator('+');
+                self.engine.input_operator('+');
                 true
             }
             Some('-') => {
-                self.input_operator('-');
+                self.engine.input_operator('-');
                 true
             }
             Some('*') => {
-                self.input_operator('*');
+                self.engine.input_operator('*');
                 true
             }
             Some('/') => {
-                self.input_operator('/');
+                self.engine.input_operator('/');
                 true
             }
             Some('%') => {
-                self.input_operator('%');
+                self.engine.input_operator('%');
                 true
             }
             _ => match scancode {
                 0x1C => {
-                    self.equals();
+                    self.engine.equals();
                     true
                 }
                 0x0E => {
-                    self.backspace();
+                    self.engine.backspace();
                     true
                 }
                 0x01 => {
-                    self.clear();
+                    self.engine.clear();
                     true
                 }
                 _ => false,
@@ -218,18 +89,19 @@ impl Calculator {
     /// Handle a button press
     pub fn handle_button(&mut self, label: &str) {
         match label {
-            "C" => self.clear(),
-            "⌫" => self.backspace(),
-            "+" => self.input_operator('+'),
-            "-" => self.input_operator('-'),
-            "*" => self.input_operator('*'),
-            "/" => self.input_operator('/'),
-            "%" => self.input_operator('%'),
-            "=" => self.equals(),
-            "." => self.input_digit('.'),
+            "C" => self.engine.clear(),
+            "⌫" => self.engine.backspace(),
+            "+" => self.engine.input_operator('+'),
+            "-" => self.engine.input_operator('-'),
+            "*" => self.engine.input_operator('*'),
+            "/" => self.engine.input_operator('/'),
+            "%" => self.engine.input_operator('%'),
+            "=" => self.engine.equals(),
+            "." => self.engine.input_decimal(),
+            "+/-" => self.engine.negate(),
             d if d.chars().all(|c| c.is_ascii_digit()) => {
                 if let Some(c) = d.chars().next() {
-                    self.input_digit(c);
+                    self.engine.input_digit(c);
                 }
             }
             _ => {}
@@ -240,19 +112,15 @@ impl Calculator {
     pub fn render(&mut self, x: u32, y: u32, width: u32, height: u32) {
         let info = fb::get_info();
 
-        // Title bar
-        graphics::draw_rect(&info, x, y, width, 28, 0x2D2D30);
-        graphics::draw_text(&info, x + 8, y + 6, APP_NAME, 0xFFFFFF, 0x2D2D30);
-
         // Display area
         let display_height = 60;
-        let display_y = y + 28;
+        let display_y = y;
         graphics::draw_rect(&info, x, display_y, width, display_height, 0x1E1E1E);
 
-        let display_text = if self.display.len() > 14 {
-            &self.display[self.display.len() - 14..]
+        let display_text = if self.engine.display().len() > 14 {
+            &self.engine.display()[self.engine.display().len() - 14..]
         } else {
-            &self.display[..]
+            self.engine.display()
         };
         let text_x = x + width - (display_text.len() as u32) * 10 - 12;
         graphics::draw_text(
@@ -264,11 +132,11 @@ impl Calculator {
             0x1E1E1E,
         );
 
-        // History tape (B6.2): latest entries under the display, dimmed.
-        if !self.history.is_empty() {
-            let tape_y = display_y + display_height;
-            let shown = self.history.len().min(3);
-            for (i, entry) in self.history[self.history.len() - shown..]
+        // History tape: latest entries under the display, dimmed.
+        let tape_y = display_y + display_height;
+        if !self.engine.history().is_empty() {
+            let shown = self.engine.history().len().min(3);
+            for (i, entry) in self.engine.history()[self.engine.history().len() - shown..]
                 .iter()
                 .rev()
                 .enumerate()
@@ -290,17 +158,27 @@ impl Calculator {
         }
 
         // Buttons
-        let btn_area_y = display_y + display_height;
-        let btn_area_h = height.saturating_sub(28 + display_height);
+        let btn_area_y = display_y
+            + display_height
+            + (if self.engine.history().is_empty() {
+                0
+            } else {
+                3 * 14 + 8
+            });
+        let btn_area_h = height.saturating_sub(
+            display_height
+                + (if self.engine.history().is_empty() {
+                    0
+                } else {
+                    3 * 14 + 8
+                }),
+        );
         let btn_w = width / 4;
         let btn_h = btn_area_h / 5;
 
         let mut idx = 0;
         for (row, row_buttons) in BUTTONS.iter().enumerate() {
             for (col, label) in row_buttons.iter().enumerate() {
-                if label.is_empty() {
-                    continue;
-                }
                 let bx = x + col as u32 * btn_w;
                 let by = btn_area_y + row as u32 * btn_h;
 
@@ -308,7 +186,7 @@ impl Calculator {
 
                 let color = match *label {
                     "+" | "-" | "*" | "/" | "=" => 0xFF6B35,
-                    "C" | "⌫" | "%" => 0x4D4D50,
+                    "C" | "⌫" | "%" | "+/-" => 0x4D4D50,
                     _ => 0x3D3D40,
                 };
 
@@ -335,9 +213,7 @@ impl Calculator {
                     if let Some(col) = i.checked_rem(4) {
                         if row < BUTTONS.len() && col < BUTTONS[row].len() {
                             let label = BUTTONS[row][col];
-                            if !label.is_empty() {
-                                self.handle_button(label);
-                            }
+                            self.handle_button(label);
                         }
                     }
                 }
@@ -414,24 +290,92 @@ mod tests {
     use super::*;
 
     #[test]
-    fn apply_op_handles_all_operators() {
-        assert_eq!(Calculator::apply_op(5, '+', 3), Some(8));
-        assert_eq!(Calculator::apply_op(5, '-', 3), Some(2));
-        assert_eq!(Calculator::apply_op(5, '*', 3), Some(15));
-        assert_eq!(Calculator::apply_op(6, '/', 3), Some(2));
-        assert_eq!(Calculator::apply_op(5, '%', 3), Some(2));
+    fn calculator_new_has_zero_display() {
+        let calc = Calculator::new();
+        assert_eq!(calc.engine.display(), "0");
     }
 
     #[test]
-    fn apply_op_returns_none_for_div_and_mod_by_zero() {
-        // Regression: `5 % 0` used to panic the whole kernel (audit Q1a).
-        assert_eq!(Calculator::apply_op(5, '/', 0), None);
-        assert_eq!(Calculator::apply_op(5, '%', 0), None);
-        assert_eq!(Calculator::apply_op(0, '%', 0), None);
+    fn handle_button_digit() {
+        let mut calc = Calculator::new();
+        calc.handle_button("5");
+        assert_eq!(calc.engine.display(), "5");
     }
 
     #[test]
-    fn apply_op_unknown_operator_falls_back_to_rhs() {
-        assert_eq!(Calculator::apply_op(10, '?', 4), Some(4));
+    fn handle_button_operator() {
+        let mut calc = Calculator::new();
+        calc.handle_button("5");
+        calc.handle_button("+");
+        assert_eq!(calc.engine.display(), "5");
+        // After operator, waiting_for_operand should be true
+    }
+
+    #[test]
+    fn handle_button_equals() {
+        let mut calc = Calculator::new();
+        calc.handle_button("5");
+        calc.handle_button("+");
+        calc.handle_button("3");
+        calc.handle_button("=");
+        assert_eq!(calc.engine.display(), "8");
+    }
+
+    #[test]
+    fn handle_button_decimal() {
+        let mut calc = Calculator::new();
+        calc.handle_button("1");
+        calc.handle_button(".");
+        calc.handle_button("5");
+        assert_eq!(calc.engine.display(), "1.5");
+    }
+
+    #[test]
+    fn handle_button_clear() {
+        let mut calc = Calculator::new();
+        calc.handle_button("5");
+        calc.handle_button("+");
+        calc.handle_button("3");
+        calc.handle_button("C");
+        assert_eq!(calc.engine.display(), "0");
+    }
+
+    #[test]
+    fn handle_button_backspace() {
+        let mut calc = Calculator::new();
+        calc.handle_button("1");
+        calc.handle_button("2");
+        calc.handle_button("3");
+        calc.handle_button("⌫");
+        assert_eq!(calc.engine.display(), "12");
+    }
+
+    #[test]
+    fn handle_button_negate() {
+        let mut calc = Calculator::new();
+        calc.handle_button("5");
+        calc.handle_button("+/-");
+        assert_eq!(calc.engine.display(), "-5");
+        calc.handle_button("+/-");
+        assert_eq!(calc.engine.display(), "5");
+    }
+
+    #[test]
+    fn history_records_calculations() {
+        let mut calc = Calculator::new();
+        calc.handle_button("2");
+        calc.handle_button("+");
+        calc.handle_button("3");
+        calc.handle_button("=");
+
+        calc.handle_button("5");
+        calc.handle_button("*");
+        calc.handle_button("4");
+        calc.handle_button("=");
+
+        let history = calc.engine.history();
+        assert_eq!(history.len(), 2);
+        assert!(history[0].contains("2 + 3 = 5"));
+        assert!(history[1].contains("5 * 4 = 20"));
     }
 }
