@@ -37,6 +37,13 @@ pub struct ContentPtr(*mut u32);
 unsafe impl Send for ContentPtr {}
 unsafe impl Sync for ContentPtr {}
 
+impl ContentPtr {
+    /// Get the raw pointer
+    pub fn as_ptr(&self) -> *mut u32 {
+        self.0
+    }
+}
+
 impl Clone for ContentPtr {
     fn clone(&self) -> Self {
         ContentPtr(self.0)
@@ -927,6 +934,21 @@ pub fn set_terminal_widget_id(id: u32, widget_id: crate::wm::widget::WidgetId) {
             return;
         }
     }
+}
+
+/// Execute a closure with mutable access to a window by ID.
+/// Returns true if the window was found and the closure was executed.
+pub fn with_window_mut<F, R>(id: u32, f: F) -> Option<R>
+where
+    F: FnOnce(&mut Window) -> R,
+{
+    let mut windows = WINDOWS.lock();
+    for i in 0..MAX_WINDOWS {
+        if windows[i].active && windows[i].id == id {
+            return Some(f(&mut windows[i]));
+        }
+    }
+    None
 }
 
 // ─── Window Snapping ────────────────────────────────────────────────────

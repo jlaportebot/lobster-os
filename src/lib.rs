@@ -871,47 +871,9 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         crate::wm::compositor::mark_full_redraw();
     }
 
-    // Auto-create desktop app windows on QEMU for immediate desktop experience
+    // Show first-run welcome window (once per install)
     #[cfg(feature = "qemu_raspi5b")]
-    {
-        crate::println!("[apps] Creating desktop windows...");
-        let fb = crate::display::fb::get_info();
-        if fb.width > 0 {
-            // Layout: terminal on left, app windows on right
-            let term_w = 720;
-            let term_h = 500;
-            // Terminal window (primary)
-            let win_id = crate::apps::terminal::create_terminal_window(
-                &mut crate::wm::widget::WIDGET_TABLE.lock(),
-                50,
-                50,
-                term_w,
-                term_h,
-            );
-            let _ = win_id;
-            crate::println!("[apps] Terminal window created (id={:?})", win_id);
-
-            // System Monitor window
-            // Boot windows: tidy two-column grid, leaving the center free for
-            // session-restored windows.
-            let _sysmon_id = crate::wm::window::create(800, 50, 420, 280, "Task Manager");
-            crate::println!("[apps] System Monitor window created");
-
-            // Calculator window
-            let _calc_id = crate::wm::window::create(800, 350, 300, 400, "Calculator");
-            crate::println!("[apps] Calculator window created");
-
-            // File Manager window
-            let _fm_id = crate::wm::window::create(1120, 50, 440, 350, "File Manager");
-            crate::println!("[apps] File Manager window created");
-
-            // Process Manager window
-            let _pm_id = None::<u32>; // merged into Task Manager (Processes tab)
-            crate::println!("[apps] Process Manager window created");
-
-            crate::println!("[apps] Desktop: 5 windows created (Terminal, SysMon, Calculator, FileManager, ProcessMgr)");
-        }
-    }
+    crate::apps::welcome::show_welcome_window();
 
     // 15a. Hardware-dependent subsystems — skip on QEMU (no PMU, audio, GPIO, BT, GPU)
     #[cfg(not(feature = "qemu_raspi5b"))]

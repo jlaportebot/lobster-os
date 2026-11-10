@@ -15,6 +15,7 @@ pub mod setup_wizard;
 pub mod sysmon;
 pub mod task_manager;
 pub mod terminal;
+pub mod welcome;
 
 use crate::println;
 
@@ -32,5 +33,6 @@ pub fn init() {
     app_store::init();
     browser::init();
     notes::init();
-    println!("[apps] Core desktop applications initialized (12 apps)");
+    welcome::init();
+    println!("[apps] Core desktop applications initialized (13 apps)");
 }

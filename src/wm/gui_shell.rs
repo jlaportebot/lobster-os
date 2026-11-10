@@ -49,13 +49,17 @@ pub fn handle_key(scancode: u8, ch: Option<char>) -> bool {
             let line = core::str::from_utf8(&LINE[..LINE_LEN]).unwrap_or("");
             LINE_LEN = 0;
             // Echo the newline into the VT via the serial mirror path
-            crate::drivers::uart::Uart10::puts("\r\n");
+            crate::console::with_terminal_mirror(|| {
+                crate::drivers::uart::Uart10::puts("\r\n");
+            });
             if !line.is_empty() {
                 // Execute in the shell (output mirrors into the window)
                 let _ = crate::shell::execute_for_gui(line);
             }
             // New prompt inside the window
-            crate::drivers::uart::Uart10::puts("lobster:/# ");
+            crate::console::with_terminal_mirror(|| {
+                crate::drivers::uart::Uart10::puts("lobster:/# ");
+            });
         }
         return true;
     }
@@ -66,7 +70,9 @@ pub fn handle_key(scancode: u8, ch: Option<char>) -> bool {
             if LINE_LEN > 0 {
                 LINE_LEN -= 1;
                 // Erase the last character on the VT: BS + space + BS
-                crate::drivers::uart::Uart10::puts("\u{8} \u{8}");
+                crate::console::with_terminal_mirror(|| {
+                    crate::drivers::uart::Uart10::puts("\u{8} \u{8}");
+                });
             }
         }
         return true;
@@ -82,7 +88,9 @@ pub fn handle_key(scancode: u8, ch: Option<char>) -> bool {
                     // Echo (mirrors into the VT)
                     let mut buf = [0u8; 4];
                     let s = c.encode_utf8(&mut buf);
-                    crate::drivers::uart::Uart10::puts(s);
+                    crate::console::with_terminal_mirror(|| {
+                        crate::drivers::uart::Uart10::puts(s);
+                    });
                 }
             }
             return true;

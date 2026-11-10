@@ -14,6 +14,36 @@ use crate::usb::hid;
 pub const COLS: usize = 80;
 pub const ROWS: usize = 25;
 
+/// Output-newline filter ("onlcr"): the kernel prints bare `\n` line endings,
+/// which a VT treats as "move down" only — each line would start where the
+/// previous one ended (a diagonal staircase). The filter inserts the missing
+/// carriage return before every `\n` that is not already preceded by `\r`, so
+/// both `\n` and `\r\n` produce "column 0 of the next row".
+#[derive(Clone, Copy, Default)]
+pub struct NlFilter {
+    last_cr: bool,
+}
+
+impl NlFilter {
+    pub const fn new() -> Self {
+        Self { last_cr: false }
+    }
+
+    /// Feed one output byte through the filter into the parser/screen.
+    pub fn feed(
+        &mut self,
+        byte: u8,
+        parser: &mut parser::Parser,
+        screen: &mut screen::ScreenBuffer,
+    ) {
+        if byte == b'\n' && !self.last_cr {
+            parser.feed(b'\r', screen);
+        }
+        self.last_cr = byte == b'\r';
+        parser.feed(byte, screen);
+    }
+}
+
 /// Terminal state
 pub struct Terminal {
     pub parser: parser::Parser,
@@ -205,6 +235,58 @@ mod tests {
         let term = Box::leak(Terminal::new_boxed());
         assert_eq!(term.screen.cols, COLS);
         assert_eq!(term.screen.rows, ROWS);
+    }
+
+    fn feed_str(f: &mut NlFilter, p: &mut parser::Parser, s: &mut screen::ScreenBuffer, t: &str) {
+        for b in t.bytes() {
+            f.feed(b, p, s);
+        }
+    }
+
+    #[test]
+    fn nl_filter_bare_lf_returns_to_column_zero() {
+        let mut f = NlFilter::new();
+        let mut p = parser::Parser::new();
+        let mut s = screen::ScreenBuffer::new();
+        feed_str(&mut f, &mut p, &mut s, "abc\ndef\n");
+        assert_eq!(s.cells[0][0].ch, 'a');
+        assert_eq!(s.cells[1][0].ch, 'd'); // no staircase
+        assert_eq!(s.cells[1][2].ch, 'f');
+        assert_eq!((s.cursor_row, s.cursor_col), (2, 0));
+    }
+
+    #[test]
+    fn nl_filter_crlf_not_doubled() {
+        let mut f = NlFilter::new();
+        let mut p = parser::Parser::new();
+        let mut s = screen::ScreenBuffer::new();
+        feed_str(&mut f, &mut p, &mut s, "ab\r\ncd\r\n");
+        assert_eq!(s.cells[1][0].ch, 'c');
+        assert_eq!((s.cursor_row, s.cursor_col), (2, 0));
+    }
+
+    #[test]
+    fn nl_filter_cr_then_overwrite() {
+        let mut f = NlFilter::new();
+        let mut p = parser::Parser::new();
+        let mut s = screen::ScreenBuffer::new();
+        feed_str(&mut f, &mut p, &mut s, "xxxx\rab");
+        assert_eq!(s.cells[0][0].ch, 'a');
+        assert_eq!(s.cells[0][1].ch, 'b');
+        assert_eq!(s.cells[0][2].ch, 'x');
+    }
+
+    #[test]
+    fn nl_filter_crlf_split_across_calls() {
+        // '\r' at the end of one chunk and '\n' at the start of the next must
+        // still count as one CRLF.
+        let mut f = NlFilter::new();
+        let mut p = parser::Parser::new();
+        let mut s = screen::ScreenBuffer::new();
+        feed_str(&mut f, &mut p, &mut s, "ab\r");
+        feed_str(&mut f, &mut p, &mut s, "\ncd");
+        assert_eq!(s.cells[1][0].ch, 'c');
+        assert_eq!(s.cursor_row, 1);
     }
 
     #[test]

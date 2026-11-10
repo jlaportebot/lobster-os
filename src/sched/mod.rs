@@ -1835,6 +1835,54 @@ pub fn print_status() {
     }
 }
 
+/// Print scheduler status using a custom output function.
+/// The output function receives each line (without trailing newline).
+pub fn print_status_with<F>(mut write_line: F)
+where
+    F: FnMut(&str),
+{
+    write_line("[sched] === Scheduler Status ===");
+    write_line(&alloc::format!("[sched] Current PID: {}", current_pid()));
+    write_line(&alloc::format!("[sched] Tick count: {}", tick_count()));
+    write_line(&alloc::format!("[sched] Enabled: {}", is_enabled()));
+
+    unsafe {
+        let mut ready = 0u64;
+        let mut running = 0u64;
+        let mut blocked = 0u64;
+        let mut zombie = 0u64;
+
+        for i in 0..MAX_TASKS {
+            if let Some(ref task) = TASK_TABLE[i] {
+                match task.state {
+                    TaskState::Ready => ready += 1,
+                    TaskState::Running => running += 1,
+                    TaskState::Blocked => blocked += 1,
+                    TaskState::Zombie => zombie += 1,
+                    _ => {}
+                }
+                let kind = if task.is_user { "EL0" } else { "EL1" };
+                write_line(&alloc::format!(
+                    "[sched]   PID {} | {} | {:?} | {:?} | ticks={} slice={}",
+                    task.pid,
+                    kind,
+                    task.state,
+                    task.priority,
+                    task.runtime_ticks,
+                    task.time_slice
+                ));
+            }
+        }
+        write_line(&alloc::format!(
+            "[sched] Tasks: {} ready, {} running, {} blocked, {} zombie",
+            ready,
+            running,
+            blocked,
+            zombie
+        ));
+    }
+}
+
 /// Get task count
 pub fn task_count() -> usize {
     unsafe { TASK_TABLE.iter().filter(|t| t.is_some()).count() }
