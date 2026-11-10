@@ -179,6 +179,8 @@ pub fn transition_to_desktop() {
     // 16s sleep, and it doubles as the boot-time baseline record.
     let now_us = crate::arch::timer::Timer::system_time_us();
     crate::println!("desktop-ready t_ms={}", now_us / 1_000);
+    #[cfg(feature = "qemu_raspi5b")]
+    crate::drivers::lobster_sys::publish_state(crate::drivers::lobster_sys::GuestState::Desktop);
     crate::println!("[splash] Transitioning to desktop");
 
     unsafe {

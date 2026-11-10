@@ -1936,6 +1936,20 @@ fn cmd_halt() {
     crate::drivers::power::shutdown();
 }
 
+/// `date` output: local wall time when a platform clock exists.
+fn print_wall_time(now: crate::clock::DateTime) {
+    crate::println!(
+        "{} {} {:2} {:02}:{:02}:{:02} {}",
+        now.weekday_name(),
+        now.month_name(),
+        now.day,
+        now.hour,
+        now.minute,
+        now.second,
+        now.year
+    );
+}
+
 fn cmd_panic() {
     Uart10::puts("Triggering test panic...\r\n");
     panic!("User-initiated test panic from shell");
@@ -4972,6 +4986,10 @@ fn cmd_uname() -> i32 {
 /// date - display current time (from system timer)
 fn cmd_date() -> i32 {
     let uptime_ms = crate::arch::timer::Timer::uptime_ms();
+    if let Some(now) = crate::clock::local_at(uptime_ms) {
+        print_wall_time(now);
+        return 0;
+    }
     let seconds = uptime_ms / 1000;
     let minutes = seconds / 60;
     let hours = minutes / 60;

@@ -303,14 +303,29 @@ fn draw_cpu_graph(fb: &FramebufferInfo, panel_y: u32) {
     }
 }
 
+/// Panel clock text: local wall time, or uptime when no clock is available.
+fn clock_text(uptime_ms: u64) -> alloc::string::String {
+    const MS_PER_MINUTE: u64 = 60_000;
+    const MINUTES_PER_HOUR: u64 = 60;
+    const HOURS_PER_DAY: u64 = 24;
+    match crate::clock::local_at(uptime_ms) {
+        Some(now) => alloc::format!("{:02}:{:02}", now.hour, now.minute),
+        None => {
+            let minutes = uptime_ms / MS_PER_MINUTE;
+            alloc::format!(
+                "{:02}:{:02}",
+                minutes / MINUTES_PER_HOUR % HOURS_PER_DAY,
+                minutes % MINUTES_PER_HOUR
+            )
+        }
+    }
+}
+
 fn update_clock(_fb: &FramebufferInfo) {
     unsafe {
         let now = crate::arch::ArchTimer::uptime_ms();
         if now - PANEL_STATE.last_clock_update >= 1000 {
-            let secs = now / 1000;
-            let mins = secs / 60;
-            let hours = mins / 60;
-            let time_str = alloc::format!("{:02}:{:02}", hours % 24, mins % 60);
+            let time_str = clock_text(now);
             PANEL_STATE.clock_label.set_text(&time_str);
             PANEL_STATE.last_clock_update = now;
         }

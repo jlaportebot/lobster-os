@@ -303,11 +303,23 @@ pub fn rtc_set_wake_alarm(seconds_from_now: u64) {
     }
 }
 
+/// Flush filesystems and tell the platform the guest is going down.
+fn prepare_for_power_change() {
+    crate::fs::vfs::sync();
+    #[cfg(feature = "qemu_raspi5b")]
+    crate::drivers::lobster_sys::publish_state(
+        crate::drivers::lobster_sys::GuestState::ShuttingDown,
+    );
+}
+
 /// Reset the system
 pub fn reset() -> ! {
     let wdog = 100; // usecs to reset
 
+    prepare_for_power_change();
     disable_irqs();
+    #[cfg(feature = "qemu_raspi5b")]
+    crate::drivers::lobster_sys::reboot();
 
     let pm_rstc_val = unsafe { core::ptr::read_volatile(PM_RSTC as *const u32) }
         & PM_RSTC_WRCFG_CLR
@@ -327,7 +339,10 @@ pub fn reset() -> ! {
 
 /// Shutdown the system
 pub fn shutdown() -> ! {
+    prepare_for_power_change();
     disable_irqs();
+    #[cfg(feature = "qemu_raspi5b")]
+    crate::drivers::lobster_sys::power_off();
 
     // Try to shutdown via mailbox
     const TAG_SET_POWER_STATE: u32 = 0x00028001;

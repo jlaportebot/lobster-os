@@ -55,6 +55,7 @@ extern crate alloc;
 
 // Core modules available on all targets (stubbed for x86_64)
 pub mod arch;
+pub mod clock;
 pub mod config;
 pub mod console;
 pub mod ipc;
@@ -579,7 +580,15 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     #[cfg(feature = "qemu_raspi5b")]
     let info = {
         crate::println!("[display] QEMU mode (raspi5b): initializing framebuffer...");
-        match crate::display::fb::init(1920, 1080, 32) {
+        const DEFAULT_RESOLUTION: (u32, u32) = (1920, 1080);
+        let (width, height) =
+            crate::drivers::lobster_sys::preferred_resolution().unwrap_or(DEFAULT_RESOLUTION);
+        if let Some((epoch_secs, utc_offset)) = crate::drivers::lobster_sys::wall_clock() {
+            let uptime_ms = crate::arch::ArchTimer::uptime_ms();
+            crate::clock::set_boot_time(epoch_secs, uptime_ms, utc_offset);
+            crate::println!("[clock] wall clock set from host: epoch={}", epoch_secs);
+        }
+        match crate::display::fb::init(width, height, 32) {
             Ok(info) => info,
             Err(e) => {
                 crate::println!(
