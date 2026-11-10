@@ -637,6 +637,7 @@ pub fn render_to_windows(fb: &FramebufferInfo) {
             };
             let focused = crate::wm::window::focused_id() == wm_id;
             let title = core::str::from_utf8(&slot.title[..slot.title_len]).unwrap_or("EL0 App");
+            let fb = &crate::wm::scene::window_target(wm_id, fb);
             let (cx, cy, cw, ch) =
                 crate::wm::window_frame::draw_frame(fb, wm_id, wx, wy, ww, wh, title, focused);
             // Blit the backing buffer into the client area (clip to both)

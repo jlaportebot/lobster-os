@@ -25,6 +25,7 @@ pub mod input;
 pub mod launcher;
 pub mod notifications;
 pub mod panel;
+pub mod scene;
 pub mod start_menu;
 pub mod theme;
 pub mod tray_popups;
@@ -69,138 +70,155 @@ pub fn init() {
     );
 }
 
+/// Frames between terminal repaints when idle (cursor blink cadence).
+#[cfg(feature = "qemu_raspi5b")]
+const TERMINAL_IDLE_FRAMES: u32 = 8;
+/// Frames between monitor repaints when idle (graphs update at ~2 Hz).
+#[cfg(feature = "qemu_raspi5b")]
+const MONITOR_IDLE_FRAMES: u32 = 15;
+/// The panel (clock, task list) is recomposed at least this often.
+#[cfg(feature = "qemu_raspi5b")]
+const PANEL_REFRESH_FRAMES: u32 = 30;
+
+/// Run one app's window renderer, then stop redirecting drawing to its
+/// surface.
+#[cfg(feature = "qemu_raspi5b")]
+fn render_app(render: fn(&crate::display::fb::FramebufferInfo)) {
+    let screen = crate::display::fb::device_info();
+    render(&screen);
+    scene::end_window_render();
+}
+
+/// Redraw the built-in apps whose content may have changed into their
+/// window surfaces. `content_dirty` forces every app to redraw.
+#[cfg(feature = "qemu_raspi5b")]
+fn render_apps(content_dirty: bool) {
+    let frame = dirty::frame();
+    if content_dirty || frame % TERMINAL_IDLE_FRAMES == 0 {
+        render_app(crate::apps::terminal::render_to_windows);
+    }
+    if content_dirty || frame % MONITOR_IDLE_FRAMES == 0 {
+        render_app(crate::apps::sysmon::render_to_windows);
+        render_app(crate::apps::process_manager::render_to_windows);
+        render_app(crate::apps::task_manager::render_to_windows);
+    }
+    if content_dirty {
+        render_app(crate::apps::calculator::render_to_windows);
+        render_app(crate::apps::file_manager::render_to_windows);
+        render_app(crate::apps::browser::render_to_windows);
+        render_app(crate::apps::editor::render_to_windows);
+        render_app(crate::apps::notes::render_to_windows);
+        render_app(crate::apps::settings::render_settings_window);
+        render_app(crate::apps::image_viewer::bmp_view::render_to_windows);
+        render_app(crate::wm::user_windows::render_to_windows);
+    }
+}
+
+/// Damage the screen areas whose content changes without an input event.
+#[cfg(feature = "qemu_raspi5b")]
+fn damage_live_regions(content_dirty: bool) {
+    let screen = crate::display::fb::device_info();
+    let panel_h = panel::PANEL_HEIGHT;
+    if content_dirty || dirty::frame() % PANEL_REFRESH_FRAMES == 0 {
+        scene::damage(scene::Rect::from_xywh(
+            0,
+            screen.height.saturating_sub(panel_h),
+            screen.width,
+            panel_h,
+        ));
+    }
+    let overlay_open = start_menu::is_open()
+        || tray_popups::is_open()
+        || alt_tab::is_visible()
+        || context_menu::is_visible();
+    let pointer_moved = input::poll_count() > 0;
+    // Popups track hover and selection, and toasts animate on their own.
+    if (overlay_open && (content_dirty || pointer_moved)) || notifications::needs_redraw() {
+        scene::damage_all();
+    }
+}
+
+/// One frame on the scene-compositor path (QEMU build).
+#[cfg(feature = "qemu_raspi5b")]
+fn tick_scene(user_only: bool) {
+    let device = crate::display::fb::device_info();
+    if device.width == 0 {
+        return;
+    }
+    if !scene::is_active() {
+        scene::init();
+    }
+    compositor::restore_software_cursor(&device);
+
+    if user_only {
+        input::pump_events_user_only();
+    } else {
+        input::pump_events();
+    }
+    let had_events = input::poll_count();
+    // Only keys and buttons change app content; pointer motion alone just
+    // moves the cursor (drags damage the scene through move/resize).
+    if had_events > 0 && input::action_count() > 0 {
+        dirty::mark();
+    }
+    if window_frame::animating() {
+        dirty::mark();
+    }
+
+    let content_dirty = dirty::should_render_static();
+    render_apps(content_dirty);
+    if !user_only {
+        window_frame::tick_animations();
+        notifications::tick();
+    }
+    damage_live_regions(content_dirty);
+    scene::compose();
+    compositor::draw_software_cursor(&device);
+}
+
 /// Run one frame of the window manager: poll input, update, composite
 pub fn tick() {
     // Reentrancy guard: sys_sleep pumps ticks from inside a syscall that
-    // was itself called from a tick-driven shell path. Nested ticks would
-    // re-render mid-frame and corrupt the dirty flags — skip them.
+    // was itself called from a tick-driven shell path. A nested tick only
+    // routes input to user windows and recomposes; it must not re-run
+    // shell/panel input handling.
     static IN_TICK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-    static PUMPED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-    if IN_TICK.swap(true, core::sync::atomic::Ordering::Relaxed) {
-        // Pumped from a syscall inside an outer tick (e.g. sys_sleep in a
-        // cooperative EL0 GUI app). Route HID into user-window queues with
-        // the restricted dispatcher and run the render pass so user windows
-        // composite without re-processing shell/panel input or animations.
-        let fb = get_info();
-        if fb.width > 0 {
-            crate::wm::input::pump_events_user_only();
-            #[cfg(feature = "qemu_raspi5b")]
-            {
-                crate::apps::sysmon::render_to_windows(&fb);
-                crate::apps::calculator::render_to_windows(&fb);
-                crate::apps::file_manager::render_to_windows(&fb);
-                crate::apps::process_manager::render_to_windows(&fb);
-                crate::apps::browser::render_to_windows(&fb);
-                crate::apps::editor::render_to_windows(&fb);
-                crate::apps::notes::render_to_windows(&fb);
-                crate::apps::settings::render_settings_window(&fb);
-                crate::apps::image_viewer::bmp_view::render_to_windows(&fb);
-                crate::wm::user_windows::render_to_windows(&fb);
-            }
-        }
-        return;
-    }
-    // A4.3: restore pixels under last frame's software cursor before
-    // any drawing this tick (QEMU has no hardware cursor).
+    let is_nested = IN_TICK.swap(true, core::sync::atomic::Ordering::Relaxed);
+
     #[cfg(feature = "qemu_raspi5b")]
-    {
-        let fbc = get_info();
-        if fbc.width > 0 {
-            compositor::restore_software_cursor(&fbc);
-        }
+    tick_scene(is_nested);
+
+    #[cfg(not(feature = "qemu_raspi5b"))]
+    if !is_nested {
+        tick_hardware();
     }
 
-    // Poll HID events and dispatch through the input bridge.
-    // Any event invalidates the static render cache.
+    if !is_nested {
+        IN_TICK.store(false, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// One frame on the hardware path (layer compositor in compositor.rs).
+#[cfg(not(feature = "qemu_raspi5b"))]
+fn tick_hardware() {
     let had_events = input::poll_count();
     input::pump_events();
     if had_events > 0 {
         dirty::mark();
     }
-
-    // Composite all windows (draws frames, wallpaper, blits content buffers)
     compositor::composite();
-
-    // Render terminal content directly to framebuffer in window client areas (QEMU only)
-    #[cfg(feature = "qemu_raspi5b")]
-    {
-        let fb = get_info();
-        if fb.width > 0 {
-            // Terminal: redraw on input/new output (dirty) or slow blink cadence.
-            // The terminal is FIRST in draw order, so any render it makes can
-            // damage windows above it — mark dirty to cascade the redraw.
-            let terminal_dirty = dirty::should_render_static() || dirty::frame() % 8 == 0;
-            if terminal_dirty {
-                crate::apps::terminal::render_to_windows(&fb);
-                dirty::mark();
-            }
-            // Monitors: 2Hz is plenty for graphs. sysmon sits early in the
-            // draw order, so it also cascades; PM is late and self-contained.
-            if dirty::should_render_static() || dirty::frame() % 15 == 0 {
-                crate::apps::sysmon::render_to_windows(&fb);
-                dirty::mark();
-                crate::apps::process_manager::render_to_windows(&fb);
-                crate::apps::task_manager::render_to_windows(&fb);
-            }
-            // Everything else is fully static between interactions
-            if dirty::should_render_static() {
-                crate::apps::calculator::render_to_windows(&fb);
-                crate::apps::file_manager::render_to_windows(&fb);
-                crate::apps::browser::render_to_windows(&fb);
-                crate::apps::editor::render_to_windows(&fb);
-                crate::apps::notes::render_to_windows(&fb);
-                crate::apps::settings::render_settings_window(&fb);
-                crate::apps::image_viewer::bmp_view::render_to_windows(&fb);
-                // EL0 user-process windows (C1) — composite last so user
-                // content lands on top of the static apps.
-                crate::wm::user_windows::render_to_windows(&fb);
-            }
-        }
-    }
-
-    // Draw desktop icons (after windows, before panel)
     let fb = get_info();
     if fb.width > 0 {
         desktop_icons::draw(&fb);
-    }
-
-    // Draw panel on top
-    let fb = get_info();
-    if fb.width > 0 {
         panel::draw(&fb);
     }
-    // Window animations tick
     window_frame::tick_animations();
-
-    // Notifications tick (animate/expire toasts)
     notifications::tick();
-
-    // Start menu (above windows, below context menu)
     start_menu::draw(&fb);
-
-    // Tray popups (above windows, below toasts)
     tray_popups::draw(&fb);
-
-    // Alt-Tab switcher overlay (above nearly everything)
     alt_tab::draw(&fb);
-
-    // Toasts (above windows, top-right)
     notifications::draw(&fb);
-
-    // Draw context menu on top of everything (if visible)
     context_menu::draw();
-
-    // A4.3: software cursor on top of everything (QEMU).
-    #[cfg(feature = "qemu_raspi5b")]
-    {
-        let fbc = get_info();
-        if fbc.width > 0 {
-            compositor::draw_software_cursor(&fbc);
-        }
-    }
-
-    // Release the reentrancy guard.
-    IN_TICK.swap(false, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// Handle keyboard shortcuts (called from input module)

@@ -268,3 +268,24 @@ pub fn paint_row(fb: &crate::display::fb::FramebufferInfo, y: u32, dst: &mut [u3
         *px = color;
     }
 }
+
+/// Gradient colour (`0xAARRGGBB`) of the wallpaper on screen row `y`.
+fn row_color(preset: &Preset, y: u32, screen_h: u32) -> u32 {
+    let channel = |shift: u32| {
+        let top = (preset.top >> shift) & 0xFF;
+        let bottom = (preset.bottom >> shift) & 0xFF;
+        let span = screen_h.max(1);
+        (top * (span - y.min(span)) + bottom * y.min(span)) / span
+    };
+    0xFF00_0000 | (channel(16) << 16) | (channel(8) << 8) | channel(0)
+}
+
+/// Paint the wallpaper into a render target (only its clip is touched).
+pub fn paint_into(target: &crate::display::fb::FramebufferInfo) {
+    let preset = active();
+    let width = target.clip_x1.saturating_sub(target.clip_x0);
+    for y in target.clip_y0..target.clip_y1 {
+        let color = row_color(preset, y, target.height);
+        crate::display::graphics::draw_rect(target, target.clip_x0, y, width, 1, color);
+    }
+}

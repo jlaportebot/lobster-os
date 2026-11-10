@@ -82,7 +82,13 @@ pub fn selected() -> Option<usize> {
 
 /// Update hover state from cursor movement.
 pub fn update_hover(cx: u32, cy: u32) {
-    *HOVERED.lock() = hit_test(cx, cy);
+    let hit = hit_test(cx, cy);
+    let mut hovered = HOVERED.lock();
+    if *hovered != hit {
+        *hovered = hit;
+        drop(hovered);
+        crate::wm::compositor::mark_full_redraw();
+    }
 }
 
 /// Initialize desktop icons

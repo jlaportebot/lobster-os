@@ -8,7 +8,7 @@ use crate::println;
 use crate::wm::compositor;
 
 /// Maximum number of windows
-const MAX_WINDOWS: usize = 8;
+const MAX_WINDOWS: usize = 32;
 
 /// Title bar height in pixels
 const TITLE_BAR_H: u32 = 24;
@@ -263,6 +263,8 @@ pub fn create(x: u32, y: u32, w: u32, h: u32, title: &str) -> Option<u32> {
 
 /// Destroy a window by ID
 pub fn destroy(id: u32) {
+    #[cfg(feature = "qemu_raspi5b")]
+    crate::wm::scene::release_window(id);
     // Find the window index first
     let win_idx = {
         let windows = WINDOWS.lock();
@@ -350,6 +352,9 @@ pub fn focused_id() -> u32 {
 
 /// Move a window to a new position
 pub fn move_window(id: u32, x: u32, y: u32) {
+    // With the scene compositor a move only recomposes (update_layer damages
+    // the old and new extents); surfaces are position-independent.
+    #[cfg(not(feature = "qemu_raspi5b"))]
     crate::wm::dirty::mark();
     let mut windows = WINDOWS.lock();
 
@@ -370,6 +375,7 @@ pub fn move_window(id: u32, x: u32, y: u32) {
 
 /// Resize a window
 pub fn resize(id: u32, w: u32, h: u32) {
+    crate::wm::dirty::mark();
     let mut windows = WINDOWS.lock();
 
     for i in 0..MAX_WINDOWS {
@@ -724,9 +730,8 @@ fn handle_mouse_button(left: bool, _right: bool, _middle: bool) {
                     // S6: deactivate the app's user windows NOW (not at
                     // reap) — the WM would keep re-drawing the dead app's
                     // pixels every dirty cycle otherwise.
-                    if let Some((wx, wy, ww, wh)) = get_info(win_id) {
-                        crate::wm::wallpaper::erase_region(wx, wy, ww, wh);
-                    }
+                    #[cfg(feature = "qemu_raspi5b")]
+                    crate::wm::scene::damage_window(win_id);
                     crate::wm::user_windows::close_all_for_pid(owner_pid);
                     crate::sched::kill(owner_pid);
                     crate::wm::dirty::mark();

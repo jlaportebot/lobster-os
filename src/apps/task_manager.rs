@@ -149,6 +149,7 @@ pub fn render_to_windows(fbuf: &crate::display::fb::FramebufferInfo) {
         return;
     };
     let focused = window::focused_id() == win_id;
+    let fbuf = &crate::wm::scene::window_target(win_id, fbuf);
     let (cx, cy, cw, ch) =
         crate::wm::window_frame::draw_frame(fbuf, win_id, x, y, w, h, APP_NAME, focused);
     let t = theme::current();

@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 const MAX_DIRTY: usize = 8;
 
 /// Maximum number of layers (windows) the compositor tracks
-const MAX_LAYERS: usize = 8;
+const MAX_LAYERS: usize = 32;
 
 /// Maximum frame history for timing statistics
 const MAX_FRAME_HISTORY: usize = 120;
@@ -967,6 +967,20 @@ pub fn layer_z_order(id: u32) -> u32 {
     0
 }
 
+/// Visible layers sorted bottom-most first (the order to paint them in).
+#[must_use]
+pub fn visible_layers_bottom_to_top() -> alloc::vec::Vec<Layer> {
+    let layers = LAYERS.lock();
+    let layer_count = *LAYER_COUNT.lock();
+    let mut visible: alloc::vec::Vec<Layer> = layers[..layer_count]
+        .iter()
+        .filter(|layer| layer.visible)
+        .copied()
+        .collect();
+    visible.sort_by_key(|layer| layer.z_order);
+    visible
+}
+
 pub fn raise_layer(id: u32) {
     let mut layers = LAYERS.lock();
     let layer_count = *LAYER_COUNT.lock();
@@ -978,7 +992,10 @@ pub fn raise_layer(id: u32) {
     for i in 0..layer_count {
         if layers[i].id == id {
             layers[i].z_order = max_z + 1;
+            let bounds = layers[i].bounds();
             *FULL_REDRAW.lock() = true;
+            drop(layers);
+            mark_dirty(bounds);
             return;
         }
     }
@@ -988,6 +1005,17 @@ pub fn raise_layer(id: u32) {
 
 /// Mark a region as needing repaint
 pub fn mark_dirty(rect: DirtyRect) {
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        // Include the drop shadow the scene compositor paints beside windows.
+        const SHADOW_MARGIN: u32 = 8;
+        crate::wm::scene::damage(crate::wm::scene::Rect::from_xywh(
+            rect.x,
+            rect.y,
+            rect.w + SHADOW_MARGIN,
+            rect.h + SHADOW_MARGIN,
+        ));
+    }
     let mut dirty_list = DIRTY_LIST.lock();
     let mut dirty_count = DIRTY_COUNT.lock();
     let mut full_redraw = FULL_REDRAW.lock();
@@ -1010,6 +1038,8 @@ pub fn mark_dirty(rect: DirtyRect) {
 
 /// Mark the entire screen dirty
 pub fn mark_full_redraw() {
+    #[cfg(feature = "qemu_raspi5b")]
+    crate::wm::scene::damage_all();
     // On QEMU, skip full redraw — it wipes terminal content.
     // Terminal is rendered separately in render_to_windows().
     #[cfg(not(feature = "qemu_raspi5b"))]
