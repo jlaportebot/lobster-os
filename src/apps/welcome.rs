@@ -7,17 +7,34 @@ use crate::fs::vfs;
 use crate::println;
 use crate::wm::window;
 
-const WELCOME_MARKER_PATH: &str = "/etc/lobster_welcome_seen";
+/// Persistent marker path (survives reboots when a disk is attached).
+const WELCOME_MARKER_PERSISTENT: &str = "/sd/etc/lobster_welcome_seen";
+/// Volatile fallback path (no persistent disk attached).
+const WELCOME_MARKER_VOLATILE: &str = "/etc/lobster_welcome_seen";
+
+/// The path the marker is (or would be) stored at: persistent when /sd is
+/// mounted, volatile otherwise.
+fn marker_path() -> &'static str {
+    if vfs::stat("/sd").is_some() {
+        WELCOME_MARKER_PERSISTENT
+    } else {
+        WELCOME_MARKER_VOLATILE
+    }
+}
 
 /// Check if the welcome window has already been shown
 pub fn is_welcome_seen() -> bool {
-    vfs::stat(WELCOME_MARKER_PATH).is_some()
+    vfs::stat(WELCOME_MARKER_PERSISTENT).is_some() || vfs::stat(WELCOME_MARKER_VOLATILE).is_some()
 }
 
 /// Mark the welcome window as seen (create marker file)
 pub fn mark_welcome_seen() {
-    let _ = vfs::write_file(WELCOME_MARKER_PATH, b"1");
-    println!("[welcome] Marker written to {}", WELCOME_MARKER_PATH);
+    let path = marker_path();
+    if path == WELCOME_MARKER_PERSISTENT {
+        let _ = vfs::create_dir("/sd/etc");
+    }
+    let _ = vfs::write_file(path, b"1");
+    println!("[welcome] Marker written to {}", path);
 }
 
 /// Show the welcome window (called once on first boot)
@@ -182,8 +199,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_welcome_marker_path() {
-        assert_eq!(WELCOME_MARKER_PATH, "/etc/lobster_welcome_seen");
+    fn test_welcome_marker_paths() {
+        assert_eq!(WELCOME_MARKER_PERSISTENT, "/sd/etc/lobster_welcome_seen");
+        assert_eq!(WELCOME_MARKER_VOLATILE, "/etc/lobster_welcome_seen");
+    }
+
+    #[test]
+    fn test_marker_path_prefers_persistent_when_sd_mounted() {
+        // Without a disk the volatile path is used.
+        assert_eq!(marker_path(), WELCOME_MARKER_VOLATILE);
     }
 }
 

@@ -234,8 +234,8 @@ pub fn handle_click(icon_idx: usize) {
 
     match action {
         IconAction::Terminal => {
-            // Try to focus existing terminal window, or create one
-            let id = window::create(100, 80, 720, 500, "Terminal");
+            // Focus the existing terminal window, or create a real one
+            let id = crate::apps::terminal::open_terminal_window(100, 80, 720, 500);
             if let Some(id) = id {
                 window::focus(id);
             }
