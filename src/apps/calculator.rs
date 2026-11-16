@@ -296,6 +296,11 @@ fn on_key_hit(hit: &hit_region::Hit) -> bool {
     pressed
 }
 
+/// Text currently shown on the calculator display (for shell diagnostics).
+pub fn display_text() -> alloc::string::String {
+    alloc::string::String::from(get_calculator().engine.display())
+}
+
 pub fn init() {
     crate::println!("[apps] Calculator initialized");
 }

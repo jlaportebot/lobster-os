@@ -1582,6 +1582,17 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
             }
             0
         }
+        "dialog" => {
+            cmd_dialog(&args, argc);
+            0
+        }
+        "calc" => {
+            crate::println!(
+                "Calculator state: display={}",
+                crate::apps::calculator::display_text()
+            );
+            0
+        }
         "menu" => {
             #[cfg(target_arch = "aarch64")]
             {
@@ -4116,6 +4127,31 @@ fn cmd_env_unset(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
     env_unset(args[1]);
     0
+}
+
+/// `dialog alert|confirm <text>` raises a modal dialog; `dialog result`
+/// prints (and consumes) the last answer. Lets the modal stack be exercised
+/// from the shell, since no app raises dialogs yet.
+fn cmd_dialog(args: &[&str], argc: usize) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        use crate::wm::dialog;
+        let text = if argc >= 3 { args[2] } else { "Are you sure?" };
+        match args.get(1).copied() {
+            Some("alert") if argc >= 2 => dialog::alert("Alert", text),
+            Some("confirm") if argc >= 2 => dialog::confirm("Confirm", text),
+            Some("result") => match dialog::take_result() {
+                Some(result) => crate::println!("dialog: result {}", result),
+                None => crate::println!("dialog: result none"),
+            },
+            _ => crate::println!("dialog: usage: dialog alert|confirm <text> | dialog result"),
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let _ = (args, argc);
+        crate::println!("dialog: aarch64 only");
+    }
 }
 
 fn cmd_env_list() -> i32 {
