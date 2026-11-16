@@ -171,7 +171,12 @@ impl CalculatorEngine {
 
             // Tape entry: "lhs op rhs = result"
             let mut entry = String::new();
-            write!(&mut entry, "{} {} {} = {}", lhs, op, rhs_display, result_display).ok();
+            write!(
+                &mut entry,
+                "{} {} {} = {}",
+                lhs, op, rhs_display, result_display
+            )
+            .ok();
             if self.history.len() == HISTORY_CAP {
                 self.history.remove(0);
             }
