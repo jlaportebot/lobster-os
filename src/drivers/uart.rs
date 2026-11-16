@@ -240,9 +240,12 @@ mod aarch64_uart {
             mmio_write32(reg_addr(UART_DR_OFF), c as u32);
         }
         // On QEMU raspi5b, mirror serial output to the graphical terminal screen buffer
-        // so the framebuffer terminal displays live shell interaction.
+        // ONLY when the console mirror gate is enabled (shell output, prompt echo, etc.).
+        // Kernel println!/print! output (mirror gate OFF) goes to serial + klog only.
         #[cfg(feature = "qemu_raspi5b")]
-        crate::apps::terminal::mirror_serial_byte(c);
+        if crate::console::mirror_to_terminal_enabled() {
+            crate::apps::terminal::mirror_serial_byte(c);
+        }
     }
 
     #[inline]

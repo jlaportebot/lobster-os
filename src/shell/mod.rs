@@ -848,7 +848,12 @@ impl ShellOut {
 
     fn write_bytes(&self, b: &[u8]) {
         match self {
-            ShellOut::Console => Uart10::puts_bytes(b),
+            ShellOut::Console => {
+                // Use terminal mirroring so output appears in the GUI Terminal window
+                crate::console::with_terminal_mirror(|| {
+                    Uart10::puts_bytes(b);
+                });
+            }
             ShellOut::File(fd) => {
                 let _ = crate::fs::vfs::write(*fd, b);
             }
@@ -883,162 +888,158 @@ fn run_builtin(
 fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) -> i32 {
     match cmd {
         "help" | "?" => {
-            cmd_help();
+            cmd_help(out);
+            0
+        }
+        "dmesg" => {
+            cmd_dmesg(out);
             0
         }
         "clear" => {
-            cmd_clear();
+            cmd_clear(out);
             0
         }
         "uptime" => {
-            cmd_uptime();
+            cmd_uptime(out);
             0
         }
         "mem" | "memory" => {
-            cmd_mem();
+            cmd_mem(out);
             0
         }
         "ps" | "procs" => {
-            cmd_ps();
+            cmd_ps(out);
             0
         }
-        "kill" => cmd_kill(args, argc),
+        "kill" => cmd_kill(args, argc, out),
         "echo" => cmd_echo(args, argc, out),
         "reboot" => {
-            cmd_reboot();
+            cmd_reboot(out);
             0
         }
         "halt" | "shutdown" => {
-            cmd_halt();
+            cmd_halt(out);
             0
         }
         "version" | "ver" => {
-            cmd_version();
+            cmd_version(out);
             0
         }
         "cpu" => {
-            cmd_cpu();
+            cmd_cpu(out);
             0
         }
         "timer" => {
-            cmd_timer();
+            cmd_timer(out);
             0
         }
         "panic" => {
-            cmd_panic();
+            cmd_panic(out);
             0
         }
         "yield" => {
-            cmd_yield();
+            cmd_yield(out);
             0
         }
         "test" => {
-            cmd_test(args, argc);
-            0
-        }
-        "hexdump" => {
-            cmd_hexdump(args, argc);
-            0
-        }
-        "gpio" => {
-            cmd_gpio(args, argc);
+            cmd_test(args, argc, out);
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "ifconfig" => {
-            cmd_ifconfig_legacy();
+            cmd_ifconfig_legacy(out);
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "ping" => {
-            cmd_ping_legacy(args, argc);
+            cmd_ping_legacy(args, argc, out);
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "arp" => {
-            cmd_arp(args, argc);
+            cmd_arp(args, argc, out);
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "dhcp" => {
-            cmd_dhcp(args, argc);
+            cmd_dhcp(args, argc, out);
             0
         }
         #[cfg(target_arch = "x86_64")]
         "dhcp" => {
-            Uart10::puts("DHCP not available on x86_64.\r\n");
+            out.puts("DHCP not available on x86_64.\r\n");
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "dns" => {
-            cmd_dns(args, argc);
+            cmd_dns(args, argc, out);
             0
         }
         #[cfg(target_arch = "x86_64")]
         "dns" => {
-            Uart10::puts("DNS not available on x86_64.\r\n");
+            out.puts("DNS not available on x86_64.\r\n");
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "net" => {
-            cmd_net(args, argc);
+            cmd_net(args, argc, out);
             0
         }
         #[cfg(target_arch = "x86_64")]
         "net" => {
-            Uart10::puts("Network commands not available on x86_64.\r\n");
+            out.puts("Network commands not available on x86_64.\r\n");
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "wm" => {
-            cmd_wm(args, argc);
+            cmd_wm(args, argc, out);
             0
         }
         #[cfg(target_arch = "x86_64")]
         "wm" => {
-            Uart10::puts("Window manager not available on x86_64.\r\n");
+            out.puts("Window manager not available on x86_64.\r\n");
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "audio" => {
-            cmd_audio(args, argc);
+            cmd_audio(args, argc, out);
             0
         }
         #[cfg(target_arch = "x86_64")]
         "audio" => {
-            Uart10::puts("Audio not available on x86_64.\r\n");
+            out.puts("Audio not available on x86_64.\r\n");
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "gpu" => {
-            cmd_gpu(args, argc);
+            cmd_gpu(args, argc, out);
             0
         }
         #[cfg(target_arch = "x86_64")]
         "gpu" => {
-            Uart10::puts("GPU not available on x86_64.\r\n");
+            out.puts("GPU not available on x86_64.\r\n");
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
         "wifi" => {
-            cmd_wifi(args, argc);
+            cmd_wifi(args, argc, out);
             0
         }
         #[cfg(target_arch = "x86_64")]
         "wifi" => {
-            Uart10::puts("WiFi not available on x86_64.\r\n");
+            out.puts("WiFi not available on x86_64.\r\n");
             0
         }
         #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
-        "pkg" => cmd_pkg(args, argc),
+        "pkg" => cmd_pkg(args, argc, out),
         #[cfg(all(feature = "qemu", target_arch = "aarch64"))]
-        "pkg" | "apt" => cmd_pkg(args, argc),
+        "pkg" | "apt" => cmd_pkg(args, argc, out),
         #[cfg(target_arch = "x86_64")]
         "pkg" | "apt" => {
-            Uart10::puts("Package manager not available on x86_64.\r\n");
+            out.puts("Package manager not available on x86_64.\r\n");
             0
         }
-        "gh" => cmd_gh(args, argc),
+        "gh" => cmd_gh(args, argc, out),
         "wmconfig" => {
             #[cfg(target_arch = "aarch64")]
             crate::wm::config::shell_command(&args[..argc]);
@@ -1050,10 +1051,10 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                 if argc >= 2 {
                     crate::wm::theme::toggle();
                 } else {
-                    crate::println!(
-                        "theme: {} (run 'theme toggle' to switch)",
+                    out.puts(&alloc::format!(
+                        "theme: {} (run 'theme toggle' to switch)\r\n",
                         crate::wm::theme::current_name()
-                    );
+                    ));
                 }
             }
             0
@@ -1063,10 +1064,16 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
             {
                 if argc >= 2 {
                     let ok = crate::wm::wallpaper::set_by_name(args[1]);
-                    crate::println!("wallpaper: {}", if ok { args[1] } else { "not found" });
+                    out.puts(&alloc::format!(
+                        "wallpaper: {}\r\n",
+                        if ok { args[1] } else { "not found" }
+                    ));
                 } else {
                     crate::wm::wallpaper::next();
-                    crate::println!("wallpaper: {}", crate::wm::wallpaper::active().name);
+                    out.puts(&alloc::format!(
+                        "wallpaper: {}\r\n",
+                        crate::wm::wallpaper::active().name
+                    ));
                 }
             }
             0
@@ -1076,9 +1083,13 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
             {
                 if argc >= 2 {
                     let id = crate::apps::browser::open(args[1]);
-                    crate::println!("browser: opened {} (win {})", args[1], id);
+                    out.puts(&alloc::format!(
+                        "browser: opened {} (win {})\r\n",
+                        args[1],
+                        id
+                    ));
                 } else {
-                    crate::println!("browser: usage: browser <url>");
+                    out.puts("browser: usage: browser <url>\r\n");
                 }
             }
             0
@@ -1122,13 +1133,13 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                 const MAX_W: u32 = 2560;
                 const MAX_H: u32 = 1600;
                 if w < MIN_W || h < MIN_H || w > MAX_W || h > MAX_H {
-                    crate::println!(
-                        "usage: resolution <{}-{}> <{}-{}>",
+                    out.puts(&alloc::format!(
+                        "usage: resolution <{}-{}> <{}-{}>\r\n",
                         MIN_W,
                         MAX_W,
                         MIN_H,
                         MAX_H
-                    );
+                    ));
                     return 0;
                 }
                 match crate::display::fb::init(w, h, 32) {
@@ -1151,9 +1162,13 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                             }
                         }
                         crate::wm::dirty::mark();
-                        crate::println!("resolution: now {}x{}", info.width, info.height);
+                        out.puts(&alloc::format!(
+                            "resolution: now {}x{}\r\n",
+                            info.width,
+                            info.height
+                        ));
                     }
-                    Err(e) => crate::println!("resolution: failed: {:?}", e),
+                    Err(e) => out.puts(&alloc::format!("resolution: failed: {:?}\r\n", e)),
                 }
             }
             0
@@ -1172,10 +1187,10 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                     300
                 };
                 if !crate::drivers::lobster_audio::detect() {
-                    crate::println!("beep: audio device absent");
+                    out.puts("beep: audio device absent\r\n");
                 } else {
                     let n = crate::drivers::lobster_audio::beep(freq, ms);
-                    crate::println!("beep: played {} bytes of PCM", n);
+                    out.puts(&alloc::format!("beep: played {} bytes of PCM\r\n", n));
                 }
             }
             0
@@ -1184,19 +1199,23 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
             #[cfg(target_arch = "aarch64")]
             {
                 if argc < 2 {
-                    crate::println!("usage: play <16-bit mono 8kHz raw pcm file>");
+                    out.puts("usage: play <16-bit mono 8kHz raw pcm file>\r\n");
                     return 0;
                 }
                 if !crate::drivers::lobster_audio::detect() {
-                    crate::println!("play: audio device absent");
+                    out.puts("play: audio device absent\r\n");
                     return 0;
                 }
                 match crate::fs::vfs::read_file(args[1]) {
                     Ok(data) => {
                         let n = crate::drivers::lobster_audio::play_pcm(&data);
-                        crate::println!("play: {} bytes", n);
+                        out.puts(&alloc::format!("play: {} bytes\r\n", n));
                     }
-                    Err(e) => crate::println!("play: read {} failed: {:?}", args[1], e),
+                    Err(e) => out.puts(&alloc::format!(
+                        "play: read {} failed: {:?}\r\n",
+                        args[1],
+                        e
+                    )),
                 }
             }
             0
@@ -1204,15 +1223,15 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
         "share" => match if argc >= 2 { Some(args[1]) } else { None } {
             None => {
                 if crate::drivers::lobster_share::detect() {
-                    crate::println!("share: device present (host LBST_SHARE)");
+                    out.puts("share: device present (host LBST_SHARE)\r\n");
                     let mut n = 0;
                     let _ = crate::drivers::lobster_share::list_dir("", |name| {
-                        crate::println!("  {}", name);
+                        out.puts(&alloc::format!("  {}\r\n", name));
                         n += 1;
                     });
-                    crate::println!("share: {} entries", n);
+                    out.puts(&alloc::format!("share: {} entries\r\n", n));
                 } else {
-                    crate::println!("share: device absent");
+                    out.puts("share: device absent\r\n");
                 }
                 0
             }
@@ -1221,14 +1240,18 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                 match crate::drivers::lobster_share::read_file(name) {
                     Some(data) => {
                         if let Ok(s) = core::str::from_utf8(&data) {
-                            crate::println!("{}", s.trim_end());
+                            out.puts(&alloc::format!("{}\r\n", s.trim_end()));
                         } else {
-                            crate::println!("share: {} is binary ({} bytes)", name, data.len());
+                            out.puts(&alloc::format!(
+                                "share: {} is binary ({} bytes)\r\n",
+                                name,
+                                data.len()
+                            ));
                         }
                         0
                     }
                     None => {
-                        crate::println!("share: not found: {}", name);
+                        out.puts(&alloc::format!("share: not found: {}\r\n", name));
                         0
                     }
                 }
@@ -1241,23 +1264,32 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                         let fd = match vfs::open(to, vfs::O_WRONLY | vfs::O_CREAT | vfs::O_TRUNC) {
                             Ok(fd) => fd,
                             Err(e) => {
-                                crate::println!("share: cannot create {}: {:?}", to, e);
+                                out.puts(&alloc::format!(
+                                    "share: cannot create {}: {:?}\r\n",
+                                    to,
+                                    e
+                                ));
                                 return 0;
                             }
                         };
                         let _ = vfs::write(fd, &data);
                         vfs::close(fd);
-                        crate::println!("share: {} -> {} ({} bytes)", from, to, data.len());
+                        out.puts(&alloc::format!(
+                            "share: {} -> {} ({} bytes)\r\n",
+                            from,
+                            to,
+                            data.len()
+                        ));
                         0
                     }
                     None => {
-                        crate::println!("share: not found: {}", from);
+                        out.puts(&alloc::format!("share: not found: {}\r\n", from));
                         0
                     }
                 }
             }
             Some(other) => {
-                crate::println!("share: unknown subcommand '{}'", other);
+                out.puts(&alloc::format!("share: unknown subcommand '{}'\r\n", other));
                 0
             }
         },
@@ -1265,23 +1297,23 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
             #[cfg(target_arch = "aarch64")]
             {
                 let count = crate::wm::window::count();
-                crate::println!(
-                    "wins: {} windows (focused id={})",
+                out.puts(&alloc::format!(
+                    "wins: {} windows (focused id={})\r\n",
                     count,
                     crate::wm::window::focused_id()
-                );
+                ));
                 for id in 1..=count as u32 {
                     if crate::wm::window::exists(id) {
                         if let Some((x, y, w, h)) = crate::wm::window::get_info(id) {
-                            crate::println!(
-                                "wins: id={} '{}' at ({},{}) {}x{}",
+                            out.puts(&alloc::format!(
+                                "wins: id={} '{}' at ({},{}) {}x{}\r\n",
                                 id,
                                 crate::wm::window::get_title(id),
                                 x,
                                 y,
                                 w,
                                 h
-                            );
+                            ));
                         }
                     }
                 }
@@ -1611,7 +1643,7 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
         "wc" => cmd_wc(args, argc),
         "du" => cmd_du(args, argc),
         "df" => cmd_df(),
-        "free" => cmd_free(),
+        "free" => cmd_free(out),
         "which" => cmd_which(args, argc),
         "uname" => cmd_uname(),
         "date" => cmd_date(),
@@ -1670,112 +1702,114 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
 }
 
 // === Built-in commands ===
-fn cmd_help() {
-    Uart10::puts("Lobster OS Shell Commands:\r\n");
-    Uart10::puts("-------------------------------\r\n");
-    Uart10::puts("  help / ?        Show this help message\r\n");
-    Uart10::puts("  clear           Clear the screen\r\n");
-    Uart10::puts("  uptime          Show system uptime\r\n");
-    Uart10::puts("  mem / memory    Show memory usage\r\n");
-    Uart10::puts("  ps / procs      List running processes\r\n");
-    Uart10::puts("  kill <pid>      Kill a process by PID\r\n");
-    Uart10::puts("  echo <text>     Print text to console\r\n");
-    Uart10::puts("  version / ver   Show OS version\r\n");
-    Uart10::puts("  cpu             Show CPU info\r\n");
-    Uart10::puts("  timer           Show timer info\r\n");
-    Uart10::puts(" gpio <pin> Read/set GPIO pin state\r\n");
+fn cmd_help(out: &ShellOut) {
+    out.puts("Lobster OS Shell Commands:\r\n");
+    out.puts("-------------------------------\r\n");
+    out.puts("  help / ?        Show this help message\r\n");
+    out.puts("  clear           Clear the screen\r\n");
+    out.puts("  uptime          Show system uptime\r\n");
+    out.puts("  mem / memory    Show memory usage\r\n");
+    out.puts("  ps / procs      List running processes\r\n");
+    out.puts("  kill <pid>      Kill a process by PID\r\n");
+    out.puts("  echo <text>     Print text to console\r\n");
+    out.puts("  version / ver   Show OS version\r\n");
+    out.puts("  cpu             Show CPU info\r\n");
+    out.puts("  timer           Show timer info\r\n");
+    out.puts(" gpio <pin> Read/set GPIO pin state\r\n");
     #[cfg(not(feature = "qemu_raspi5b"))]
     {
-        Uart10::puts(" ifconfig Show network interface config\r\n");
-        Uart10::puts(" ping <ip> Send ICMP echo request\r\n");
-        Uart10::puts(" arp <ip> Resolve IP via ARP\r\n");
-        Uart10::puts(" dhcp [renew|release] DHCP client control\r\n");
-        Uart10::puts(" dns <domain> Resolve domain name via DNS\r\n");
-        Uart10::puts(" net [poll|stats] Network utilities\r\n");
-        Uart10::puts(" wm [info|theme] Window manager info\r\n");
-        Uart10::puts(" audio [beep|tone|stop|vol|status] Audio control\r\n");
-        Uart10::puts(" gpu [info|status|clock|blank|mode] GPU/display control\r\n");
-        Uart10::puts(" wifi [scan|connect|disconnect|status] WiFi management\r\n");
+        out.puts(" ifconfig Show network interface config\r\n");
+        out.puts(" ping <ip> Send ICMP echo request\r\n");
+        out.puts(" arp <ip> Resolve IP via ARP\r\n");
+        out.puts(" dhcp [renew|release] DHCP client control\r\n");
+        out.puts(" dns <domain> Resolve domain name via DNS\r\n");
+        out.puts(" net [poll|stats] Network utilities\r\n");
+        out.puts(" wm [info|theme] Window manager info\r\n");
+        out.puts(" audio [beep|tone|stop|vol|status] Audio control\r\n");
+        out.puts(" gpu [info|status|clock|blank|mode] GPU/display control\r\n");
+        out.puts(" wifi [scan|connect|disconnect|status] WiFi management\r\n");
     }
-    Uart10::puts(" login [user]     Login as user\r\n");
-    Uart10::puts(" su [user]        Switch user (default root)\r\n");
-    Uart10::puts(" sudo <cmd>       Run command as another user\r\n");
-    Uart10::puts(" passwd [user]    Change password\r\n");
-    Uart10::puts("  useradd [opts] <user> Add user (-m -p <pass> -s <shell>)\r\n");
-    Uart10::puts(" userdel <user>   Delete user\r\n");
-    Uart10::puts(" groupadd <group> Add new group\r\n");
-    Uart10::puts(" groupdel <group> Delete group\r\n");
-    Uart10::puts(" id [user]        Show user/group IDs\r\n");
-    Uart10::puts(" whoami           Show current user\r\n");
-    Uart10::puts(" hexdump <addr> Hex dump memory at address\r\n");
-    Uart10::puts(" yield Yield the current timeslice\r\n");
-    Uart10::puts(" test <name> Run a built-in test\r\n");
-    Uart10::puts(" set/export <NAME=VAL> Set environment variable\r\n");
-    Uart10::puts(" unset <NAME> Unset environment variable\r\n");
-    Uart10::puts(" env / printenv List environment variables\r\n");
-    Uart10::puts(" history / hist Show command history\r\n");
-    Uart10::puts("  ls [-l|-a] [path] List directory contents\r\n");
-    Uart10::puts("  cd [path]       Change working directory\r\n");
-    Uart10::puts("  pwd             Print working directory\r\n");
-    Uart10::puts("  mkdir <path>    Create directory\r\n");
-    Uart10::puts("  rm <path>       Remove file or directory\r\n");
-    Uart10::puts("  mv <src> <dst>  Move/rename file\r\n");
-    Uart10::puts("  cp <src> <dst>  Copy file\r\n");
-    Uart10::puts("  touch <file>    Create empty file\r\n");
-    Uart10::puts("  chmod <mode> <path> Change file permissions\r\n");
-    Uart10::puts("  chown <uid:gid> <path> Change file ownership\r\n");
-    Uart10::puts("  cat <path>      Display file contents\r\n");
-    Uart10::puts("  head [-n N] <file> Show first N lines of file\r\n");
-    Uart10::puts("  tail [-n N] <file> Show last N lines of file\r\n");
-    Uart10::puts("  wc <file>       Count lines/words/bytes\r\n");
-    Uart10::puts("  du [path]       Estimate file space usage\r\n");
-    Uart10::puts("  df              Show filesystem disk space\r\n");
-    Uart10::puts("  free            Show free/used memory\r\n");
-    Uart10::puts("  find <path> -name <pat> Search for files\r\n");
-    Uart10::puts("  curl <url>       Download from URL (HTTP GET)\r\n");
-    Uart10::puts("  wget <url>       Download file from URL\r\n");
-    Uart10::puts("  ip / ifconfig    Show network interface info\r\n");
-    Uart10::puts("  ping <host>      Send ICMP echo to host\r\n");
-    Uart10::puts("  host <name>       DNS lookup\r\n");
-    Uart10::puts("  netstat          Show network socket status\r\n");
-    Uart10::puts("  pkg <cmd>        Package manager (install/remove/list, update/search)\r\n");
-    Uart10::puts("  gh <cmd>         GitHub CLI: auth login|status|logout, api <endpoint>, repo list, user\r\n");
-    Uart10::puts("  which <cmd>     Locate a command\r\n");
-    Uart10::puts("  uname           Show system information\r\n");
-    Uart10::puts("  date            Show system time/uptime\r\n");
-    Uart10::puts(" run <path|demo> Run ELF binary as user process\r\n");
-    Uart10::puts(" cc <file.c>     Compile C source to ELF (via lobster-net)\r\n");
-    Uart10::puts(" vi <file>       Simple text editor (line-based)\r\n");
-    Uart10::puts(" grep <pat> <file> Search for pattern in file\r\n");
-    Uart10::puts(" sort <file>     Sort lines of file\r\n");
-    Uart10::puts(" cut <field> <file> Extract fields from lines\r\n");
-    Uart10::puts(" tr <set1> <set2> Translate characters\r\n");
-    Uart10::puts(" seq <n>         Print number sequence\r\n");
-    Uart10::puts(" stat <path>     Show file stats\r\n");
-    Uart10::puts(" file <path>     Show file type\r\n");
-    Uart10::puts(" ln <src> <dst>  Create hard link\r\n");
-    Uart10::puts(" sleep <sec>     Sleep for N seconds\r\n");
-    Uart10::puts(" man <cmd>       Show manual for command\r\n");
-    Uart10::puts(" who             Show logged-in users\r\n");
-    Uart10::puts(" basename <path> Strip directory from path\r\n");
-    Uart10::puts(" dirname <path>  Strip filename from path\r\n");
-    Uart10::puts(" svc <list|start|stop|restart|reset|deps> Service mgmt\r\n");
-    Uart10::puts(" runlevel [get|set <N>] Show/set runlevel\r\n");
-    Uart10::puts(
-        " pkg <update|search|install|remove|list|info|repo|install-multi> Package mgmt\r\n",
-    );
-    Uart10::puts(" reboot Reboot the system\r\n");
-    Uart10::puts(" halt / shutdown Halt the system\r\n");
-    Uart10::puts(" panic Trigger a kernel panic (TEST!)\r\n");
-    Uart10::puts("-------------------------------\r\n");
+    out.puts(" login [user]     Login as user\r\n");
+    out.puts(" su [user]        Switch user (default root)\r\n");
+    out.puts(" sudo <cmd>       Run command as another user\r\n");
+    out.puts(" passwd [user]    Change password\r\n");
+    out.puts("  useradd [opts] <user> Add user (-m -p <pass> -s <shell>)\r\n");
+    out.puts(" userdel <user>   Delete user\r\n");
+    out.puts(" groupadd <group> Add new group\r\n");
+    out.puts(" groupdel <group> Delete group\r\n");
+    out.puts(" id [user]        Show user/group IDs\r\n");
+    out.puts(" whoami           Show current user\r\n");
+    out.puts(" hexdump <addr> Hex dump memory at address\r\n");
+    out.puts(" yield Yield the current timeslice\r\n");
+    out.puts(" test <name> Run a built-in test\r\n");
+    out.puts(" set/export <NAME=VAL> Set environment variable\r\n");
+    out.puts(" unset <NAME> Unset environment variable\r\n");
+    out.puts(" env / printenv List environment variables\r\n");
+    out.puts(" history / hist Show command history\r\n");
+    out.puts("  ls [-l|-a] [path] List directory contents\r\n");
+    out.puts("  cd [path]       Change working directory\r\n");
+    out.puts("  pwd             Print working directory\r\n");
+    out.puts("  mkdir <path>    Create directory\r\n");
+    out.puts("  rm <path>       Remove file or directory\r\n");
+    out.puts("  mv <src> <dst>  Move/rename file\r\n");
+    out.puts("  cp <src> <dst>  Copy file\r\n");
+    out.puts("  touch <file>    Create empty file\r\n");
+    out.puts("  chmod <mode> <path> Change file permissions\r\n");
+    out.puts("  chown <uid:gid> <path> Change file ownership\r\n");
+    out.puts("  cat <path>      Display file contents\r\n");
+    out.puts("  head [-n N] <file> Show first N lines of file\r\n");
+    out.puts("  tail [-n N] <file> Show last N lines of file\r\n");
+    out.puts("  wc <file>       Count lines/words/bytes\r\n");
+    out.puts("  du [path]       Estimate file space usage\r\n");
+    out.puts("  df              Show filesystem disk space\r\n");
+    out.puts("  free            Show free/used memory\r\n");
+    out.puts("  find <path> -name <pat> Search for files\r\n");
+    out.puts("  curl <url>       Download from URL (HTTP GET)\r\n");
+    out.puts("  wget <url>       Download file from URL\r\n");
+    out.puts("  ip / ifconfig    Show network interface info\r\n");
+    out.puts("  ping <host>      Send ICMP echo to host\r\n");
+    out.puts("  host <name>       DNS lookup\r\n");
+    out.puts("  netstat          Show network socket status\r\n");
+    out.puts("  pkg <cmd>        Package manager (install/remove/list, update/search)\r\n");
+    out.puts("  gh <cmd>         GitHub CLI: auth login|status|logout, api <endpoint>, repo list, user\r\n");
+    out.puts("  which <cmd>     Locate a command\r\n");
+    out.puts("  uname           Show system information\r\n");
+    out.puts("  date            Show system time/uptime\r\n");
+    out.puts(" run <path|demo> Run ELF binary as user process\r\n");
+    out.puts(" cc <file.c>     Compile C source to ELF (via lobster-net)\r\n");
+    out.puts(" vi <file>       Simple text editor (line-based)\r\n");
+    out.puts(" grep <pat> <file> Search for pattern in file\r\n");
+    out.puts(" sort <file>     Sort lines of file\r\n");
+    out.puts(" cut <field> <file> Extract fields from lines\r\n");
+    out.puts(" tr <set1> <set2> Translate characters\r\n");
+    out.puts(" seq <n>         Print number sequence\r\n");
+    out.puts(" stat <path>     Show file stats\r\n");
+    out.puts(" file <path>     Show file type\r\n");
+    out.puts(" ln <src> <dst>  Create hard link\r\n");
+    out.puts(" sleep <sec>     Sleep for N seconds\r\n");
+    out.puts(" man <cmd>       Show manual for command\r\n");
+    out.puts(" who             Show logged-in users\r\n");
+    out.puts(" basename <path> Strip directory from path\r\n");
+    out.puts(" dirname <path>  Strip filename from path\r\n");
+    out.puts(" svc <list|start|stop|restart|reset|deps> Service mgmt\r\n");
+    out.puts(" runlevel [get|set <N>] Show/set runlevel\r\n");
+    out.puts(" pkg <update|search|install|remove|list|info|repo|install-multi> Package mgmt\r\n");
+    out.puts(" reboot Reboot the system\r\n");
+    out.puts(" halt / shutdown Halt the system\r\n");
+    out.puts(" panic Trigger a kernel panic (TEST!)\r\n");
+    out.puts("-------------------------------\r\n");
 }
 
-fn cmd_clear() {
+fn cmd_dmesg(out: &ShellOut) {
+    crate::klog::klog_dump_with(|line| out.puts(line));
+}
+
+fn cmd_clear(out: &ShellOut) {
     // ANSI escape: clear screen + cursor home
-    Uart10::puts("\x1B[2J\x1B[H");
+    out.puts("\x1B[2J\x1B[H");
 }
 
-fn cmd_uptime() {
+fn cmd_uptime(out: &ShellOut) {
     let ms = crate::arch::ArchTimer::uptime_ms();
     let secs = ms / 1000;
     let mins = secs / 60;
@@ -1783,30 +1817,35 @@ fn cmd_uptime() {
     let days = hrs / 24;
 
     if days > 0 {
-        crate::println!(
-            "Uptime: {}d {}h {}m {}s ({}ms total)",
+        out.puts(&alloc::format!(
+            "Uptime: {}d {}h {}m {}s ({}ms total)\r\n",
             days,
             hrs % 24,
             mins % 60,
             secs % 60,
             ms
-        );
+        ));
     } else if hrs > 0 {
-        crate::println!(
-            "Uptime: {}h {}m {}s ({}ms total)",
+        out.puts(&alloc::format!(
+            "Uptime: {}h {}m {}s ({}ms total)\r\n",
             hrs % 24,
             mins % 60,
             secs % 60,
             ms
-        );
+        ));
     } else if mins > 0 {
-        crate::println!("Uptime: {}m {}s ({}ms total)", mins % 60, secs % 60, ms);
+        out.puts(&alloc::format!(
+            "Uptime: {}m {}s ({}ms total)\r\n",
+            mins % 60,
+            secs % 60,
+            ms
+        ));
     } else {
-        crate::println!("Uptime: {}.{:03}s", secs, ms % 1000);
+        out.puts(&alloc::format!("Uptime: {}.{:03}s\r\n", secs, ms % 1000));
     }
 }
 
-fn cmd_mem() {
+fn cmd_mem(out: &ShellOut) {
     // stats() returns (total, allocated, first_free); free = total - allocated
     let (total_frames, used_frames, _first_free) = crate::memory::frame_alloc::stats();
     let free_frames = total_frames.saturating_sub(used_frames);
@@ -1815,39 +1854,48 @@ fn cmd_mem() {
     let used_kb = (used_frames as u64 * page_size) / 1024;
     let free_kb = (free_frames as u64 * page_size) / 1024;
 
-    crate::println!("Memory Statistics:");
-    crate::println!(
-        "  Total: {} frames ({} KB / {} MB)",
+    out.puts("Memory Statistics:\r\n");
+    out.puts(&alloc::format!(
+        "  Total: {} frames ({} KB / {} MB)\r\n",
         total_frames,
         total_kb,
         total_kb / 1024
-    );
-    crate::println!("  Used:  {} frames ({} KB)", used_frames, used_kb);
-    crate::println!("  Free:  {} frames ({} KB)", free_frames, free_kb);
+    ));
+    out.puts(&alloc::format!(
+        "  Used:  {} frames ({} KB)\r\n",
+        used_frames,
+        used_kb
+    ));
+    out.puts(&alloc::format!(
+        "  Free:  {} frames ({} KB)\r\n",
+        free_frames,
+        free_kb
+    ));
 }
 
-fn cmd_ps() {
+fn cmd_ps(out: &ShellOut) {
     // Use the scheduler's built-in print_status which dumps all tasks
-    crate::sched::print_status();
+    // Redirect scheduler output through our sink
+    crate::sched::print_status_with(|line| out.puts(&alloc::format!("{}\r\n", line)));
 }
 
-fn cmd_kill(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+fn cmd_kill(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) -> i32 {
     if argc < 2 {
-        Uart10::puts("Usage: kill <pid>\r\n");
+        out.puts("Usage: kill <pid>\r\n");
         return 1;
     }
     match parse_u64(args[1]) {
         Some(pid) => {
             if crate::sched::kill(pid) {
-                crate::println!("Killed PID {}", pid);
+                out.puts(&alloc::format!("Killed PID {}\r\n", pid));
                 0
             } else {
-                crate::println!("kill: no such PID {}", pid);
+                out.puts(&alloc::format!("kill: no such PID {}\r\n", pid));
                 1
             }
         }
         None => {
-            Uart10::puts("Invalid PID\r\n");
+            out.puts("Invalid PID\r\n");
             1
         }
     }
@@ -1864,15 +1912,15 @@ fn cmd_echo(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) -> i32 {
     0
 }
 
-fn cmd_version() {
-    Uart10::puts("LobsterOS v0.2.0\r\n");
-    Uart10::puts("Target: AArch64 (BCM2712 / Raspberry Pi 5)\r\n");
-    Uart10::puts("Kernel: 0x80000000\r\n");
-    Uart10::puts("Scheduler: Round-robin preemptive\r\n");
+fn cmd_version(out: &ShellOut) {
+    out.puts("LobsterOS v0.2.0\r\n");
+    out.puts("Target: AArch64 (BCM2712 / Raspberry Pi 5)\r\n");
+    out.puts("Kernel: 0x80000000\r\n");
+    out.puts("Scheduler: Round-robin preemptive\r\n");
 }
 
 #[cfg(target_arch = "aarch64")]
-fn cmd_cpu() {
+fn cmd_cpu(out: &ShellOut) {
     let midr: u64;
     unsafe {
         core::arch::asm!("mrs {}, MIDR_EL1", out(reg) midr);
@@ -1891,15 +1939,15 @@ fn cmd_cpu() {
         _ => "Unknown",
     };
 
-    crate::println!(
-        "CPU: {} (implementer={:#x}, variant={}, arch={}, part={:#x}, rev={})",
+    out.puts(&alloc::format!(
+        "CPU: {} (implementer={:#x}, variant={}, arch={}, part={:#x}, rev={})\r\n",
         impl_name,
         implementer,
         variant,
         architecture,
         part_num,
         revision
-    );
+    ));
 
     // Read current EL
     let current_el: u64;
@@ -1907,7 +1955,7 @@ fn cmd_cpu() {
         core::arch::asm!("mrs {}, CurrentEL", out(reg) current_el);
     }
     let el = (current_el >> 2) & 0x3;
-    crate::println!("Current EL: EL{}", el);
+    out.puts(&alloc::format!("Current EL: EL{}\r\n", el));
 
     // Read core ID
     let mpidr: u64;
@@ -1915,26 +1963,34 @@ fn cmd_cpu() {
         core::arch::asm!("mrs {}, MPIDR_EL1", out(reg) mpidr);
     }
     let core_id = mpidr & 0xFF;
-    crate::println!("Core ID: {} (MPIDR={:#x})", core_id, mpidr);
+    out.puts(&alloc::format!(
+        "Core ID: {} (MPIDR={:#x})\r\n",
+        core_id,
+        mpidr
+    ));
 }
 
 #[cfg(not(target_arch = "aarch64"))]
-fn cmd_cpu() {
-    crate::println!("CPU info not available on this architecture");
+fn cmd_cpu(out: &ShellOut) {
+    out.puts("CPU info not available on this architecture\r\n");
 }
 
-fn cmd_timer() {
+fn cmd_timer(out: &ShellOut) {
     let freq = crate::arch::ArchTimer::frequency();
     let uptime = crate::arch::ArchTimer::uptime_ms();
     let sys_time = crate::arch::ArchTimer::system_time_us();
 
-    crate::println!("Timer frequency: {} Hz", freq);
-    crate::println!("System time: {} us ({} ms)", sys_time, sys_time / 1000);
-    crate::println!("Uptime: {} ms", uptime);
+    out.puts(&alloc::format!("Timer frequency: {} Hz\r\n", freq));
+    out.puts(&alloc::format!(
+        "System time: {} us ({} ms)\r\n",
+        sys_time,
+        sys_time / 1000
+    ));
+    out.puts(&alloc::format!("Uptime: {} ms\r\n", uptime));
 }
 
-fn cmd_halt() {
-    Uart10::puts("System halting...\r\n");
+fn cmd_halt(out: &ShellOut) {
+    out.puts("System halting...\r\n");
     #[cfg(target_arch = "aarch64")]
     crate::drivers::power::shutdown();
 }
@@ -1953,51 +2009,51 @@ fn print_wall_time(now: crate::clock::DateTime) {
     );
 }
 
-fn cmd_panic() {
-    Uart10::puts("Triggering test panic...\r\n");
+fn cmd_panic(out: &ShellOut) {
+    out.puts("Triggering test panic...\r\n");
     panic!("User-initiated test panic from shell");
 }
 
-fn cmd_yield() {
+fn cmd_yield(out: &ShellOut) {
     crate::sched::yield_task();
-    Uart10::puts("Yielded.\r\n");
+    out.puts("Yielded.\r\n");
 }
 
-fn cmd_test(args: [&str; MAX_ARGS], argc: usize) {
+fn cmd_test(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) {
     if argc < 2 {
-        Uart10::puts("Available tests:\r\n");
-        Uart10::puts("  alloc    - allocate and free frames\r\n");
-        Uart10::puts("  sched    - create test tasks\r\n");
-        Uart10::puts("  map      - test virtual memory mapping\r\n");
-        Uart10::puts("  uart     - UART TX test\r\n");
-        Uart10::puts("  syscall  - test syscall path\r\n");
+        out.puts("Available tests:\r\n");
+        out.puts("  alloc    - allocate and free frames\r\n");
+        out.puts("  sched    - create test tasks\r\n");
+        out.puts("  map      - test virtual memory mapping\r\n");
+        out.puts("  uart     - UART TX test\r\n");
+        out.puts("  syscall  - test syscall path\r\n");
         return;
     }
 
     match args[1] {
-        "alloc" => test_alloc(),
-        "sched" => test_sched(),
-        "map" => test_map(),
-        "uart" => test_uart(),
-        "syscall" => test_syscall(),
+        "alloc" => test_alloc(out),
+        "sched" => test_sched(out),
+        "map" => test_map(out),
+        "uart" => test_uart(out),
+        "syscall" => test_syscall(out),
         _ => {
-            Uart10::puts("Unknown test: ");
-            Uart10::puts(args[1]);
-            Uart10::puts("\r\n");
+            out.puts("Unknown test: ");
+            out.puts(args[1]);
+            out.puts("\r\n");
         }
     }
 }
 
-fn cmd_hexdump(args: [&str; MAX_ARGS], argc: usize) {
+fn cmd_hexdump(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) {
     if argc < 2 {
-        Uart10::puts("Usage: hexdump <address> [length]\r\n");
+        out.puts("Usage: hexdump <address> [length]\r\n");
         return;
     }
 
     let addr = match parse_u64(args[1]) {
         Some(a) => a,
         None => {
-            Uart10::puts("Invalid address\r\n");
+            out.puts("Invalid address\r\n");
             return;
         }
     };
@@ -2012,103 +2068,112 @@ fn cmd_hexdump(args: [&str; MAX_ARGS], argc: usize) {
     let start = addr & !0xF;
     let end = start + len as u64;
 
-    Uart10::puts("Address         00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F  ASCII\r\n");
+    out.puts("Address         00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F  ASCII\r\n");
 
     let mut row = start;
     while row < end {
-        crate::print!("{:#018x}  ", row);
+        out.puts(&alloc::format!("{:#018x}  ", row));
         let mut ascii = [b'.'; 16];
         for col in 0..16usize {
             let ptr = (row + col as u64) as *const u8;
             let byte = unsafe { ptr.read_volatile() };
-            crate::print!("{:02x} ", byte);
+            out.puts(&alloc::format!("{:02x} ", byte));
             if col == 7 {
-                Uart10::putc(b' ');
+                out.puts(" ");
             }
             if byte >= 0x20 && byte <= 0x7E {
                 ascii[col] = byte;
             }
         }
-        Uart10::puts("  ");
+        out.puts("  ");
         for &b in &ascii {
-            Uart10::putc(b);
+            out.puts(&alloc::format!("{}", b as char));
         }
-        Uart10::puts("\r\n");
+        out.puts("\r\n");
         row += 16;
     }
 }
 
-fn cmd_gpio(args: [&str; MAX_ARGS], argc: usize) {
-    if argc < 2 {
-        Uart10::puts("Usage: gpio <pin> [high|low]\r\n");
-        return;
-    }
-
-    let pin = match parse_u64(args[1]) {
-        Some(p) if p <= 53 => p as u8,
-        _ => {
-            Uart10::puts("Pin must be 0-53\r\n");
+fn cmd_gpio(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        if argc < 2 {
+            out.puts("Usage: gpio <pin> [high|low]\r\n");
             return;
         }
-    };
 
-    if argc >= 3 {
-        match args[2] {
-            "high" => {
-                #[cfg(target_arch = "aarch64")]
-                crate::drivers::gpio::set_pin_mode(pin, crate::drivers::gpio::PinMode::Output);
-                #[cfg(target_arch = "aarch64")]
-                crate::drivers::gpio::set_pin(pin);
-                crate::println!("GPIO {} set HIGH", pin);
+        let pin = match parse_u64(args[1]) {
+            Some(p) if p <= 53 => p as u8,
+            _ => {
+                out.puts("Pin must be 0-53\r\n");
+                return;
             }
-            "low" => {
-                #[cfg(target_arch = "aarch64")]
-                crate::drivers::gpio::set_pin_mode(pin, crate::drivers::gpio::PinMode::Output);
-                #[cfg(target_arch = "aarch64")]
-                crate::drivers::gpio::clear_pin(pin);
-                crate::println!("GPIO {} set LOW", pin);
+        };
+
+        if argc >= 3 {
+            match args[2] {
+                "high" => {
+                    crate::drivers::gpio::set_pin_mode(pin, crate::drivers::gpio::PinMode::Output);
+                    crate::drivers::gpio::set_pin(pin);
+                    out.puts(&alloc::format!("GPIO {} set HIGH\r\n", pin));
+                }
+                "low" => {
+                    crate::drivers::gpio::set_pin_mode(pin, crate::drivers::gpio::PinMode::Output);
+                    crate::drivers::gpio::clear_pin(pin);
+                    out.puts(&alloc::format!("GPIO {} set LOW\r\n", pin));
+                }
+                _ => out.puts("Use 'high' or 'low'\r\n"),
             }
-            _ => Uart10::puts("Use 'high' or 'low'\r\n"),
+        } else {
+            let level = crate::drivers::gpio::read_pin(pin);
+            out.puts(&alloc::format!(
+                "GPIO {} = {}\r\n",
+                pin,
+                if level { "HIGH" } else { "LOW" }
+            ));
         }
-    } else {
-        #[cfg(target_arch = "aarch64")]
-        let level = crate::drivers::gpio::read_pin(pin);
-        #[cfg(target_arch = "aarch64")]
-        crate::println!("GPIO {} = {}", pin, if level { "HIGH" } else { "LOW" });
-        #[cfg(target_arch = "x86_64")]
-        crate::println!("GPIO {} = (not available on x86_64)", pin);
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        out.puts("GPIO not available on x86_64\r\n");
     }
 }
 
 // === Test functions ===
-fn test_alloc() {
-    Uart10::puts("[test] Frame allocator test...\r\n");
+fn test_alloc(out: &ShellOut) {
+    out.puts("[test] Frame allocator test...\r\n");
 
     // Allocate a frame
     let frame = crate::memory::frame_alloc::allocate_frame();
     match frame {
-        Some(addr) => crate::println!("[test] Allocated frame at {:#x}", addr.0),
-        None => Uart10::puts("[test] FAILED: no frames available\r\n"),
+        Some(addr) => out.puts(&alloc::format!(
+            "[test] Allocated frame at {:#x}\r\n",
+            addr.0
+        )),
+        None => out.puts("[test] FAILED: no frames available\r\n"),
     }
 
     // Allocate another
     let frame2 = crate::memory::frame_alloc::allocate_frame();
     match frame2 {
-        Some(addr) => crate::println!("[test] Allocated frame at {:#x}", addr.0),
-        None => Uart10::puts("[test] FAILED: no frames available\r\n"),
+        Some(addr) => out.puts(&alloc::format!(
+            "[test] Allocated frame at {:#x}\r\n",
+            addr.0
+        )),
+        None => out.puts("[test] FAILED: no frames available\r\n"),
     }
 
     // Free the first
     if let Some(addr) = frame {
         crate::memory::frame_alloc::deallocate_frame(addr);
-        crate::println!("[test] Freed frame at {:#x}", addr.0);
+        out.puts(&alloc::format!("[test] Freed frame at {:#x}\r\n", addr.0));
     }
 
-    Uart10::puts("[test] Frame allocator test complete.\r\n");
+    out.puts("[test] Frame allocator test complete.\r\n");
 }
 
-fn test_sched() {
-    Uart10::puts("[test] Creating test tasks...\r\n");
+fn test_sched(out: &ShellOut) {
+    out.puts("[test] Creating test tasks...\r\n");
 
     fn test_task_a() -> ! {
         for i in 0..3 {
@@ -2132,40 +2197,43 @@ fn test_sched() {
     let pid_b = crate::sched::create_kernel_task(test_task_b, crate::sched::Priority::Normal);
 
     match pid_a {
-        Some(p) => crate::println!("[test] Task A created (PID {})", p),
-        None => Uart10::puts("[test] Failed to create Task A\r\n"),
+        Some(p) => out.puts(&alloc::format!("[test] Task A created (PID {})\r\n", p)),
+        None => out.puts("[test] Failed to create Task A\r\n"),
     }
     match pid_b {
-        Some(p) => crate::println!("[test] Task B created (PID {})", p),
-        None => Uart10::puts("[test] Failed to create Task B\r\n"),
+        Some(p) => out.puts(&alloc::format!("[test] Task B created (PID {})\r\n", p)),
+        None => out.puts("[test] Failed to create Task B\r\n"),
     }
 }
 
-fn test_map() {
-    Uart10::puts("[test] Virtual memory mapping test...\r\n");
+fn test_map(out: &ShellOut) {
+    out.puts("[test] Virtual memory mapping test...\r\n");
     let (total, used, free) = crate::memory::frame_alloc::stats();
-    crate::println!(
-        "[test] Frames: total={}, used={}, free={}",
+    out.puts(&alloc::format!(
+        "[test] Frames: total={}, used={}, free={}\r\n",
         total,
         used,
         free
-    );
-    Uart10::puts("[test] VM map test complete.\r\n");
+    ));
+    out.puts("[test] VM map test complete.\r\n");
 }
 
-fn test_uart() {
-    Uart10::puts("[test] UART loopback test...\r\n");
-    Uart10::puts("[test] Sending bytes to UART TX...\r\n");
-    Uart10::puts("Hello from Lobster OS UART!\r\n");
-    Uart10::puts("[test] UART TX test complete.\r\n");
+fn test_uart(out: &ShellOut) {
+    out.puts("[test] UART loopback test...\r\n");
+    out.puts("[test] Sending bytes to UART TX...\r\n");
+    out.puts("Hello from Lobster OS UART!\r\n");
+    out.puts("[test] UART TX test complete.\r\n");
 }
 
-fn test_syscall() {
-    Uart10::puts("[test] Syscall path test...\r\n");
+fn test_syscall(out: &ShellOut) {
+    out.puts("[test] Syscall path test...\r\n");
     let args = [0u64; 6];
     let ret = crate::sched::syscall::dispatch(0, &args);
-    crate::println!("[test] Syscall 0 (sys_exit) returned: {}", ret);
-    Uart10::puts("[test] Syscall test complete.\r\n");
+    out.puts(&alloc::format!(
+        "[test] Syscall 0 (sys_exit) returned: {}\r\n",
+        ret
+    ));
+    out.puts("[test] Syscall test complete.\r\n");
 }
 
 // === Utility functions ===
@@ -2238,54 +2306,54 @@ fn parse_ip_addr(s: &str) -> Option<[u8; 4]> {
 }
 
 #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
-fn cmd_ifconfig_legacy() {
+fn cmd_ifconfig_legacy(out: &ShellOut) {
     let cfg = crate::net::config();
-    crate::println!("eth0: LobsterOS Network Interface");
-    crate::println!(
-        "  MAC:   {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+    out.puts("eth0: LobsterOS Network Interface\r\n");
+    out.puts(&alloc::format!(
+        "  MAC:   {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\r\n",
         cfg.mac_addr[0],
         cfg.mac_addr[1],
         cfg.mac_addr[2],
         cfg.mac_addr[3],
         cfg.mac_addr[4],
         cfg.mac_addr[5]
-    );
-    crate::println!(
-        "  IP:    {}.{}.{}.{}",
+    ));
+    out.puts(&alloc::format!(
+        "  IP:    {}.{}.{}.{}\r\n",
         cfg.ip_addr[0],
         cfg.ip_addr[1],
         cfg.ip_addr[2],
         cfg.ip_addr[3]
-    );
-    crate::println!(
-        "  Mask:  {}.{}.{}.{}",
+    ));
+    out.puts(&alloc::format!(
+        "  Mask:  {}.{}.{}.{}\r\n",
         cfg.netmask[0],
         cfg.netmask[1],
         cfg.netmask[2],
         cfg.netmask[3]
-    );
-    crate::println!(
-        "  GW:    {}.{}.{}.{}",
+    ));
+    out.puts(&alloc::format!(
+        "  GW:    {}.{}.{}.{}\r\n",
         cfg.gateway[0],
         cfg.gateway[1],
         cfg.gateway[2],
         cfg.gateway[3]
-    );
-    crate::println!(
-        "  DNS:   {}.{}.{}.{}",
+    ));
+    out.puts(&alloc::format!(
+        "  DNS:   {}.{}.{}.{}\r\n",
         cfg.dns_server[0],
         cfg.dns_server[1],
         cfg.dns_server[2],
         cfg.dns_server[3]
-    );
-    crate::println!(
-        "  DHCP:  {}",
+    ));
+    out.puts(&alloc::format!(
+        "  DHCP:  {}\r\n",
         if cfg.dhcp_enabled {
             "enabled"
         } else {
             "disabled"
         }
-    );
+    ));
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -2294,25 +2362,25 @@ fn cmd_ifconfig() {
 }
 
 #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
-fn cmd_ping_legacy(args: [&str; MAX_ARGS], argc: usize) {
+fn cmd_ping_legacy(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) {
     if argc < 2 {
-        Uart10::puts("Usage: ping <ip>\r\n");
+        out.puts("Usage: ping <ip>\r\n");
         return;
     }
     let dst = match parse_ip_addr(args[1]) {
         Some(ip) => ip,
         None => {
-            Uart10::puts("Invalid IP address (use x.x.x.x format)\r\n");
+            out.puts("Invalid IP address (use x.x.x.x format)\r\n");
             return;
         }
     };
-    crate::println!(
-        "PING {}.{}.{}.{}: sending ICMP echo request...",
+    out.puts(&alloc::format!(
+        "PING {}.{}.{}.{}: sending ICMP echo request...\r\n",
         dst[0],
         dst[1],
         dst[2],
         dst[3]
-    );
+    ));
     #[cfg(target_arch = "aarch64")]
     crate::net::icmp::send_echo_request(dst, 1);
     // Poll for replies for a few iterations
@@ -2320,95 +2388,95 @@ fn cmd_ping_legacy(args: [&str; MAX_ARGS], argc: usize) {
         #[cfg(target_arch = "aarch64")]
         crate::net::poll();
     }
-    crate::println!("PING done.");
+    out.puts("PING done.\r\n");
 }
 
 #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
-fn cmd_arp(args: [&str; MAX_ARGS], argc: usize) {
+fn cmd_arp(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) {
     if argc < 2 {
-        Uart10::puts("Usage: arp <ip> | arp dump\r\n");
+        out.puts("Usage: arp <ip> | arp dump\r\n");
         return;
     }
     if args[1] == "dump" {
-        crate::println!("ARP cache:");
+        out.puts("ARP cache:\r\n");
         crate::net::arp::dump_cache();
         return;
     }
     let ip = match parse_ip_addr(args[1]) {
         Some(addr) => addr,
         None => {
-            Uart10::puts("Invalid IP address\r\n");
+            out.puts("Invalid IP address\r\n");
             return;
         }
     };
-    crate::println!(
-        "Resolving {}.{}.{}.{} via ARP...",
+    out.puts(&alloc::format!(
+        "Resolving {}.{}.{}.{} via ARP...\r\n",
         ip[0],
         ip[1],
         ip[2],
         ip[3]
-    );
+    ));
     #[cfg(target_arch = "aarch64")]
     match crate::net::arp::resolve(ip) {
-        Some(mac) => crate::println!(
-            "  -> {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        Some(mac) => out.puts(&alloc::format!(
+            "  -> {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\r\n",
             mac[0],
             mac[1],
             mac[2],
             mac[3],
             mac[4],
             mac[5]
-        ),
-        None => crate::println!("  -> not in cache (request sent)"),
+        )),
+        None => out.puts("  -> not in cache (request sent)\r\n"),
     }
     #[cfg(target_arch = "x86_64")]
-    crate::println!("  -> ARP not available on x86_64");
+    out.puts("  -> ARP not available on x86_64\r\n");
 }
 
 #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
-fn cmd_dhcp(args: [&str; MAX_ARGS], argc: usize) {
+fn cmd_dhcp(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) {
     if argc < 2 || args[1] == "status" {
         let cfg = crate::net::config();
-        crate::println!(
-            "DHCP status: {}",
+        out.puts(&alloc::format!(
+            "DHCP status: {}\r\n",
             if cfg.dhcp_enabled {
                 "enabled"
             } else {
                 "disabled"
             }
-        );
-        crate::println!(
-            "  IP: {}.{}.{}.{}",
+        ));
+        out.puts(&alloc::format!(
+            "  IP: {}.{}.{}.{}\r\n",
             cfg.ip_addr[0],
             cfg.ip_addr[1],
             cfg.ip_addr[2],
             cfg.ip_addr[3]
-        );
+        ));
         return;
     }
     #[cfg(target_arch = "aarch64")]
     match args[1] {
         "renew" => {
-            Uart10::puts("DHCP: sending discover...\r\n");
+            out.puts("DHCP: sending discover...\r\n");
             if crate::net::dhcp::discover() {
                 let cfg = crate::net::config();
-                crate::println!(
-                    "DHCP: leased {}.{}.{}.{}",
+                out.puts(&alloc::format!(
+                    "DHCP: leased {}.{}.{}.{}\r\n",
                     cfg.ip_addr[0],
                     cfg.ip_addr[1],
                     cfg.ip_addr[2],
                     cfg.ip_addr[3]
-                );
+                ));
             } else {
-                Uart10::puts("DHCP: no response\r\n");
+                out.puts("DHCP: no response\r\n");
             }
         }
         "release" => {
             crate::net::set_ip_addr([0, 0, 0, 0]);
             crate::net::set_gateway([0, 0, 0, 0]);
-            Uart10::puts("DHCP: lease released\r\n");
+            out.puts("DHCP: lease released\r\n");
         }
-        _ => Uart10::puts("Usage: dhcp [renew|release|status]\r\n"),
+        _ => out.puts("Usage: dhcp [renew|release|status]\r\n"),
     }
     #[cfg(target_arch = "x86_64")]
     {
@@ -2417,64 +2485,71 @@ fn cmd_dhcp(args: [&str; MAX_ARGS], argc: usize) {
 }
 
 #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
-fn cmd_net(args: [&str; MAX_ARGS], argc: usize) {
+fn cmd_net(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) {
     if argc < 2 {
-        Uart10::puts("Usage: net <poll|stats>\r\n");
+        out.puts("Usage: net <poll|stats>\r\n");
         return;
     }
     match args[1] {
         "poll" => {
-            crate::println!("Polling network (1 packet)...");
+            out.puts("Polling network (1 packet)...\r\n");
             crate::net::poll();
-            Uart10::puts("Done.\r\n");
+            out.puts("Done.\r\n");
         }
         "stats" => {
             let cfg = crate::net::config();
-            crate::println!("Network stats:");
-            crate::println!(
-                " MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            out.puts("Network stats:\r\n");
+            out.puts(&alloc::format!(
+                " MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\r\n",
                 cfg.mac_addr[0],
                 cfg.mac_addr[1],
                 cfg.mac_addr[2],
                 cfg.mac_addr[3],
                 cfg.mac_addr[4],
                 cfg.mac_addr[5]
-            );
-            crate::println!(
-                " IP: {}.{}.{}.{}",
+            ));
+            out.puts(&alloc::format!(
+                " IP: {}.{}.{}.{}\r\n",
                 cfg.ip_addr[0],
                 cfg.ip_addr[1],
                 cfg.ip_addr[2],
                 cfg.ip_addr[3]
-            );
+            ));
             crate::net::arp::dump_cache();
         }
-        _ => Uart10::puts("Usage: net <poll|stats>\r\n"),
+        _ => out.puts("Usage: net <poll|stats>\r\n"),
     }
 }
 
 #[cfg(not(feature = "qemu_raspi5b"))]
-fn cmd_dns(args: [&str; MAX_ARGS], argc: usize) {
+fn cmd_dns(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) {
     if argc < 2 {
-        Uart10::puts("Usage: dns <domain>\r\n");
-        Uart10::puts("Example: dns example.com\r\n");
+        out.puts("Usage: dns <domain>\r\n");
+        out.puts("Example: dns example.com\r\n");
         return;
     }
     let domain = args[1];
-    crate::println!("Resolving {} via DNS...", domain);
+    out.puts(&alloc::format!("Resolving {} via DNS...\r\n", domain));
     #[cfg(target_arch = "aarch64")]
     match crate::net::dns::resolve(domain) {
-        Some(ip) => crate::println!("{} -> {}.{}.{}.{}", domain, ip[0], ip[1], ip[2], ip[3]),
-        None => crate::println!("Failed to resolve {}", domain),
+        Some(ip) => out.puts(&alloc::format!(
+            "{} -> {}.{}.{}.{}\r\n",
+            domain,
+            ip[0],
+            ip[1],
+            ip[2],
+            ip[3]
+        )),
+        None => out.puts(&alloc::format!("Failed to resolve {}\r\n", domain)),
     }
     #[cfg(target_arch = "x86_64")]
-    crate::println!("DNS not available on x86_64");
+    out.puts("DNS not available on x86_64\r\n");
 }
 
 #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
-fn cmd_wm(args: [&str; MAX_ARGS], argc: usize) {
+fn cmd_wm(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) {
     if argc < 2 {
-        Uart10::puts("Usage: wm <info|theme|composite|wallpaper>\\r\\n");
+        out.puts("Usage: wm <info|theme|composite|wallpaper>\r\n");
         return;
     }
     match args[1] {
@@ -2482,49 +2557,61 @@ fn cmd_wm(args: [&str; MAX_ARGS], argc: usize) {
             let info = crate::wm::compositor::fb_info();
             match info {
                 Some(info) => {
-                    crate::println!("Window Manager:");
-                    crate::println!("  Resolution: {}x{}", info.width, info.height);
-                    crate::println!("  BPP: {}", info.bpp);
-                    crate::println!("  Pitch: {}", info.pitch);
-                    crate::println!("  Windows: {}", crate::wm::window::count());
+                    out.puts("Window Manager:\r\n");
+                    out.puts(&alloc::format!(
+                        "  Resolution: {}x{}\r\n",
+                        info.width,
+                        info.height
+                    ));
+                    out.puts(&alloc::format!("  BPP: {}\r\n", info.bpp));
+                    out.puts(&alloc::format!("  Pitch: {}\r\n", info.pitch));
+                    out.puts(&alloc::format!(
+                        "  Windows: {}\r\n",
+                        crate::wm::window::count()
+                    ));
                 }
                 None => {
-                    crate::println!("Compositor not initialized");
+                    out.puts("Compositor not initialized\r\n");
                 }
             }
         }
         "theme" => {
             let name = crate::wm::theme::current_name();
-            crate::println!("Current theme: {}", name);
+            out.puts(&alloc::format!("Current theme: {}\r\n", name));
         }
         "composite" => {
             crate::wm::compositor::composite();
-            Uart10::puts("Composited.\\r\\n");
+            out.puts("Composited.\r\n");
         }
         "wallpaper" => {
             if argc < 3 {
-                Uart10::puts("Usage: wm wallpaper <color|image> [value]\\r\\n");
-                Uart10::puts("  wm wallpaper color <hex>     Set solid color background (e.g. FF0D1B2A)\\r\\n");
-                Uart10::puts("  wm wallpaper image <path>    Set wallpaper image from file\\r\\n");
-                Uart10::puts("  wm wallpaper mode <fit|fill|center|tile>  Set scaling mode\\r\\n");
+                out.puts("Usage: wm wallpaper <color|image> [value]\r\n");
+                out.puts(
+                    "  wm wallpaper color <hex>     Set solid color background (e.g. FF0D1B2A)\r\n",
+                );
+                out.puts("  wm wallpaper image <path>    Set wallpaper image from file\r\n");
+                out.puts("  wm wallpaper mode <fit|fill|center|tile>  Set scaling mode\r\n");
                 return;
             }
             match args[2] {
                 "color" => {
                     if argc < 4 {
-                        Uart10::puts("Usage: wm wallpaper color <hex_color>\\r\\n");
+                        out.puts("Usage: wm wallpaper color <hex_color>\r\n");
                         return;
                     }
                     if let Some(color) = parse_hex_color(args[3]) {
                         crate::wm::compositor::set_wallpaper_color(color);
-                        crate::println!("Wallpaper color set to: #{:08X}", color);
+                        out.puts(&alloc::format!(
+                            "Wallpaper color set to: #{:08X}\r\n",
+                            color
+                        ));
                     } else {
-                        Uart10::puts("Invalid color format. Use 8-digit hex (AARRGGBB) or 6-digit hex (RRGGBB)\\r\\n");
+                        out.puts("Invalid color format. Use 8-digit hex (AARRGGBB) or 6-digit hex (RRGGBB)\r\n");
                     }
                 }
                 "image" => {
                     if argc < 4 {
-                        Uart10::puts("Usage: wm wallpaper image <path>\\r\\n");
+                        out.puts("Usage: wm wallpaper image <path>\r\n");
                         return;
                     }
                     let path = args[3];
@@ -2535,7 +2622,7 @@ fn cmd_wm(args: [&str; MAX_ARGS], argc: usize) {
                 }
                 "mode" => {
                     if argc < 4 {
-                        Uart10::puts("Usage: wm wallpaper mode <fit|fill|center|tile>\\r\\n");
+                        out.puts("Usage: wm wallpaper mode <fit|fill|center|tile>\r\n");
                         return;
                     }
                     match args[3] {
@@ -2605,104 +2692,122 @@ fn parse_hex_color(s: &str) -> Option<u32> {
 }
 
 #[cfg(not(feature = "qemu_raspi5b"))]
-fn cmd_audio(args: [&str; MAX_ARGS], argc: usize) {
+fn cmd_audio(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) {
     if argc < 2 {
-        Uart10::puts("Usage: audio <beep|tone|stop|vol|status>\r\n");
+        out.puts("Usage: audio <beep|tone|stop|vol|status>\r\n");
         return;
     }
     match args[1] {
         "beep" => {
             crate::drivers::audio::beep(1000, 200);
-            Uart10::puts("Beep!\r\n");
+            out.puts("Beep!\r\n");
         }
         "tone" => {
             if argc < 4 {
-                Uart10::puts("Usage: audio tone <freq_hz> <duration_ms>\r\n");
+                out.puts("Usage: audio tone <freq_hz> <duration_ms>\r\n");
                 return;
             }
             let freq = parse_u32(args[2]).unwrap_or(440);
             let dur = parse_u32(args[3]).unwrap_or(500);
             crate::drivers::audio::tone(freq, dur, crate::drivers::audio::volume());
-            crate::println!("Tone: {} Hz, {} ms", freq, dur);
+            out.puts(&alloc::format!("Tone: {} Hz, {} ms\r\n", freq, dur));
         }
         "stop" => {
             crate::drivers::audio::stop();
-            Uart10::puts("Audio stopped.\r\n");
+            out.puts("Audio stopped.\r\n");
         }
         "vol" => {
             if argc < 3 {
-                crate::println!("Volume: {}/255", crate::drivers::audio::volume());
+                out.puts(&alloc::format!(
+                    "Volume: {}/255\r\n",
+                    crate::drivers::audio::volume()
+                ));
             } else {
                 let v = parse_u32(args[2]).unwrap_or(128);
                 let v8 = if v > 255 { 255 } else { v as u8 };
                 crate::drivers::audio::set_volume(v8);
-                crate::println!("Volume set: {}/255", v8);
+                out.puts(&alloc::format!("Volume set: {}/255\r\n", v8));
             }
         }
         "status" => {
             let st = crate::drivers::audio::state();
-            crate::println!(
-                "Audio state: {}",
+            out.puts(&alloc::format!(
+                "Audio state: {}\r\n",
                 match st {
                     crate::drivers::audio::AudioState::Stopped => "stopped",
                     crate::drivers::audio::AudioState::Playing => "playing",
                     crate::drivers::audio::AudioState::Paused => "paused",
                 }
-            );
-            crate::println!("Volume: {}/255", crate::drivers::audio::volume());
-            crate::println!("Buffer count: {}", crate::drivers::audio::buffer_count());
+            ));
+            out.puts(&alloc::format!(
+                "Volume: {}/255\r\n",
+                crate::drivers::audio::volume()
+            ));
+            out.puts(&alloc::format!(
+                "Buffer count: {}\r\n",
+                crate::drivers::audio::buffer_count()
+            ));
         }
-        _ => Uart10::puts("Usage: audio <beep|tone|stop|vol|status>\r\n"),
+        _ => out.puts("Usage: audio <beep|tone|stop|vol|status>\r\n"),
     }
 }
 
 #[cfg(not(feature = "qemu_raspi5b"))]
-fn cmd_gpu(args: [&str; MAX_ARGS], argc: usize) {
+fn cmd_gpu(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) {
     if argc < 2 {
-        Uart10::puts("Usage: gpu <info|status|clock|blank|mode>\r\n");
+        out.puts("Usage: gpu <info|status|clock|blank|mode>\r\n");
         return;
     }
     match args[1] {
         "info" => {
             #[cfg(target_arch = "aarch64")]
             let info = crate::drivers::gpu::gpu_info();
-            crate::println!("GPU Info:");
+            out.puts("GPU Info:\r\n");
             #[cfg(target_arch = "aarch64")]
-            crate::println!(" Firmware: {:#010x}", info.firmware_rev);
+            out.puts(&alloc::format!(
+                " Firmware: {:#010x}\r\n",
+                info.firmware_rev
+            ));
             #[cfg(target_arch = "aarch64")]
-            crate::println!(
-                " Board: model={:#x} rev={:#x}",
+            out.puts(&alloc::format!(
+                " Board: model={:#x} rev={:#x}\r\n",
                 info.board_model,
                 info.board_rev
-            );
+            ));
             #[cfg(target_arch = "aarch64")]
-            crate::println!(
-                " VC mem: {:#x} ({} MB)",
+            out.puts(&alloc::format!(
+                " VC mem: {:#x} ({} MB)\r\n",
                 info.vc_mem_base,
                 info.vc_mem_size / (1024 * 1024)
-            );
+            ));
             #[cfg(target_arch = "aarch64")]
-            crate::println!(
-                " ARM mem: {:#x} ({} MB)",
+            out.puts(&alloc::format!(
+                " ARM mem: {:#x} ({} MB)\r\n",
                 info.arm_mem_base,
                 info.arm_mem_size / (1024 * 1024)
-            );
+            ));
             #[cfg(target_arch = "aarch64")]
-            crate::println!(" V3D clock: {} MHz", info.v3d_clock / 1_000_000);
+            out.puts(&alloc::format!(
+                " V3D clock: {} MHz\r\n",
+                info.v3d_clock / 1_000_000
+            ));
             #[cfg(target_arch = "aarch64")]
-            crate::println!(" Core clock: {} MHz", info.core_clock / 1_000_000);
+            out.puts(&alloc::format!(
+                " Core clock: {} MHz\r\n",
+                info.core_clock / 1_000_000
+            ));
             #[cfg(target_arch = "x86_64")]
-            crate::println!(" GPU info not available on x86_64");
+            out.puts(" GPU info not available on x86_64\r\n");
         }
         "status" => {
             #[cfg(target_arch = "aarch64")]
             crate::drivers::gpu::print_status();
             #[cfg(target_arch = "x86_64")]
-            crate::println!(" GPU status not available on x86_64");
+            out.puts(" GPU status not available on x86_64\r\n");
         }
         "clock" => {
             if argc < 3 {
-                Uart10::puts("Usage: gpu clock <v3d|core|pixel|emmc>\r\n");
+                out.puts("Usage: gpu clock <v3d|core|pixel|emmc>\r\n");
                 return;
             }
             match args[2] {
@@ -2711,42 +2816,42 @@ fn cmd_gpu(args: [&str; MAX_ARGS], argc: usize) {
                     let clock = crate::drivers::gpu::get_v3d_clock() / 1_000_000;
                     #[cfg(target_arch = "x86_64")]
                     let clock = 0;
-                    crate::println!("V3D clock: {} MHz", clock);
+                    out.puts(&alloc::format!("V3D clock: {} MHz\r\n", clock));
                 }
                 "core" => {
                     #[cfg(target_arch = "aarch64")]
                     let clock = crate::drivers::gpu::get_core_clock() / 1_000_000;
                     #[cfg(target_arch = "x86_64")]
                     let clock = 0;
-                    crate::println!("Core clock: {} MHz", clock);
+                    out.puts(&alloc::format!("Core clock: {} MHz\r\n", clock));
                 }
                 "pixel" => {
                     #[cfg(target_arch = "aarch64")]
                     let clock = crate::drivers::gpu::get_pixel_clock() / 1_000_000;
                     #[cfg(target_arch = "x86_64")]
                     let clock = 0;
-                    crate::println!("Pixel clock: {} MHz", clock);
+                    out.puts(&alloc::format!("Pixel clock: {} MHz\r\n", clock));
                 }
                 "emmc" => {
                     #[cfg(target_arch = "aarch64")]
                     let clock = crate::drivers::gpu::get_emmc_clock() / 1_000_000;
                     #[cfg(target_arch = "x86_64")]
                     let clock = 0;
-                    crate::println!("eMMC clock: {} MHz", clock);
+                    out.puts(&alloc::format!("eMMC clock: {} MHz\r\n", clock));
                 }
-                _ => Uart10::puts("Unknown clock. Use: v3d, core, pixel, emmc\r\n"),
+                _ => out.puts("Unknown clock. Use: v3d, core, pixel, emmc\r\n"),
             }
         }
         "blank" => {
             #[cfg(target_arch = "aarch64")]
             crate::drivers::gpu::blank_screen(true);
-            Uart10::puts("Screen blanked.\r\n");
+            out.puts("Screen blanked.\r\n");
             #[cfg(target_arch = "x86_64")]
-            Uart10::puts("Screen blank not available on x86_64.\r\n");
+            out.puts("Screen blank not available on x86_64.\r\n");
         }
         "mode" => {
             if argc < 5 {
-                Uart10::puts("Usage: gpu mode <width> <height> <bpp>\r\n");
+                out.puts("Usage: gpu mode <width> <height> <bpp>\r\n");
                 return;
             }
             let w = parse_u32(args[2]).unwrap_or(640);
@@ -2754,41 +2859,41 @@ fn cmd_gpu(args: [&str; MAX_ARGS], argc: usize) {
             let bpp = parse_u32(args[4]).unwrap_or(32);
             #[cfg(target_arch = "aarch64")]
             if crate::drivers::gpu::configure_display(w, h, bpp, true) {
-                crate::println!("Mode set: {}x{} @ {}bpp", w, h, bpp);
+                out.puts(&alloc::format!("Mode set: {}x{} @ {}bpp\r\n", w, h, bpp));
             } else {
-                Uart10::puts("Failed to set mode.\r\n");
+                out.puts("Failed to set mode.\r\n");
             }
             #[cfg(target_arch = "x86_64")]
-            Uart10::puts("Display mode not available on x86_64.\r\n");
+            out.puts("Display mode not available on x86_64.\r\n");
         }
-        _ => Uart10::puts("Usage: gpu <info|status|clock|blank|mode>\r\n"),
+        _ => out.puts("Usage: gpu <info|status|clock|blank|mode>\r\n"),
     }
 }
 
 #[cfg(all(not(feature = "qemu"), target_arch = "aarch64"))]
-fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
+fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) {
     if argc < 2 {
-        Uart10::puts("Usage: wifi <scan|connect|save|disconnect|status|bg_scan|roam_threshold|power_save|rssi>\r\n");
-        Uart10::puts("  wifi scan                    - Scan for available networks\r\n");
-        Uart10::puts("  wifi connect <ssid> [pass]   - Connect to network (WPA2/WPA3)\r\n");
-        Uart10::puts("  wifi save <ssid> [pass]      - Save network for auto-connect\r\n");
-        Uart10::puts("  wifi disconnect              - Disconnect from current network\r\n");
-        Uart10::puts("  wifi status                  - Show connection status\r\n");
-        Uart10::puts("  wifi bg_scan <on|off> [ms]   - Enable/disable background scan\r\n");
-        Uart10::puts("  wifi roam_threshold <db>     - Set roam threshold in dB\r\n");
-        Uart10::puts("  wifi power_save <on|off>     - Enable/disable WMM power save\r\n");
-        Uart10::puts("  wifi rssi                    - Show current AP RSSI\r\n");
+        out.puts("Usage: wifi <scan|connect|save|disconnect|status|bg_scan|roam_threshold|power_save|rssi>\r\n");
+        out.puts("  wifi scan                    - Scan for available networks\r\n");
+        out.puts("  wifi connect <ssid> [pass]   - Connect to network (WPA2/WPA3)\r\n");
+        out.puts("  wifi save <ssid> [pass]      - Save network for auto-connect\r\n");
+        out.puts("  wifi disconnect              - Disconnect from current network\r\n");
+        out.puts("  wifi status                  - Show connection status\r\n");
+        out.puts("  wifi bg_scan <on|off> [ms]   - Enable/disable background scan\r\n");
+        out.puts("  wifi roam_threshold <db>     - Set roam threshold in dB\r\n");
+        out.puts("  wifi power_save <on|off>     - Enable/disable WMM power save\r\n");
+        out.puts("  wifi rssi                    - Show current AP RSSI\r\n");
         return;
     }
     match args[1] {
         "scan" => {
-            Uart10::puts("Scanning for WiFi networks...\r\n");
+            out.puts("Scanning for WiFi networks...\r\n");
             match crate::drivers::wifi::scan() {
                 Ok(results) => {
                     if results.is_empty() {
-                        Uart10::puts("No networks found.\r\n");
+                        out.puts("No networks found.\r\n");
                     } else {
-                        crate::println!("Found {} network(s):", results.len());
+                        out.puts(&alloc::format!("Found {} network(s):\r\n", results.len()));
                         for (i, bss) in results.iter().enumerate() {
                             let ssid = core::str::from_utf8(&bss.ssid[..bss.ssid_len as usize])
                                 .unwrap_or("<invalid>");
@@ -2800,14 +2905,14 @@ fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
                                 crate::drivers::wifi::SecurityType::Wpa3Sae => "WPA3-SAE",
                                 _ => "UNKNOWN",
                             };
-                            crate::println!(
-                                "  {}  {}  Ch:{}  RSSI:{}  {}",
+                            out.puts(&alloc::format!(
+                                "  {}  {}  Ch:{}  RSSI:{}  {}\r\n",
                                 i,
                                 ssid,
                                 bss.channel,
                                 bss.rssi,
                                 security_str
-                            );
+                            ));
                         }
                     }
                 }
@@ -2815,7 +2920,7 @@ fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
                     crate::println!("Scan failed: {:?}", e);
                 }
             }
-        }
+        },
         "connect" => {
             if argc < 3 {
                 Uart10::puts("Usage: wifi connect <ssid> [password]\r\n");
@@ -2865,7 +2970,7 @@ fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
             if let Err(e) = crate::drivers::wifi::save_network(ssid, password) {
                 crate::println!("Warning: failed to save network: {:?}", e);
             }
-        }
+        },
         "save" => {
             if argc < 3 {
                 Uart10::puts("Usage: wifi save <ssid> [password]\r\n");
@@ -2877,7 +2982,7 @@ fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
                 Ok(()) => crate::println!("Network saved for auto-connect"),
                 Err(e) => crate::println!("Save failed: {:?}", e),
             }
-        }
+        },
         "disconnect" => match crate::drivers::wifi::disconnect() {
             Ok(()) => crate::println!("Disconnected."),
             Err(e) => crate::println!("Disconnect failed: {:?}", e),
@@ -2908,7 +3013,7 @@ fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
             } else {
                 Uart10::puts("Not connected to any network.\r\n");
             }
-        }
+        },
         "bg_scan" => {
             if argc < 3 {
                 Uart10::puts("Usage: wifi bg_scan <on|off> [interval_ms]\r\n");
@@ -2928,7 +3033,7 @@ fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
                     crate::drivers::wifi::wifi_set_bg_scan_interval(interval);
                 }
             }
-        }
+        },
         "roam_threshold" => {
             if argc < 3 {
                 Uart10::puts("Usage: wifi roam_threshold <db>\r\n");
@@ -2939,7 +3044,7 @@ fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
             } else {
                 Uart10::puts("Invalid threshold value.\r\n");
             }
-        }
+        },
         "power_save" => {
             if argc < 3 {
                 Uart10::puts("Usage: wifi power_save <on|off>\r\n");
@@ -2957,57 +3062,63 @@ fn cmd_wifi(args: [&str; MAX_ARGS], argc: usize) {
                 Ok(()) => crate::println!("Power save {}", if enabled { "enabled" } else { "disabled" }),
                 Err(e) => crate::println!("Failed to set power save: {:?}", e),
             }
-        }
+        },
         "rssi" => {
             let rssi = crate::drivers::wifi::wifi_current_ap_rssi();
             crate::println!("Current AP RSSI: {} dBm", rssi);
-        }
+        },
         _ => Uart10::puts("Usage: wifi <scan|connect|save|disconnect|status|bg_scan|roam_threshold|power_save|rssi>\r\n"),
     }
 }
 
 /// Package manager command
-fn cmd_pkg(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+fn cmd_pkg(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) -> i32 {
     if argc < 2 {
-        Uart10::puts("Usage: pkg <update|upgrade|search|install|remove|list|info> [args]\r\n");
+        out.puts("Usage: pkg <update|upgrade|search|install|remove|list|info> [args]\r\n");
         return 1;
     }
     match args[1] {
         "update" => {
-            Uart10::puts("Updating package index...\r\n");
+            out.puts("Updating package index...\r\n");
             // Initialize installer and update repositories
             match crate::pkg::install::Installer::new() {
                 Ok(mut installer) => match installer.update() {
                     Ok(()) => {
-                        Uart10::puts("Package index updated successfully.\r\n");
+                        out.puts("Package index updated successfully.\r\n");
                         0
                     }
                     Err(e) => {
-                        crate::println!("pkg update failed: {:?}", e);
+                        out.puts(&alloc::format!("pkg update failed: {:?}\r\n", e));
                         1
                     }
                 },
                 Err(e) => {
-                    crate::println!("Failed to initialize package manager: {:?}", e);
+                    out.puts(&alloc::format!(
+                        "Failed to initialize package manager: {:?}\r\n",
+                        e
+                    ));
                     1
                 }
             }
         }
         "upgrade" => {
-            Uart10::puts("Upgrading packages...\r\n");
+            out.puts("Upgrading packages...\r\n");
             match crate::pkg::install::Installer::new() {
                 Ok(mut installer) => match installer.upgrade() {
                     Ok(()) => {
-                        Uart10::puts("Upgrade complete.\r\n");
+                        out.puts("Upgrade complete.\r\n");
                         0
                     }
                     Err(e) => {
-                        crate::println!("pkg upgrade failed: {:?}", e);
+                        out.puts(&alloc::format!("pkg upgrade failed: {:?}\r\n", e));
                         1
                     }
                 },
                 Err(e) => {
-                    crate::println!("Failed to initialize package manager: {:?}", e);
+                    out.puts(&alloc::format!(
+                        "Failed to initialize package manager: {:?}\r\n",
+                        e
+                    ));
                     1
                 }
             }
@@ -3037,7 +3148,10 @@ fn cmd_pkg(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                     0
                 }
                 Err(e) => {
-                    crate::println!("Failed to initialize package manager: {:?}", e);
+                    out.puts(&alloc::format!(
+                        "Failed to initialize package manager: {:?}\r\n",
+                        e
+                    ));
                     1
                 }
             }
@@ -3063,7 +3177,10 @@ fn cmd_pkg(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                     }
                 },
                 Err(e) => {
-                    crate::println!("Failed to initialize package manager: {:?}", e);
+                    out.puts(&alloc::format!(
+                        "Failed to initialize package manager: {:?}\r\n",
+                        e
+                    ));
                     1
                 }
             }
@@ -3089,7 +3206,10 @@ fn cmd_pkg(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                     }
                 },
                 Err(e) => {
-                    crate::println!("Failed to initialize package manager: {:?}", e);
+                    out.puts(&alloc::format!(
+                        "Failed to initialize package manager: {:?}\r\n",
+                        e
+                    ));
                     1
                 }
             }
@@ -3113,7 +3233,10 @@ fn cmd_pkg(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                 0
             }
             Err(e) => {
-                crate::println!("Failed to initialize package manager: {:?}", e);
+                out.puts(&alloc::format!(
+                    "Failed to initialize package manager: {:?}\r\n",
+                    e
+                ));
                 1
             }
         },
@@ -3140,7 +3263,10 @@ fn cmd_pkg(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                     0
                 }
                 Err(e) => {
-                    crate::println!("Failed to initialize package manager: {:?}", e);
+                    out.puts(&alloc::format!(
+                        "Failed to initialize package manager: {:?}\r\n",
+                        e
+                    ));
                     1
                 }
             }
@@ -3297,7 +3423,10 @@ fn cmd_pkg(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                     }
                 }
                 Err(e) => {
-                    crate::println!("Failed to initialize package manager: {:?}", e);
+                    out.puts(&alloc::format!(
+                        "Failed to initialize package manager: {:?}\r\n",
+                        e
+                    ));
                     1
                 }
             }
@@ -3322,7 +3451,10 @@ fn cmd_pkg(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                     }
                 }
                 Err(e) => {
-                    crate::println!("Failed to initialize package manager: {:?}", e);
+                    out.puts(&alloc::format!(
+                        "Failed to initialize package manager: {:?}\r\n",
+                        e
+                    ));
                     1
                 }
             }
@@ -4010,15 +4142,11 @@ fn cmd_history() -> i32 {
     0
 }
 
-fn cmd_reboot() {
-    Uart10::puts("Rebooting...\r\n");
+fn cmd_reboot(out: &ShellOut) {
+    out.puts("Rebooting...\r\n");
     #[cfg(target_arch = "aarch64")]
     crate::drivers::power::reset();
 }
-
-// ═══════════════════════════════════════════════
-// Filesystem command handlers
-// ═══════════════════════════════════════════════
 
 static mut CWD: [u8; 256] = [b'/'; 256];
 static mut CWD_LEN: usize = 1;
@@ -4945,8 +5073,8 @@ fn cmd_df() -> i32 {
 }
 
 /// free - display amount of free and used memory
-fn cmd_free() -> i32 {
-    cmd_mem();
+fn cmd_free(out: &ShellOut) -> i32 {
+    cmd_mem(out);
     0
 }
 
@@ -5736,15 +5864,15 @@ fn gh_get(endpoint: &str) -> Option<alloc::vec::Vec<u8>> {
     }
 }
 
-fn cmd_gh(args: [&str; MAX_ARGS], argc: usize) -> i32 {
+fn cmd_gh(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) -> i32 {
     if argc < 2 || args[1] == "help" {
-        Uart10::puts("Usage: gh <command> [args]\r\n");
-        Uart10::puts("  gh auth login     Save a GitHub Personal Access Token\r\n");
-        Uart10::puts("  gh auth status    Show login state\r\n");
-        Uart10::puts("  gh auth logout    Remove the saved token\r\n");
-        Uart10::puts("  gh api <endpoint> GET https://api.github.com<endpoint>\r\n");
-        Uart10::puts("  gh repo list [owner]  List an owner's public repos\r\n");
-        Uart10::puts("  gh user           Show the authenticated user (needs token)\r\n");
+        out.puts("Usage: gh <command> [args]\r\n");
+        out.puts("  gh auth login     Save a GitHub Personal Access Token\r\n");
+        out.puts("  gh auth status    Show login state\r\n");
+        out.puts("  gh auth logout    Remove the saved token\r\n");
+        out.puts("  gh api <endpoint> GET https://api.github.com<endpoint>\r\n");
+        out.puts("  gh repo list [owner]  List an owner's public repos\r\n");
+        out.puts("  gh user           Show the authenticated user (needs token)\r\n");
         return if argc < 2 { 1 } else { 0 };
     }
 
@@ -5756,12 +5884,12 @@ fn cmd_gh(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     match args[1] {
         "auth" => {
             if argc < 3 {
-                Uart10::puts("Usage: gh auth <login|status|logout>\r\n");
+                out.puts("Usage: gh auth <login|status|logout>\r\n");
                 return 1;
             }
             match args[2] {
                 "login" => {
-                    Uart10::puts("Paste your GitHub Personal Access Token (SCAN / repo scope): ");
+                    out.puts("Paste your GitHub Personal Access Token (SCAN / repo scope): ");
                     let mut buf = [0u8; 256];
                     let saved_echo = crate::drivers::serial_input::echo_enabled();
                     crate::drivers::serial_input::set_echo(false);
@@ -5769,7 +5897,7 @@ fn cmd_gh(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                     crate::drivers::serial_input::set_echo(saved_echo);
                     let token = core::str::from_utf8(&buf[..len]).unwrap_or("").trim();
                     if token.is_empty() {
-                        crate::println!("gh: no token entered");
+                        out.puts("gh: no token entered\r\n");
                         return 1;
                     }
                     // Validate token charset matches the device allowlist
@@ -5777,7 +5905,7 @@ fn cmd_gh(args: [&str; MAX_ARGS], argc: usize) -> i32 {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.');
                     if !ok {
-                        crate::println!("gh: token contains unsupported characters");
+                        out.puts("gh: token contains unsupported characters\r\n");
                         return 1;
                     }
                     if gh_write_token(token) {

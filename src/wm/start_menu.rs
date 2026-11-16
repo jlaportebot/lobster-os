@@ -28,7 +28,7 @@ pub static APPS: &[AppEntry] = &[
         color: 0xFF2E3440,
         launch: || {
             focus_or_create("Terminal", 720, 500, || {
-                let _ = window::create(100, 80, 720, 500, "Terminal");
+                let _ = crate::apps::terminal::open_terminal_window(100, 80, 720, 500);
             });
         },
     },

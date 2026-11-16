@@ -170,6 +170,20 @@ pub fn klog_write(level: LogLevel, message: &str) {
 
 /// Print kernel log to console (dmesg equivalent)
 pub fn klog_dump() {
+    klog_dump_with(|line| {
+        #[cfg(target_arch = "aarch64")]
+        crate::drivers::uart::Uart10::puts(line);
+        #[cfg(not(target_arch = "aarch64"))]
+        let _ = line;
+    });
+}
+
+/// Print kernel log using a custom output function.
+/// The output function receives each line (with trailing newline).
+pub fn klog_dump_with<F>(mut write_line: F)
+where
+    F: FnMut(&str),
+{
     let log = KLOG.lock();
     let mut buf = [0u8; 4096];
     let mut seq = 0;
@@ -180,10 +194,7 @@ pub fn klog_dump() {
             break;
         }
         // Print directly to console (bypass klog to avoid recursion)
-        #[cfg(target_arch = "aarch64")]
-        crate::drivers::uart::Uart10::puts(core::str::from_utf8(&buf[..read_len]).unwrap_or(""));
-        #[cfg(not(target_arch = "aarch64"))]
-        let _ = core::str::from_utf8(&buf[..read_len]);
+        write_line(core::str::from_utf8(&buf[..read_len]).unwrap_or(""));
         seq = new_seq;
     }
 }

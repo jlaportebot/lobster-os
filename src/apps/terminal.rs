@@ -422,6 +422,19 @@ pub fn init() {
     println!("[terminal] Terminal application initialized");
 }
 
+/// Open the Terminal app: focus the existing terminal window if there is one,
+/// otherwise create a real terminal window (with its text widget registered).
+///
+/// Every Terminal launch path (start menu, desktop icon, shell `app terminal`)
+/// goes through this so the window is never a dead, unrendered shell.
+pub fn open_terminal_window(x: u32, y: u32, w: u32, h: u32) -> Option<u32> {
+    if let Some(id) = crate::wm::window::find_by_title("Terminal") {
+        crate::wm::window::focus(id);
+        return Some(id);
+    }
+    create_terminal_window(&mut crate::wm::widget::WIDGET_TABLE.lock(), x, y, w, h)
+}
+
 /// Create a new terminal window with PTY and shell
 pub fn create_terminal_window(
     registry: &mut crate::wm::widget::WidgetTable,
