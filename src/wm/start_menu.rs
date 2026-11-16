@@ -444,8 +444,7 @@ pub fn launch_by_name(name: &str) -> bool {
 
 /// Focus an existing window with this exact title, else run `create`.
 fn focus_or_create(title: &str, _w: u32, _h: u32, create: impl FnOnce()) {
-    let count = window::count();
-    for id in 1..=count as u32 {
+    for id in 1..=window::max_id() {
         if window::exists(id) && window::get_title(id) == title {
             window::focus(id);
             return;

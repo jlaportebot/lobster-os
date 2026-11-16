@@ -238,8 +238,7 @@ pub fn handle_shortcut(scancode: u8) {
         match scancode {
             // Super+D: minimize all / show desktop
             0x07 => {
-                let count = window::count();
-                for id in 1..=count as u32 {
+                for id in 1..=window::max_id() {
                     if window::exists(id) {
                         window::minimize(id);
                     }

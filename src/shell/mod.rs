@@ -1148,8 +1148,7 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                         // Repaint the desktop onto the new surface and
                         // pull all windows back on-screen.
                         crate::wm::wallpaper::paint_to_screen();
-                        let count = crate::wm::window::count();
-                        for id in 1..=count as u32 {
+                        for id in 1..=crate::wm::window::max_id() {
                             if !crate::wm::window::exists(id) {
                                 continue;
                             }
@@ -1302,7 +1301,7 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                     count,
                     crate::wm::window::focused_id()
                 ));
-                for id in 1..=count as u32 {
+                for id in 1..=crate::wm::window::max_id() {
                     if crate::wm::window::exists(id) {
                         if let Some((x, y, w, h)) = crate::wm::window::get_info(id) {
                             out.puts(&alloc::format!(

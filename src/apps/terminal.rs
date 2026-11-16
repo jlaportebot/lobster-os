@@ -666,8 +666,7 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
         None => return,
     };
 
-    let win_count = window::count();
-    for id in 1..=win_count as u32 {
+    for id in 1..=window::max_id() {
         if !window::exists(id) {
             continue;
         }

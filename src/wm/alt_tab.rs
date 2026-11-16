@@ -32,7 +32,7 @@ pub fn open() {
         let focused = window::focused_id();
         let mut sel = 0;
         let mut seen_focused = false;
-        for i in 1..=count as u32 {
+        for i in 1..=window::max_id() {
             if !window::exists(i) {
                 continue;
             }
@@ -46,7 +46,7 @@ pub fn open() {
         }
         // Wraps to 1 if focused is the last
         if sel == 0 {
-            for i in 1..=count as u32 {
+            for i in 1..=window::max_id() {
                 if window::exists(i) {
                     sel = i;
                     break;
@@ -69,12 +69,13 @@ pub fn advance(backwards: bool) {
         if count == 0 {
             return;
         }
+        let max_id = window::max_id();
         let mut sel = SELECTED as u32;
-        for _ in 0..count {
+        for _ in 0..max_id {
             if backwards {
-                sel = if sel <= 1 { count as u32 } else { sel - 1 };
+                sel = if sel <= 1 { max_id } else { sel - 1 };
             } else {
-                sel = if sel >= count as u32 { 1 } else { sel + 1 };
+                sel = if sel >= max_id { 1 } else { sel + 1 };
             }
             if window::exists(sel) {
                 break;
@@ -134,7 +135,7 @@ pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
     let selected = unsafe { SELECTED } as u32;
     let mut tx = x0 + 10;
     let mut drawn = 0u32;
-    for id in 1..=count as u32 {
+    for id in 1..=window::max_id() {
         if drawn >= tiles {
             break;
         }

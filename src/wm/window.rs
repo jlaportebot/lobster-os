@@ -875,6 +875,16 @@ pub fn count() -> usize {
     *WIN_COUNT.lock()
 }
 
+/// Highest window id handed out so far (0 before any window exists).
+///
+/// Ids are never reused, so after a window closes the live ids no longer
+/// form `1..=count()`. Loops that probe ids with [`exists`] must use this as
+/// their upper bound, not [`count`], or windows opened after a close are
+/// skipped.
+pub fn max_id() -> u32 {
+    NEXT_WIN_ID.lock().saturating_sub(1)
+}
+
 /// Check if a window exists
 pub fn exists(id: u32) -> bool {
     let windows = WINDOWS.lock();
@@ -1026,4 +1036,26 @@ pub fn restore(id: u32) {
         / 2;
     move_window(id, x, y);
     resize(id, win_w, win_h);
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn max_id_covers_windows_created_after_an_earlier_one_closed() {
+        let first = create(0, 0, 0, 0, "regression-first").expect("window table has room");
+        let second = create(0, 0, 0, 0, "regression-second").expect("window table has room");
+        destroy(first);
+        let third = create(0, 0, 0, 0, "regression-third").expect("window table has room");
+
+        // Ids are never reused, so a live window can have an id above the
+        // live-window count; id-probing loops must still reach it.
+        assert!(third > second);
+        assert!(max_id() >= third);
+        assert!((1..=max_id()).any(|id| id == third && exists(id)));
+
+        destroy(second);
+        destroy(third);
+    }
 }
