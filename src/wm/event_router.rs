@@ -13,19 +13,20 @@
 //!
 //! | # | stage            | sees                  | why it sits here |
 //! |---|------------------|-----------------------|------------------|
-//! | 0 | `context_menu`   | every button edge     | Modal popup drawn above everything. While visible it swallows ALL button edges (even outside clicks and releases) so a click can never leak to what is drawn beneath it. |
-//! | 1 | `hit_region`     | left press            | Single hit-region dispatch (O2.2). Consults only the topmost window under the pointer: EL0 app content is an implicit full-content region (press captured so the release is paired); kernel windows dispatch through regions registered with `hit_region::register` to the handler set with `hit_region::set_handler` (Task Manager, Terminal and Editor tab strips). Chrome or unmatched client area falls through. |
-//! | 2 | `panel`          | left press            | Launcher, task buttons, tray. Above desktop icons and plain windows. |
-//! | 3 | `tray_popups`    | left press            | Popups inside click is consumed; outside click closes (and is consumed). |
-//! | 4 | `start_menu`     | left press            | Same inside-consume / outside-close contract. |
-//! | 5 | `desktop_icons`  | left press on an icon | Icons are the bottom-most clickable surface. |
-//! | 6 | `window_chrome`  | left press + release  | Catch-all: focus, drag, resize, close/min/max (window.rs). Also owns the left-release that ends drag/resize. |
+//! | 0 | `dialog`         | every button edge     | Application-modal dialog (O3.6). While open it swallows ALL button edges so nothing behind it can be clicked. |
+//! | 1 | `context_menu`   | every button edge     | Modal popup drawn above everything else. While visible it swallows ALL button edges (even outside clicks and releases) so a click can never leak to what is drawn beneath it. |
+//! | 2 | `hit_region`     | left press            | Single hit-region dispatch (O2.2). Consults only the topmost window under the pointer: EL0 app content is an implicit full-content region (press captured so the release is paired); kernel windows dispatch through regions registered with `hit_region::register` to the handler set with `hit_region::set_handler` (Task Manager, Terminal and Editor tab strips, Calculator keys). Chrome or unmatched client area falls through. |
+//! | 3 | `panel`          | left press            | Launcher, task buttons, tray. Above desktop icons and plain windows. |
+//! | 4 | `tray_popups`    | left press            | Popups inside click is consumed; outside click closes (and is consumed). |
+//! | 5 | `start_menu`     | left press            | Same inside-consume / outside-close contract. |
+//! | 6 | `desktop_icons`  | left press on an icon | Icons are the bottom-most clickable surface. |
+//! | 7 | `window_chrome`  | left press + release  | Catch-all: focus, drag, resize, close/min/max (window.rs). Also owns the left-release that ends drag/resize. |
 //!
 //! # Invariants
 //!
-//! * Stage 0 is first because it is modal; stage 6 is last because it is
-//!   the fallback that always runs on a left press that nothing claimed.
-//! * Only stage 0 and stage 6 observe releases. The press→release capture
+//! * Stages 0 and 1 are first because they are modal; stage 7 is last because
+//!   it is the fallback that always runs on a left press nothing claimed.
+//! * Only stages 0, 1 and 7 observe releases. The press→release capture
 //!   for user windows is done *before* the table (in `input.rs`), so a
 //!   release is never swallowed by an early return (e.g. context menu).
 //! * Right-press is a gesture handled before the table
@@ -38,7 +39,7 @@
 
 use crate::usb::hid::HidEvent;
 use crate::wm::{
-    config, context_menu, desktop_icons, hit_region, input, panel, start_menu, tray_popups,
+    config, context_menu, desktop_icons, dialog, hit_region, input, panel, start_menu, tray_popups,
     user_windows, window,
 };
 
@@ -73,7 +74,12 @@ pub struct Stage {
 }
 
 /// The routing table, in priority order. See module docs.
-pub static STAGES: [Stage; 7] = [
+pub static STAGES: [Stage; 8] = [
+    Stage {
+        name: "dialog",
+        hit: hit_dialog,
+        handle: handle_dialog,
+    },
     Stage {
         name: "context_menu",
         hit: hit_context_menu,
@@ -180,6 +186,11 @@ fn hit_desktop_icon(ev: &ButtonEv) -> bool {
     ev.left_press() && desktop_icons::hit_test(ev.x, ev.y).is_some()
 }
 
+/// Dialog modal: hits on any button edge when a dialog is open.
+fn hit_dialog(_: &ButtonEv) -> bool {
+    dialog::is_open()
+}
+
 // ─── Stage handlers ──────────────────────────────────────────────────
 
 /// Modal: updates hover, runs a clicked action, and consumes everything.
@@ -189,6 +200,15 @@ fn handle_context_menu(ev: &ButtonEv) -> bool {
         if let Some(action) = context_menu::handle_click(ev.x, ev.y) {
             input::handle_context_action(action);
         }
+    }
+    true
+}
+
+/// Modal dialog: consumes every button edge while a dialog is open; the
+/// dialog itself decides what a press or release inside it means.
+fn handle_dialog(ev: &ButtonEv) -> bool {
+    if ev.left_press() || ev.left_release() {
+        dialog::handle_click(ev.x, ev.y);
     }
     true
 }

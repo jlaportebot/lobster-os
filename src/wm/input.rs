@@ -11,6 +11,7 @@ use crate::println;
 use crate::usb::hid::{self, HidEvent};
 use crate::wm::compositor;
 use crate::wm::event_router;
+use crate::wm::tray_popups;
 
 // ─── Cursor State ──────────────────────────────────────────────────
 
@@ -281,6 +282,14 @@ fn handle_key_press(scancode: u8, _extended: bool) {
     let shift = hid::shift_held();
     let ch = hid::scancode_to_ascii(scancode, shift);
 
+    // Modal dialog: consumes all keys when open
+    if crate::wm::dialog::is_open() {
+        if crate::wm::dialog::handle_key(scancode) {
+            crate::wm::dirty::mark();
+            return;
+        }
+    }
+
     // Alt+Tab: window switcher overlay
     if hid::alt_held() && scancode == 0x2B {
         if crate::wm::alt_tab::is_visible() {
@@ -380,8 +389,13 @@ fn handle_mouse_move(dx: i16, dy: i16) {
     compositor::set_hardware_cursor_pos(unsafe { CURSOR_X }, unsafe { CURSOR_Y });
     update_cursor_shape();
 
-    // Hover observers, drag/resize bookkeeping, optional focus-follows-z
+    // Handle quick settings slider drag
     let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+    if tray_popups::handle_drag(cx, cy) {
+        return;
+    }
+
+    // Hover observers, drag/resize bookkeeping, optional focus-follows-z
     event_router::route_move(cx, cy, dx, dy);
 }
 
@@ -407,6 +421,10 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
     // pending state stuck.
     if !left && prev_left {
         let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+        // Handle quick settings slider release
+        if tray_popups::handle_release(cx, cy) {
+            // Handled by quick settings
+        }
         end_user_click(cx, cy);
     }
 
@@ -451,6 +469,10 @@ pub(super) fn handle_panel_action(action: u32) {
         0xFFFFFFFB => {
             // Clock → clock/notification-center popup
             crate::wm::tray_popups::open(crate::wm::tray_popups::PopupKind::Clock);
+        }
+        0xFFFFFFFA => {
+            // QuickSettings tray → popup
+            crate::wm::tray_popups::open(crate::wm::tray_popups::PopupKind::QuickSettings);
         }
         window_id => {
             // Task button clicked - focus that window
