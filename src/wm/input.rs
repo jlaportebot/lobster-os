@@ -421,10 +421,8 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
     // pending state stuck.
     if !left && prev_left {
         let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
-        // Handle quick settings slider release
-        if tray_popups::handle_release(cx, cy) {
-            // Handled by quick settings
-        }
+        // Ends a quick-settings slider drag; a no-op unless that popup is open.
+        tray_popups::handle_release(cx, cy);
         end_user_click(cx, cy);
     }
 

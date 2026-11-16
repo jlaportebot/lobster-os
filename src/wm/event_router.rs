@@ -130,7 +130,11 @@ pub fn route_button(ev: &ButtonEv) -> Option<&'static str> {
 // ─── Gestures handled outside the table ──────────────────────────────
 
 /// Right-button press: toggle/show the desktop context menu. Always consumes.
+/// An open modal dialog swallows it so no menu can appear behind the dialog.
 pub fn route_right_press(x: u32, y: u32) {
+    if dialog::is_open() {
+        return;
+    }
     // If context menu is already visible, hide it
     if context_menu::is_visible() {
         context_menu::hide();
