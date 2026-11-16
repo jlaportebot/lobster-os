@@ -5,6 +5,7 @@
 //! tab content so both stay single-sourced.
 
 use crate::display::graphics;
+use crate::wm::hit_region::{self, HitKind};
 use crate::wm::theme;
 use crate::wm::window;
 
@@ -140,6 +141,18 @@ pub fn handle_click(sx: u32, sy: u32) -> bool {
     false
 }
 
+/// Router entry point: the strip region already matched, so the app's own
+/// geometry in `handle_click` picks the tab.
+fn on_tab_strip_hit(hit: &hit_region::Hit) -> bool {
+    handle_click(hit.screen_x, hit.screen_y)
+}
+
+/// Re-register the tab strip after `window_target` cleared the regions.
+fn register_tab_strip(win_id: u32, client_w: u32) {
+    hit_region::set_handler(win_id, on_tab_strip_hit);
+    hit_region::register(win_id, 0, 0, client_w, TAB_BAR_H, 0, HitKind::Tab);
+}
+
 /// Render the Task Manager window.
 pub fn render_to_windows(fbuf: &crate::display::fb::FramebufferInfo) {
     let Some(win_id) = window::find_by_title(APP_NAME) else {
@@ -153,6 +166,7 @@ pub fn render_to_windows(fbuf: &crate::display::fb::FramebufferInfo) {
     let (cx, cy, cw, ch) =
         crate::wm::window_frame::draw_frame(fbuf, win_id, x, y, w, h, APP_NAME, focused);
     let t = theme::current();
+    register_tab_strip(win_id, cw);
 
     // Tab bar
     graphics::draw_rect(fbuf, cx, cy, cw, TAB_BAR_H, t.menu_bg);

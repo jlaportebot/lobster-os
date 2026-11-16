@@ -563,6 +563,7 @@ pub use editor_stub::*;
 #[cfg(feature = "qemu_raspi5b")]
 mod tabs {
     use super::editor_stub::Editor;
+    use crate::wm::hit_region::{self, HitKind};
     use alloc::string::String;
     use alloc::vec::Vec;
 
@@ -884,6 +885,18 @@ mod tabs {
         consumed
     }
 
+    /// Router entry point: the strip region already matched, so the app's own
+    /// geometry in `handle_click` picks the tab.
+    fn on_tab_strip_hit(hit: &hit_region::Hit) -> bool {
+        handle_click(hit.screen_x, hit.screen_y)
+    }
+
+    /// Re-register the tab strip after `window_target` cleared the regions.
+    fn register_tab_strip(win_id: u32, client_w: u32) {
+        hit_region::set_handler(win_id, on_tab_strip_hit);
+        hit_region::register(win_id, 0, 0, client_w, TAB_H, 0, HitKind::Tab);
+    }
+
     /// Tab-strip click handling (screen coords). Returns true if consumed.
     pub fn handle_click(cx: u32, cy: u32) -> bool {
         use crate::wm::window;
@@ -1008,6 +1021,7 @@ mod tabs {
             return;
         }
         let theme = crate::wm::theme::current();
+        register_tab_strip(win_id, cw);
 
         // Client background
         g::draw_rect(fb, cx, cy, cw, ch, 0xFFFFFFFF);

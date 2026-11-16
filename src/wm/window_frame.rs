@@ -12,6 +12,13 @@ pub const TITLE_H: u32 = 24;
 pub const BORDER_W: u32 = 2;
 pub const CLOSE_BTN_W: u32 = 36;
 
+/// Screen position of a window's client-area origin given the window origin.
+/// Shared by every hit-testing path so they agree with `draw_frame`.
+#[must_use]
+pub const fn client_origin(x: u32, y: u32) -> (u32, u32) {
+    (x + BORDER_W, y + BORDER_W + TITLE_H)
+}
+
 /// Animation kinds
 #[derive(Clone, Copy, PartialEq)]
 pub enum Anim {

@@ -61,14 +61,32 @@ impl HitRegion {
     }
 }
 
+/// A resolved press inside a registered region.
+#[derive(Clone, Copy, Debug)]
+pub struct Hit {
+    pub win_id: u32,
+    pub region: HitRegion,
+    /// Press position relative to the client-area origin.
+    pub local_x: u32,
+    pub local_y: u32,
+    /// Press position in screen coordinates.
+    pub screen_x: u32,
+    pub screen_y: u32,
+}
+
+/// Per-window click handler; returns true when the press was consumed.
+pub type HitHandler = fn(&Hit) -> bool;
+
 /// Maximum hit regions per window.
 const MAX_HIT_REGIONS: usize = 128;
 
 /// Per-window hit-region registry.
-/// Cleared on window destroy or at the start of each frame.
+/// Regions are cleared whenever the window's app redraws; the handler lives
+/// until the window is destroyed.
 pub struct HitRegistry {
     regions: [Option<HitRegion>; MAX_HIT_REGIONS],
     count: usize,
+    handler: Option<HitHandler>,
 }
 
 impl HitRegistry {
@@ -77,10 +95,17 @@ impl HitRegistry {
         Self {
             regions: [None; MAX_HIT_REGIONS],
             count: 0,
+            handler: None,
         }
     }
 
-    /// Clear all regions (call at frame start or window destroy).
+    /// Install the window's dispatch handler.
+    pub fn set_handler(&mut self, handler: HitHandler) {
+        self.handler = Some(handler);
+    }
+
+    /// Drop all regions but keep the handler: apps re-register regions on
+    /// every redraw, while the handler is set once for the window's lifetime.
     pub fn clear(&mut self) {
         for i in 0..self.count {
             self.regions[i] = None;
@@ -164,46 +189,83 @@ pub fn clear(win_id: u32) {
     }
 }
 
-/// Public API: find the topmost window under (screen_x, screen_y) that has a hit region
-/// containing the point (translated to window-local), and return (window_id, region).
-/// Respects z-order: checks windows from topmost to bottommost.
-pub fn route_hit(screen_x: u32, screen_y: u32) -> Option<(u32, HitRegion)> {
-    // Get visible layers in z-order (bottom to top), then iterate in reverse.
-    let layers = compositor::visible_layers_bottom_to_top();
-    for layer in layers.iter().rev() {
-        let win_id = layer.id;
-        let Some(reg) = registry_for(win_id) else {
-            continue;
-        };
-        if reg.is_empty() {
-            continue;
-        }
-        // Translate screen -> window-local (client area).
-        let Some((wx, wy, _ww, _wh)) = crate::wm::window::get_info(win_id) else {
-            continue;
-        };
-        // Client area origin: window origin + border + title bar
-        const BORDER_W: u32 = 2;
-        const TITLE_BAR_H: u32 = 24;
-        let client_x = wx + BORDER_W;
-        let client_y = wy + TITLE_BAR_H;
-
-        if screen_x < client_x || screen_y < client_y {
-            continue;
-        }
-        let lx = screen_x - client_x;
-        let ly = screen_y - client_y;
-
-        if let Some(region) = reg.hit_test(lx, ly) {
-            return Some((win_id, *region));
-        }
+/// Public API: install the dispatch handler for a window. Survives `clear`.
+pub fn set_handler(win_id: u32, handler: HitHandler) {
+    if let Some(reg) = registry_for(win_id) {
+        reg.set_handler(handler);
     }
-    None
 }
 
-/// Called when a window is destroyed: clear its registry.
+/// Result of geometric window picking: the window and, when the point is in
+/// its client area, the client-local position (None over the chrome).
+type Pick = (u32, Option<(u32, u32)>);
+
+/// Pure geometry: pick the topmost window whose full rectangle contains the
+/// point. Only that window is consulted, so a covered window's regions can
+/// never be hit "through" the window above it.
+/// `windows_top_first` holds (id, (x, y, w, h)) in descending z-order.
+fn pick_window(
+    windows_top_first: &[(u32, (u32, u32, u32, u32))],
+    sx: u32,
+    sy: u32,
+) -> Option<Pick> {
+    let &(id, (x, y, _, _)) = windows_top_first
+        .iter()
+        .find(|(_, (x, y, w, h))| sx >= *x && sx < x + w && sy >= *y && sy < y + h)?;
+    let (client_x, client_y) = crate::wm::window_frame::client_origin(x, y);
+    if sx < client_x || sy < client_y {
+        return Some((id, None));
+    }
+    Some((id, Some((sx - client_x, sy - client_y))))
+}
+
+/// Pick the topmost visible window under the point using compositor z-order.
+fn pick_at(screen_x: u32, screen_y: u32) -> Option<Pick> {
+    let mut windows: alloc::vec::Vec<(u32, (u32, u32, u32, u32))> = alloc::vec::Vec::new();
+    for layer in compositor::visible_layers_bottom_to_top().iter().rev() {
+        if let Some(rect) = crate::wm::window::get_info(layer.id) {
+            windows.push((layer.id, rect));
+        }
+    }
+    pick_window(&windows, screen_x, screen_y)
+}
+
+/// Id of the topmost visible window whose rectangle contains the point.
+#[must_use]
+pub fn topmost_window_at(screen_x: u32, screen_y: u32) -> Option<u32> {
+    pick_at(screen_x, screen_y).map(|(id, _)| id)
+}
+
+/// Resolve a press at screen coordinates to a region of the topmost window
+/// under the pointer. None when that window has no region there (chrome or
+/// empty client area), so later router stages can claim the press.
+pub fn route_hit(screen_x: u32, screen_y: u32) -> Option<Hit> {
+    let (win_id, local) = pick_at(screen_x, screen_y)?;
+    let (local_x, local_y) = local?;
+    let region = *registry_for(win_id)?.hit_test(local_x, local_y)?;
+    Some(Hit {
+        win_id,
+        region,
+        local_x,
+        local_y,
+        screen_x,
+        screen_y,
+    })
+}
+
+/// Run the window's handler for a resolved hit. False when the window has no
+/// handler or the handler declined the press.
+pub fn dispatch(hit: &Hit) -> bool {
+    let handler = registry_for(hit.win_id).and_then(|reg| reg.handler);
+    handler.is_some_and(|handler| handler(hit))
+}
+
+/// Called when a window is destroyed: drop its regions and handler.
 pub fn on_window_destroyed(win_id: u32) {
-    clear(win_id);
+    if let Some(reg) = registry_for(win_id) {
+        reg.clear();
+        reg.handler = None;
+    }
 }
 
 #[cfg(test)]
@@ -259,24 +321,101 @@ mod tests {
         assert!(reg.hit_test(10, 10).is_none()); // exactly at edge (exclusive)
     }
 
-    #[test]
-    fn route_hit_respects_z_order() {
-        // This test needs the compositor to be initialized with layers.
-        // We test the logic by mocking: we can't easily set up layers here,
-        // but we verify the translation math.
-        const BORDER_W: u32 = 2;
-        const TITLE_BAR_H: u32 = 24;
-        let wx = 100;
-        let wy = 50;
-        let client_x = wx + BORDER_W;
-        let client_y = wy + TITLE_BAR_H;
+    const CLIENT_DX: u32 = crate::wm::window_frame::BORDER_W;
+    const CLIENT_DY: u32 = crate::wm::window_frame::BORDER_W + crate::wm::window_frame::TITLE_H;
 
-        let screen_x = client_x + 5;
-        let screen_y = client_y + 10;
-        let lx = screen_x - client_x;
-        let ly = screen_y - client_y;
-        assert_eq!(lx, 5);
-        assert_eq!(ly, 10);
+    fn no_op_handler(_: &Hit) -> bool {
+        true
+    }
+
+    fn sample_hit(win_id: u32) -> Hit {
+        Hit {
+            win_id,
+            region: HitRegion::new(0, 0, 1, 1, 0, HitKind::Tab),
+            local_x: 0,
+            local_y: 0,
+            screen_x: 0,
+            screen_y: 0,
+        }
+    }
+
+    #[test]
+    fn pick_window_returns_topmost_even_when_lower_window_has_region_there() {
+        let top = (2, (50, 50, 100, 100));
+        let bottom = (1, (0, 0, 200, 200));
+        let picked = pick_window(&[top, bottom], 80, 90);
+        assert_eq!(picked.map(|(id, _)| id), Some(2));
+    }
+
+    #[test]
+    fn pick_window_falls_to_lower_window_outside_the_topmost_rect() {
+        let top = (2, (50, 50, 100, 100));
+        let bottom = (1, (0, 0, 200, 200));
+        let picked = pick_window(&[top, bottom], 10, 10);
+        assert_eq!(picked.map(|(id, _)| id), Some(1));
+    }
+
+    #[test]
+    fn pick_window_reports_no_client_position_over_title_bar() {
+        let win = (1, (100, 100, 200, 200));
+        assert_eq!(
+            pick_window(&[win], 150, 100 + CLIENT_DY - 1),
+            Some((1, None))
+        );
+        assert_eq!(
+            pick_window(&[win], 100 + CLIENT_DX - 1, 200),
+            Some((1, None))
+        );
+    }
+
+    #[test]
+    fn pick_window_client_origin_uses_border_plus_title() {
+        let win = (1, (100, 100, 200, 200));
+        let picked = pick_window(&[win], 100 + CLIENT_DX, 100 + CLIENT_DY);
+        assert_eq!(picked, Some((1, Some((0, 0)))));
+    }
+
+    #[test]
+    fn pick_window_returns_none_outside_every_window() {
+        let win = (1, (100, 100, 50, 50));
+        assert_eq!(pick_window(&[win], 150, 150), None);
+        assert_eq!(pick_window(&[], 0, 0), None);
+    }
+
+    #[test]
+    fn clear_keeps_handler() {
+        let mut reg = HitRegistry::new();
+        reg.set_handler(no_op_handler);
+        reg.add(HitRegion::new(0, 0, 10, 10, 1, HitKind::Tab));
+        reg.clear();
+        assert!(reg.is_empty());
+        assert!(reg.handler.is_some());
+    }
+
+    #[test]
+    fn destroy_drops_handler_and_regions() {
+        const WIN: u32 = 31;
+        set_handler(WIN, no_op_handler);
+        assert!(register(WIN, 0, 0, 4, 4, 0, HitKind::Tab));
+        on_window_destroyed(WIN);
+        let reg = registry_for(WIN).expect("window id in range");
+        assert!(reg.handler.is_none());
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn dispatch_returns_false_without_handler() {
+        const WIN: u32 = 30;
+        on_window_destroyed(WIN);
+        assert!(!dispatch(&sample_hit(WIN)));
+    }
+
+    #[test]
+    fn dispatch_calls_registered_handler() {
+        const WIN: u32 = 29;
+        set_handler(WIN, no_op_handler);
+        assert!(dispatch(&sample_hit(WIN)));
+        on_window_destroyed(WIN);
     }
 
     #[test]

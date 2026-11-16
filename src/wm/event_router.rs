@@ -14,7 +14,7 @@
 //! | # | stage            | sees                  | why it sits here |
 //! |---|------------------|-----------------------|------------------|
 //! | 0 | `context_menu`   | every button edge     | Modal popup drawn above everything. While visible it swallows ALL button edges (even outside clicks and releases) so a click can never leak to what is drawn beneath it. |
-//! | 1 | `hit_region`     | left press            | Single hit-region dispatch (O2.2): finds topmost window under pointer, translates to window-local, matches registered region. Replaces per-app stages (task_manager, terminal_tabs, editor_tabs, user_windows). |
+//! | 1 | `hit_region`     | left press            | Single hit-region dispatch (O2.2). Consults only the topmost window under the pointer: EL0 app content is an implicit full-content region (press captured so the release is paired); kernel windows dispatch through regions registered with `hit_region::register` to the handler set with `hit_region::set_handler` (Task Manager, Terminal and Editor tab strips). Chrome or unmatched client area falls through. |
 //! | 2 | `panel`          | left press            | Launcher, task buttons, tray. Above desktop icons and plain windows. |
 //! | 3 | `tray_popups`    | left press            | Popups inside click is consumed; outside click closes (and is consumed). |
 //! | 4 | `start_menu`     | left press            | Same inside-consume / outside-close contract. |
@@ -38,7 +38,8 @@
 
 use crate::usb::hid::HidEvent;
 use crate::wm::{
-    config, context_menu, desktop_icons, hit_region, input, panel, start_menu, tray_popups, window,
+    config, context_menu, desktop_icons, hit_region, input, panel, start_menu, tray_popups,
+    user_windows, window,
 };
 
 /// A mouse-button edge, as seen by the router.
@@ -192,31 +193,30 @@ fn handle_context_menu(ev: &ButtonEv) -> bool {
     true
 }
 
-/// Single hit-region dispatch (O2.2): finds the topmost window under the
-/// pointer, translates to window-local coordinates, and dispatches to the
-/// matching registered region. If no region matches, returns false to fall
-/// through to window_chrome (focus/drag/title-bar).
+/// Single hit-region dispatch (O2.2). EL0 app windows are an implicit
+/// full-content region and get the press (with the real pointer position)
+/// through the capture that pairs it with its release. Kernel windows are
+/// resolved via their registered regions and per-window handler. Anything
+/// else returns false and falls through to the chrome stage.
 fn handle_hit_region(ev: &ButtonEv) -> bool {
-    if let Some((win_id, region)) = hit_region::route_hit(ev.x, ev.y) {
-        // Deliver the hit to the window's app.
-        // For now, we queue a click event for user windows; kernel apps
-        // will adopt the API later (per mission spec).
-        if let Some(_owner_pid) = crate::wm::user_windows::owner_of_wm(win_id) {
-            // EL0 app window: queue the click in its event queue.
-            // The tag identifies which region was hit.
-            crate::wm::user_windows::click_event(
-                crate::wm::user_windows::win_id_by_wm_id(win_id).unwrap_or(1),
-                1,                         // left button
-                true,                      // press
-                region.x + (region.w / 2), // approximate center for now; apps can use tag
-                region.y + (region.h / 2),
-            );
-            return true;
-        }
-        // Kernel window with hit regions: not yet wired; fall through to chrome.
-        // Apps will adopt the API in a later mission.
+    if let Some((win_id, ux, uy, true)) = user_windows::hit_test(ev.x, ev.y) {
+        return deliver_user_click(win_id, ux, uy, ev);
     }
-    false
+    hit_region::route_hit(ev.x, ev.y).is_some_and(|hit| hit_region::dispatch(&hit))
+}
+
+/// Deliver a press to an EL0 window unless a kernel window is stacked above
+/// it at the pointer (`user_windows::hit_test` only orders user windows).
+fn deliver_user_click(win_id: u64, ux: u32, uy: u32, ev: &ButtonEv) -> bool {
+    let covered = match hit_region::topmost_window_at(ev.x, ev.y) {
+        Some(top) => user_windows::win_id_by_wm_id(top) != Some(win_id),
+        None => false,
+    };
+    if covered {
+        return false;
+    }
+    input::begin_user_click(win_id, ux, uy);
+    true
 }
 
 fn handle_panel(ev: &ButtonEv) -> bool {

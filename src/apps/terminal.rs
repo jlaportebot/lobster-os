@@ -14,6 +14,7 @@
 use crate::ipc::{pty_ioctl, pty_master_read, pty_master_write};
 use crate::println;
 use crate::terminal::{parser::Parser, screen::ScreenBuffer, COLS, ROWS};
+use crate::wm::hit_region::{self, HitKind};
 use crate::wm::widget::{WidgetId, WidgetTable};
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
@@ -543,6 +544,18 @@ pub fn font_scale_down() {
     set_font_scale(font_scale().saturating_sub(1));
 }
 
+/// Router entry point: the strip region already matched, so the app's own
+/// geometry in `handle_click` picks the button.
+fn on_tab_strip_hit(hit: &hit_region::Hit) -> bool {
+    handle_click(hit.screen_x, hit.screen_y)
+}
+
+/// Re-register the tab strip after `window_target` cleared the regions.
+fn register_tab_strip(win_id: u32, client_w: u32) {
+    hit_region::set_handler(win_id, on_tab_strip_hit);
+    hit_region::register(win_id, 0, 0, client_w, TAB_BAR_H, 0, HitKind::Tab);
+}
+
 /// Tab-bar click handling (screen coords). Returns true if consumed.
 pub fn handle_click(cx: u32, cy: u32) -> bool {
     use crate::wm::window;
@@ -672,6 +685,8 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
         let line_height = 16u32 * scale;
         let char_width = 8u32 * scale;
         let theme = crate::wm::theme::current();
+
+        register_tab_strip(id, client_w);
 
         // Clear client area with terminal background color
         crate::wm::widget::fill_rect(fb, client_x, client_y, client_w, client_h, 0xFF000000);
