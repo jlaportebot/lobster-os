@@ -456,40 +456,6 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
     });
 }
 
-/// Handle panel click actions
-pub(super) fn handle_panel_action(action: u32) {
-    match action {
-        0xFFFFFFFF => {
-            // Launcher button clicked - toggle the start menu
-            crate::wm::start_menu::toggle();
-        }
-        0xFFFFFFFE => {
-            // Network tray → popup
-            crate::wm::tray_popups::open(crate::wm::tray_popups::PopupKind::Network);
-        }
-        0xFFFFFFFD => {
-            // Volume tray → popup
-            crate::wm::tray_popups::open(crate::wm::tray_popups::PopupKind::Volume);
-        }
-        0xFFFFFFFC => {
-            // Battery tray → popup
-            crate::wm::tray_popups::open(crate::wm::tray_popups::PopupKind::Battery);
-        }
-        0xFFFFFFFB => {
-            // Clock → clock/notification-center popup
-            crate::wm::tray_popups::open(crate::wm::tray_popups::PopupKind::Clock);
-        }
-        0xFFFFFFFA => {
-            // QuickSettings tray → popup
-            crate::wm::tray_popups::open(crate::wm::tray_popups::PopupKind::QuickSettings);
-        }
-        window_id => {
-            // Task button clicked - focus that window
-            crate::wm::window::focus(window_id);
-        }
-    }
-}
-
 /// Create a new file or folder in the user desktop dir (falls back to /tmp)
 fn new_desktop_item(is_dir: bool) {
     use crate::fs::vfs::{self, VfsError};

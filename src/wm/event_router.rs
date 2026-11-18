@@ -244,11 +244,7 @@ fn deliver_user_click(win_id: u64, ux: u32, uy: u32, ev: &ButtonEv) -> bool {
 }
 
 fn handle_panel(ev: &ButtonEv) -> bool {
-    if let Some(action) = panel::handle_click(ev.x, ev.y) {
-        input::handle_panel_action(action);
-        return true;
-    }
-    false
+    panel::handle_press(ev.x, ev.y)
 }
 
 fn handle_tray_popups(ev: &ButtonEv) -> bool {

@@ -199,70 +199,126 @@ pub unsafe extern "C" fn handle_sync_exception_el0(
     }
 
     // Centralized cooperative exit check — runs for ALL exception types.
-    // When set (by SYS_EXIT or kill_current_and_exit), modify SPSR_EL1 to
-    // return to EL1 instead of EL0, and set ELR_EL1 to the saved kernel
-    // return address so we resume in kernel code that launched the process.
+    // When set (by SYS_EXIT or kill_current_and_exit), the trap frame is
+    // rewritten to return to the kernel code that launched the process.
     if crate::sched::cooperative_exit_pending() {
         crate::sched::clear_cooperative_exit();
-        // S3: hard-mask IRQs for the ELR/SPSR rewrite + eret window.
-        // The arch timer (once preempt is on) can otherwise land exactly
-        // between the msr writes below and the handler's eret, producing
-        // a PSTATE.IL-class UNDEF loop at the IRQ vector body (EC=0x00,
-        // SPSR=0x3C5 — observed live). The main loop re-enables IRQs
-        // after run_and_wait returns.
-        unsafe {
-            core::arch::asm!("msr DAIFSet, #0xF");
-        }
-        // S2: a background task's slice ends the same way — eret back to
-        // the main loop, but keep the task alive and deliver the slice
-        // marker instead of an exit code.
         let is_slice = crate::sched::slice_yield_pending();
         crate::sched::clear_slice_yield();
-        let kr = crate::sched::kernel_return_address();
-        unsafe {
-            // S2: persist the EL0 frame BEFORE rewiring ELR/SPSR so the
-            // next run_and_wait resumes the app where it yielded.
-            if is_slice {
-                crate::sched::save_slice_frame(crate::sched::current_pid(), regs, elr, spsr);
-            }
-            // Deliver the exit code (or slice marker) in x0: the resume
-            // trampoline returns it to run_and_wait's caller.
-            if !regs.is_null() {
-                *regs.add(0) = if is_slice {
-                    crate::sched::SLICE_YIELD_MARKER as u64
-                } else {
-                    crate::sched::coop_exit_code() as u64
-                };
-                // RESTORE_CONTEXT (boot.S) reloads ELR/SPSR from the
-                // exception frame (offsets 256/264) and masks DAIF before
-                // the eret — the cooperative return must therefore be
-                // written into the FRAME (live msr writes would be
-                // overwritten by the frame-backed restore).
-                // EL1h (M=0b0101), all DAIF masked: 0x3C5 — kernel resume.
-                // NOTE: `regs` is *mut u64 — add() counts ELEMENTS, so
-                // byte offset 256 = add(32), 264 = add(33). (Using
-                // add(256)/add(264) wrote 2KB past the frame — the eret
-                // then loaded the ORIGINAL ELR/SPSR and returned to the
-                // app after exit, executing garbage.)
-                *regs.add(32) = kr; // TrapFrame.elr   (byte 256)
-                *regs.add(33) = 0x3C5; // TrapFrame.spsr  (byte 264)
-            }
-        }
-        // For slices the task stays Ready; the main loop will resume it
-        // after its wake deadline. Only real exits park CURRENT_PID.
-        if !is_slice {
-            crate::sched::set_current_pid(0);
-        }
+        finish_cooperative_return(regs, elr, spsr, is_slice, None);
     }
 }
 
-/// IRQ handler — hardware interrupts + timer-driven scheduling
+/// EL1h, all DAIF masked (M=0b0101, DAIF=0xF): the SPSR used to resume the
+/// kernel after a cooperative return.
+const SPSR_KERNEL_RESUME: u64 = 0x3C5;
+
+/// Trap-frame word index of ELR (byte offset 256). `regs` is `*mut u64`, so
+/// `add()` counts elements, not bytes.
+const FRAME_ELR_WORD: usize = 32;
+
+/// Trap-frame word index of SPSR (byte offset 264).
+const FRAME_SPSR_WORD: usize = 33;
+
+/// Rewrite the EL0 trap frame so the eret lands back in the kernel main
+/// loop (inside `run_and_wait`'s resume trampoline) instead of EL0.
+///
+/// For a slice end (`is_slice`) the EL0 context is persisted first so the
+/// next `run_and_wait` resumes the app exactly where it stopped, and the
+/// slice marker is returned; otherwise the exit code is returned and the
+/// task is parked. `fp` carries an FP/SIMD snapshot taken at IRQ entry
+/// (None when the vector registers are still the task's own).
+///
+/// # Safety
+/// `regs` must be null or the live trap frame on the exception stack.
+unsafe fn finish_cooperative_return(
+    regs: *mut u64,
+    elr: u64,
+    spsr: u64,
+    is_slice: bool,
+    fp: Option<&sched::FpSnapshot>,
+) {
+    // S3: hard-mask IRQs for the ELR/SPSR rewrite + eret window. The arch
+    // timer can otherwise land between the frame rewrite and the eret,
+    // producing a PSTATE.IL-class UNDEF loop at the IRQ vector body. The
+    // main loop re-enables IRQs after run_and_wait returns.
+    // SAFETY: masking DAIF is always sound at EL1.
+    unsafe {
+        core::arch::asm!("msr DAIFSet, #0xF");
+    }
+    let kr = crate::sched::kernel_return_address();
+    // SAFETY: caller guarantees `regs` is the live frame (or null).
+    unsafe {
+        if is_slice {
+            crate::sched::save_slice_frame(crate::sched::current_pid(), regs, elr, spsr, fp);
+        }
+        if regs.is_null() {
+            return;
+        }
+        // The resume trampoline returns this x0 to run_and_wait's caller.
+        *regs.add(0) = if is_slice {
+            crate::sched::SLICE_YIELD_MARKER as u64
+        } else {
+            crate::sched::coop_exit_code() as u64
+        };
+        // RESTORE_CONTEXT (boot.S) reloads ELR/SPSR from the frame, so the
+        // kernel return must be written into the FRAME, not live msr's.
+        *regs.add(FRAME_ELR_WORD) = kr;
+        *regs.add(FRAME_SPSR_WORD) = SPSR_KERNEL_RESUME;
+    }
+    // Slices keep the task alive and parked too: main-loop work and tick
+    // accounting must not be billed to the task that just yielded.
+    crate::sched::set_current_pid(0);
+}
+
+/// IRQ taken from EL0 (boot.S saves FP/SIMD into `fp` first, because the
+/// kernel is built with NEON and its own code would clobber the task's
+/// vector registers). Services the interrupt exactly like `handle_irq`;
+/// if it was the arch timer tick and the task's slice budget is spent,
+/// ends the slice and returns to the main loop (O5.2).
+///
+/// # Safety
+/// Called from the IRQ-lower-EL vector with a valid frame and FP snapshot.
 #[no_mangle]
-pub unsafe extern "C" fn handle_irq(_spsr: u64, _elr: u64, _esr: u64, _far: u64, _regs: *mut u64) {
+pub unsafe extern "C" fn handle_irq_el0(
+    spsr: u64,
+    elr: u64,
+    esr: u64,
+    far: u64,
+    regs: *mut u64,
+    fp: *const sched::FpSnapshot,
+) {
+    // SAFETY: forwarded unchanged from our own caller.
+    let irq_id = unsafe { service_irq(spsr, elr, esr, far, regs) };
+    if irq_id != TIMER_PPI || !sched::preempt_slice_due(spsr) {
+        return;
+    }
+    // SAFETY: `fp` points at the snapshot boot.S just stored on the
+    // exception stack; it outlives this call.
+    let snapshot = unsafe { fp.as_ref() };
+    // SAFETY: `regs` is the live frame passed by the vector.
+    unsafe { finish_cooperative_return(regs, elr, spsr, true, snapshot) };
+}
+
+/// GIC PPI carrying the EL1 physical timer (CNTP) on QEMU raspi5b.
+const TIMER_PPI: u32 = 29;
+
+/// IRQ handler for IRQs taken at EL1 — hardware interrupts + timer ticks.
+/// Kernel code is never preempted by the timer: this path always resumes
+/// the interrupted EL1 context.
+#[no_mangle]
+pub unsafe extern "C" fn handle_irq(spsr: u64, elr: u64, esr: u64, far: u64, regs: *mut u64) {
+    // SAFETY: forwarded unchanged from the vector.
+    unsafe { service_irq(spsr, elr, esr, far, regs) };
+}
+
+/// Acknowledge, dispatch and EOI one IRQ. Returns the IRQ id, or
+/// `u32::MAX` if the acknowledge was spurious.
+unsafe fn service_irq(_spsr: u64, _elr: u64, _esr: u64, _far: u64, _regs: *mut u64) -> u32 {
     let irq_id = gic::Gic::acknowledge();
 
     if irq_id >= 1020 {
-        return;
+        return u32::MAX;
     }
 
     let _is_timer_irq = irq_id == 29 || (64..=67).contains(&irq_id);
@@ -336,6 +392,7 @@ pub unsafe extern "C" fn handle_irq(_spsr: u64, _elr: u64, _esr: u64, _far: u64,
     }
 
     gic::Gic::end_of_interrupt(irq_id);
+    irq_id
 }
 
 /// FIQ handler
