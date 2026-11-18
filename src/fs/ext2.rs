@@ -409,7 +409,16 @@ fn scan_block(
     let mut pos = 0;
     let mut prev_pos = None;
     while pos < block.len() {
-        let raw = parse_dirent(block, pos)?;
+        let Ok(raw) = parse_dirent(block, pos) else {
+            // Images written by older kernels leave a zeroed tail after the
+            // last entry of some directory blocks; what precedes it is
+            // still valid, so the damaged remainder ends the block's scan.
+            println!(
+                "[ext2] directory block {} has a bad entry at {}",
+                block_no, pos
+            );
+            break;
+        };
         if raw.ino != 0 {
             let loc = DirEntryLoc {
                 block_no,

@@ -1109,6 +1109,39 @@ fn vfs_file_created_at_the_mount_root_survives_a_remount() {
     });
 }
 
+/// Shorten the last entry of a one-block directory to its minimal size and
+/// zero the rest, the way images written by older kernels look.
+fn zero_the_tail_of_the_last_entry(dir: u32) {
+    let inode = fs().read_inode(dir).expect("dir inode");
+    let block_no = u64::from(u32::from_le(inode.i_block[0]));
+    let mut buf = [0u8; 1024];
+    read_block(fs(), block_no, &mut buf).expect("read dir block");
+    let mut pos = 0;
+    loop {
+        let rec_len = usize::from(u16::from_le_bytes([buf[pos + 4], buf[pos + 5]]));
+        if pos + rec_len == buf.len() {
+            break;
+        }
+        pos += rec_len;
+    }
+    let minimal_rec_len = 12u16;
+    buf[pos + 4..pos + 6].copy_from_slice(&minimal_rec_len.to_le_bytes());
+    buf[pos + usize::from(minimal_rec_len)..].fill(0);
+    write_block(fs(), block_no, &buf).expect("write dir block");
+}
+
+#[test]
+fn vfs_lists_a_directory_block_with_a_zeroed_tail() {
+    with_volume(FIXTURE_1K, |_vol| {
+        let legacy = mkdir(ROOT, "legacy");
+        mkfile(legacy, "a", b"1");
+        mkfile(legacy, "b", b"2");
+        zero_the_tail_of_the_last_entry(legacy);
+        boot_vfs();
+        assert_eq!(listed_names("/sd/legacy"), ["a", "b"]);
+    });
+}
+
 #[test]
 fn vfs_stat_reports_real_metadata_before_any_open() {
     with_volume(FIXTURE_4K, |_vol| {
