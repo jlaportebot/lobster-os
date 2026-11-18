@@ -1,0 +1,75 @@
+name: Kernel image
+
+# Builds the QEMU-feature kernel image the emulator boots (same steps as
+# tools/install-kernel.sh) and publishes it so other pipelines - the QEMU
+# fork's smoke tests and the LobsterVM installers - can download it:
+#   master  -> rolling pre-release "kernel-nightly"
+#   v* tags -> a versioned release
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kernel-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kernel:
+    # Native aarch64 runner: strip/objcopy handle the kernel ELF exactly as
+    # on the Pi 5 dev host.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same pinned toolchain as ci.yml and the local gate.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          target: aarch64-unknown-none
+
+      - name: Build the QEMU-feature kernel
+        run: cargo build --release --target aarch64-unknown-none --features qemu_raspi5b
+
+      - name: Make kernel8.img
+        run: |
+          mkdir -p dist
+          cp target/aarch64-unknown-none/release/lobster-os dist/kernel8.elf
+          strip --strip-unneeded dist/kernel8.elf
+          objcopy -O binary dist/kernel8.elf dist/kernel8.img
+          echo "$GITHUB_SHA" > dist/COMMIT
+          (cd dist && sha256sum kernel8.img kernel8.elf COMMIT > SHA256SUMS)
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernel8
+          path: dist/
+          retention-days: 14
+
+      - name: Publish the rolling kernel-nightly pre-release
+        if: github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f kernel-nightly "$GITHUB_SHA"
+          git push -f origin refs/tags/kernel-nightly
+          notes="Kernel built from ${GITHUB_SHA} (master). Boot it with the LobsterVM manager or the lobster-qemu raspi5b machine."
+          if ! gh release view kernel-nightly > /dev/null 2>&1; then
+            gh release create kernel-nightly --prerelease --title "Kernel nightly" --notes "$notes"
+          fi
+          gh release edit kernel-nightly --notes "$notes"
+          gh release upload kernel-nightly dist/kernel8.img dist/kernel8.elf dist/SHA256SUMS dist/COMMIT --clobber
+
+      - name: Publish the tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/kernel8.img dist/kernel8.elf dist/SHA256SUMS dist/COMMIT \
+            --title "LobsterOS kernel $GITHUB_REF_NAME" --notes "Kernel built from ${GITHUB_SHA}."
