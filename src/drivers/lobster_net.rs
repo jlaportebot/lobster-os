@@ -8,6 +8,7 @@
 //! and reads the response (HTTP body or compiled ELF binary).
 
 use crate::drivers::uart::Uart10;
+use crate::net::fetch::{classify, Completion, DeviceState, FetchError};
 
 /// MMIO base address for the lobster-net device
 const LOBSTER_NET_BASE: u64 = 0x7D00_9000;
@@ -46,6 +47,9 @@ const NET_CMD_COMPILE: u32 = 3;
 
 /// Maximum URL/source length (must match QEMU device: 3840 bytes)
 const MAX_URL_LEN: usize = 3840;
+
+/// Status polls before a fetch is declared timed out.
+const FETCH_POLL_LIMIT: u32 = 50_000;
 
 /// Maximum response body / ELF binary length (256KB for libc-linked binaries)
 const MAX_RESP_LEN: usize = 524288;
@@ -117,53 +121,47 @@ pub fn http_fetch_auth(url: &str, token: &str) -> Option<alloc::vec::Vec<u8>> {
     fetch_impl(url, Some(token))
 }
 
+/// Fetch a URL and return the HTTP status together with the body, for any
+/// status the server answers with.
+pub fn http_fetch_response(url: &str) -> Result<crate::net::fetch::Response, FetchError> {
+    let (status, body, truncated) = fetch_raw(url, None)?;
+    Ok(crate::net::fetch::Response {
+        status,
+        body,
+        truncated,
+    })
+}
+
 fn fetch_impl(url: &str, token: Option<&str>) -> Option<alloc::vec::Vec<u8>> {
-    // Check device is present
-    let magic = unsafe { mmio_read32(LOBSTER_NET_MAGIC) };
-    if magic != 0x4C4E4554 {
-        return None;
+    match fetch_raw(url, token) {
+        Ok((200, body, _)) if !body.is_empty() => Some(body),
+        _ => None,
     }
+}
 
-    let url_bytes = url.as_bytes();
+/// Validate the token and compute the payload length / auth mode pair.
+fn payload_for(url: &str, token: Option<&str>) -> Result<(usize, u32), FetchError> {
+    let Some(tok) = token else {
+        return Ok((url.len(), AUTH_NONE));
+    };
+    let valid = tok
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.');
+    if !valid || tok.len() + 1 + url.len() > MAX_URL_LEN {
+        return Err(FetchError::InvalidUrl);
+    }
+    Ok((tok.len() + 1 + url.len(), AUTH_BEARER))
+}
 
-    // Reset device first to clear any previous state
+/// Write the request into the device and start the fetch.
+fn start_fetch(url: &str, token: Option<&str>, payload_len: usize, auth_mode: u32) {
+    // SAFETY: MMIO accesses to the lobster-net window; the caller checked the
+    // magic register, and the payload length was validated against the device's
+    // URL region size by `payload_for`.
     unsafe {
         mmio_write32(LOBSTER_NET_CMD, NET_CMD_RESET);
-    }
-
-    // When authenticating, prepend "<token>\n" to the payload written to the
-    // URL region and set AUTH_MODE; otherwise write the bare URL.
-    let (payload_len, auth_mode) = if let Some(tok) = token {
-        let t = tok.as_bytes();
-        if t.len() + 1 + url_bytes.len() > MAX_URL_LEN {
-            return None;
-        }
-        // Validate token chars to match the device-side allowlist
-        for &b in t {
-            if !(b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.') {
-                unsafe {
-                    mmio_write32(LOBSTER_NET_CMD, NET_CMD_RESET);
-                }
-                return None;
-            }
-        }
-        (t.len() + 1 + url_bytes.len(), AUTH_BEARER)
-    } else {
-        (url_bytes.len(), AUTH_NONE)
-    };
-
-    // Write auth mode
-    unsafe {
         mmio_write32(LOBSTER_NET_AUTH_MODE, auth_mode);
-    }
-
-    // Write payload length
-    unsafe {
         mmio_write32(LOBSTER_NET_URL_LEN, payload_len as u32);
-    }
-
-    // Write token prefix (if any) followed by URL bytes, contiguously
-    unsafe {
         let dst = LOBSTER_NET_BASE + LOBSTER_NET_URL_DATA;
         let mut off = 0usize;
         if let Some(tok) = token {
@@ -172,54 +170,69 @@ fn fetch_impl(url: &str, token: Option<&str>) -> Option<alloc::vec::Vec<u8>> {
             crate::drivers::mmio::write8(dst + off as u64, b'\n');
             off += 1;
         }
-        crate::drivers::mmio::write_bytes(dst + off as u64, url_bytes);
-    }
-
-    // Trigger fetch
-    unsafe {
+        crate::drivers::mmio::write_bytes(dst + off as u64, url.as_bytes());
         mmio_write32(LOBSTER_NET_CMD, NET_CMD_FETCH);
     }
+}
 
-    // Poll for completion
-    for _ in 0..50000 {
-        let status = unsafe { mmio_read32(LOBSTER_NET_STATUS) };
-        if status == NET_STATUS_DONE {
-            let resp_code = unsafe { mmio_read32(LOBSTER_NET_RESP_CODE) };
-            let resp_len = unsafe { mmio_read32(LOBSTER_NET_RESP_LEN) };
+/// Sample the device registers and classify them.
+fn poll_completion() -> Completion {
+    // SAFETY: read-only MMIO register reads of the lobster-net device.
+    let (status, code, len) = unsafe {
+        (
+            mmio_read32(LOBSTER_NET_STATUS),
+            mmio_read32(LOBSTER_NET_RESP_CODE),
+            mmio_read32(LOBSTER_NET_RESP_LEN),
+        )
+    };
+    let state = match status {
+        NET_STATUS_DONE => DeviceState::Done,
+        NET_STATUS_ERROR => DeviceState::Error,
+        _ => DeviceState::Pending,
+    };
+    classify(state, code, len)
+}
 
-            if resp_code == 200 && resp_len > 0 && resp_len <= MAX_RESP_LEN as u32 {
-                let mut resp = alloc::vec::Vec::with_capacity(resp_len as usize);
-                unsafe {
-                    resp.resize(resp_len as usize, 0);
-                    crate::drivers::mmio::read_bytes(
-                        LOBSTER_NET_BASE + LOBSTER_NET_RESP_DATA,
-                        &mut resp,
-                    );
-                }
-                unsafe {
-                    mmio_write32(LOBSTER_NET_CMD, NET_CMD_RESET);
-                }
-                return Some(resp);
-            } else {
-                unsafe {
-                    mmio_write32(LOBSTER_NET_CMD, NET_CMD_RESET);
-                }
-                return None;
-            }
-        } else if status == NET_STATUS_ERROR {
-            unsafe {
-                mmio_write32(LOBSTER_NET_CMD, NET_CMD_RESET);
-            }
-            return None;
+/// Run one fetch to completion: (status, body, truncated).
+fn fetch_raw(
+    url: &str,
+    token: Option<&str>,
+) -> Result<(u16, alloc::vec::Vec<u8>, bool), FetchError> {
+    // SAFETY: read of the device magic register.
+    if unsafe { mmio_read32(LOBSTER_NET_MAGIC) } != 0x4C4E4554 {
+        return Err(FetchError::NoNetwork);
+    }
+    let (payload_len, auth_mode) = payload_for(url, token)?;
+    start_fetch(url, token, payload_len, auth_mode);
+    let result = wait_for_response();
+    // SAFETY: MMIO write releasing the device after the response was copied.
+    unsafe { mmio_write32(LOBSTER_NET_CMD, NET_CMD_RESET) };
+    result
+}
+
+fn wait_for_response() -> Result<(u16, alloc::vec::Vec<u8>, bool), FetchError> {
+    for _ in 0..FETCH_POLL_LIMIT {
+        match poll_completion() {
+            Completion::Waiting => crate::arch::cpu::wfe(),
+            Completion::Failed(e) => return Err(e),
+            Completion::Ready {
+                status,
+                len,
+                truncated,
+            } => return Ok((status, read_body(len), truncated)),
         }
-        crate::arch::cpu::wfe();
     }
+    Err(FetchError::TimedOut)
+}
 
-    // Timeout
+fn read_body(len: usize) -> alloc::vec::Vec<u8> {
+    let mut body = alloc::vec::Vec::new();
+    body.resize(len, 0);
+    // SAFETY: `len` was validated against the device's response buffer size.
     unsafe {
-        mmio_write32(LOBSTER_NET_CMD, NET_CMD_RESET);
+        crate::drivers::mmio::read_bytes(LOBSTER_NET_BASE + LOBSTER_NET_RESP_DATA, &mut body);
     }
-    None
+    body
 }
 
 /// Compile C source code via the lobster-net device.
