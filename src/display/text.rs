@@ -228,7 +228,13 @@ fn draw_glyph(fb: &FramebufferInfo, x: i64, y: i64, glyph: &Glyph, color: u32) {
         let Some(coverage) = glyph.rows.get(start + skip_cols..start + glyph.w as usize) else {
             continue;
         };
-        graphics::draw_alpha_row(fb, (left + skip_cols as i64) as u32, py as u32, coverage, color);
+        graphics::draw_alpha_row(
+            fb,
+            (left + skip_cols as i64) as u32,
+            py as u32,
+            coverage,
+            color,
+        );
     }
 }
 
@@ -240,7 +246,14 @@ fn draw_missing(fb: &FramebufferInfo, x: i64, y: i64, atlas: &Atlas, color: u32)
     if x < 0 || top < 0 {
         return;
     }
-    graphics::draw_rect_outline(fb, x as u32 + MISSING_GLYPH_INSET, top as u32, box_w, box_h, color);
+    graphics::draw_rect_outline(
+        fb,
+        x as u32 + MISSING_GLYPH_INSET,
+        top as u32,
+        box_w,
+        box_h,
+        color,
+    );
 }
 
 fn draw_char(fb: &FramebufferInfo, x: i64, y: i64, c: char, atlas: &Atlas, color: u32) -> u32 {
@@ -263,7 +276,14 @@ pub fn draw(fb: &FramebufferInfo, x: u32, y: u32, text: &str, style: &TextStyle)
     let atlas = atlas(style);
     let mut pen = 0u32;
     for c in text.chars() {
-        pen += draw_char(fb, i64::from(x) + i64::from(pen), i64::from(y), c, &atlas, style.color);
+        pen += draw_char(
+            fb,
+            i64::from(x) + i64::from(pen),
+            i64::from(y),
+            c,
+            &atlas,
+            style.color,
+        );
     }
     pen
 }
@@ -299,7 +319,14 @@ pub fn fit_prefix(text: &str, max_w: u32, style: &TextStyle) -> (usize, bool) {
 
 /// Draw `text` into at most `max_w` px, ending with "…" when it had to be
 /// shortened. Returns the advance actually used (never above `max_w`).
-pub fn draw_fitted(fb: &FramebufferInfo, x: u32, y: u32, max_w: u32, text: &str, style: &TextStyle) -> u32 {
+pub fn draw_fitted(
+    fb: &FramebufferInfo,
+    x: u32,
+    y: u32,
+    max_w: u32,
+    text: &str,
+    style: &TextStyle,
+) -> u32 {
     let (kept, truncated) = fit_prefix(text, max_w, style);
     if !truncated {
         return draw(fb, x, y, text, style);
@@ -355,7 +382,11 @@ fn glyph_coverage(glyph: &Glyph, col: u32, row: u32) -> u8 {
     if gx < 0 || gy < 0 || gx >= glyph.w as i32 || gy >= glyph.h as i32 {
         return 0;
     }
-    glyph.rows.get((gy as u32 * glyph.w + gx as u32) as usize).copied().unwrap_or(0)
+    glyph
+        .rows
+        .get((gy as u32 * glyph.w + gx as u32) as usize)
+        .copied()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -369,7 +400,11 @@ mod tests {
     const FG: u32 = 0xFFF0E0D0;
 
     fn style(face: Face, size: u32) -> TextStyle {
-        TextStyle { face, size, color: FG }
+        TextStyle {
+            face,
+            size,
+            color: FG,
+        }
     }
 
     fn required_chars() -> impl Iterator<Item = char> {
@@ -387,7 +422,11 @@ mod tests {
 
     impl Canvas {
         fn new(w: u32, h: u32) -> Self {
-            Self { pixels: vec![graphics::fx(BG); (w * h) as usize], w, h }
+            Self {
+                pixels: vec![graphics::fx(BG); (w * h) as usize],
+                w,
+                h,
+            }
         }
 
         fn target(&mut self) -> FramebufferInfo {
@@ -409,7 +448,11 @@ mod tests {
                 let atlas = atlas(&style(face, size));
                 assert_eq!(atlas.size(), size);
                 for c in required_chars().filter(|&c| c != '\u{23FB}') {
-                    assert!(atlas.glyph(c as u32).is_some(), "{face:?} {size} U+{:04X}", c as u32);
+                    assert!(
+                        atlas.glyph(c as u32).is_some(),
+                        "{face:?} {size} U+{:04X}",
+                        c as u32
+                    );
                 }
             }
         }
@@ -447,7 +490,12 @@ mod tests {
             assert_eq!(&data.bytes[..4], ATLAS_MAGIC);
             assert_eq!(atlas.size(), data.size);
             assert_eq!(atlas.ascent() + atlas.descent(), atlas.line_height());
-            assert!(atlas.line_height() >= atlas.size(), "{:?} {}", data.face, data.size);
+            assert!(
+                atlas.line_height() >= atlas.size(),
+                "{:?} {}",
+                data.face,
+                data.size
+            );
             assert!(atlas.count() > 200);
         }
     }
@@ -505,8 +553,16 @@ mod tests {
     fn solid_glyph_pixels_equal_foreground_and_empty_keep_background() {
         let mut canvas = Canvas::new(40, 30);
         draw(&canvas.target(), 4, 4, "I", &style(Face::UiBold, 24));
-        let solid = canvas.pixels.iter().filter(|&&p| p == graphics::fx(FG)).count();
-        let untouched = canvas.pixels.iter().filter(|&&p| p == graphics::fx(BG)).count();
+        let solid = canvas
+            .pixels
+            .iter()
+            .filter(|&&p| p == graphics::fx(FG))
+            .count();
+        let untouched = canvas
+            .pixels
+            .iter()
+            .filter(|&&p| p == graphics::fx(BG))
+            .count();
         assert!(solid > 10);
         assert_eq!(canvas.at(0, 0), graphics::fx(BG));
         assert!(untouched > solid);
@@ -516,7 +572,10 @@ mod tests {
     fn partial_coverage_blends_between_background_and_foreground() {
         let mut canvas = Canvas::new(40, 30);
         draw(&canvas.target(), 4, 4, "o", &style(Face::Ui, 20));
-        let mixed = canvas.pixels.iter().any(|&p| p != graphics::fx(BG) && p != graphics::fx(FG));
+        let mixed = canvas
+            .pixels
+            .iter()
+            .any(|&p| p != graphics::fx(BG) && p != graphics::fx(FG));
         assert!(mixed);
     }
 
@@ -548,8 +607,13 @@ mod tests {
         let s = style(Face::Ui, 13);
         let mut canvas = Canvas::new(200, 30);
         draw_centered(&canvas.target(), 100, 4, "Title", &s);
-        let first = (0..200).find(|&x| (0..30).any(|y| canvas.at(x, y) != graphics::fx(BG))).unwrap_or(0);
-        let last = (0..200).rev().find(|&x| (0..30).any(|y| canvas.at(x, y) != graphics::fx(BG))).unwrap_or(0);
+        let first = (0..200)
+            .find(|&x| (0..30).any(|y| canvas.at(x, y) != graphics::fx(BG)))
+            .unwrap_or(0);
+        let last = (0..200)
+            .rev()
+            .find(|&x| (0..30).any(|y| canvas.at(x, y) != graphics::fx(BG)))
+            .unwrap_or(0);
         assert!((100 - first as i32 - (last as i32 - 100)).abs() <= 3);
     }
 }

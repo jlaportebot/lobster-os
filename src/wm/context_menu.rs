@@ -5,7 +5,9 @@
 
 use crate::display::fb::get_info;
 use crate::display::graphics;
+use crate::display::text::{self, Face};
 use crate::sync::spinlock::Spinlock;
+use crate::wm::theme;
 
 /// Maximum items in a context menu
 const MAX_ITEMS: usize = 12;
@@ -58,6 +60,8 @@ struct MenuState {
 }
 
 const ITEM_H: u32 = 24;
+/// Item label size at the Medium font setting.
+const ITEM_TEXT_PX: u32 = 13;
 const MENU_PAD: u32 = 4;
 const MENU_W: u32 = 180;
 
@@ -213,14 +217,8 @@ pub fn draw() {
 
         // Item text
         let label = menu.items[i].label();
-        let text_y = item_y + (ITEM_H - 14) / 2;
-        graphics::draw_text(
-            &fb,
-            x + 12,
-            text_y,
-            label,
-            theme.menu_item_text,
-            theme.menu_bg,
-        );
+        let style = theme::chrome_text(Face::Ui, ITEM_TEXT_PX, theme.menu_item_text, ITEM_H);
+        let text_y = theme::centered_line_y(item_y, ITEM_H, &style);
+        text::draw_fitted(&fb, x + 12, text_y, w.saturating_sub(24), label, &style);
     }
 }

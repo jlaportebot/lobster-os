@@ -8,7 +8,8 @@
 //! All popups render above the panel, below toasts, and close on outside click.
 
 use crate::display::fb::get_info;
-use crate::display::graphics::{draw_rect, draw_rect_outline, draw_text, fill_rounded_rect};
+use crate::display::graphics::{draw_rect, draw_rect_outline, fill_rounded_rect};
+use crate::display::text::{self, Face, TextStyle};
 use crate::wm::notifications;
 use crate::wm::panel;
 use crate::wm::theme;
@@ -16,6 +17,29 @@ use crate::wm::theme;
 const POPUP_W: u32 = 320;
 const POPUP_H: u32 = 380;
 const PAD: u32 = 10;
+/// Body text size at the Medium font setting.
+const BODY_PX: u32 = 13;
+/// Heading size at the Medium font setting.
+const HEADING_PX: u32 = 14;
+/// Time read-out size at the Medium font setting.
+const CLOCK_PX: u32 = 24;
+/// Height of the row a line of popup text is centred in.
+const ROW_H: u32 = 16;
+/// Height of the heading row.
+const HEADING_ROW_H: u32 = 20;
+/// Tallest line box the clock read-out may use.
+const CLOCK_ROW_H: u32 = 30;
+
+/// Body style: Regular UI face fitted to a popup row.
+fn body(color: u32) -> TextStyle {
+    theme::chrome_text(Face::Ui, BODY_PX, color, ROW_H)
+}
+
+/// Draw one line of popup text centred in a row that starts at `y`.
+fn put(fb: &crate::display::fb::FramebufferInfo, x: u32, y: u32, text: &str, style: &TextStyle) {
+    let row_h = ROW_H.max(text::line_height(style));
+    text::draw(fb, x, theme::centered_line_y(y, row_h, style), text, style);
+}
 
 /// Quick settings slider state
 #[derive(Clone, Copy)]
@@ -164,13 +188,12 @@ fn header(
     y0: u32,
     title: &str,
 ) {
-    draw_text(
+    put(
         fb,
         x0 + PAD + 2,
-        y0 + 10,
+        y0 + 8,
         title,
-        theme.label_text,
-        theme.menu_bg,
+        &theme::chrome_text(Face::UiBold, HEADING_PX, theme.label_text, HEADING_ROW_H),
     );
     draw_rect(
         fb,
@@ -230,7 +253,7 @@ fn draw_slider(
     label: &str,
     value: u32,
 ) {
-    draw_text(fb, x0 + PAD + 2, y, label, theme.label_text, theme.menu_bg);
+    put(fb, x0 + PAD + 2, y, label, &body(theme.label_text));
     let bar_w = POPUP_W - 2 * PAD - 4;
     let bar_x = x0 + PAD + 2;
     let bar_y = y + 22;
@@ -244,13 +267,12 @@ fn draw_slider(
     fill_rounded_rect(fb, thumb_x, bar_y - 4, 10, 18, 5, theme.btn_bg_hover);
     draw_rect_outline(fb, thumb_x, bar_y - 4, 10, 18, theme.btn_border);
     // Value
-    draw_text(
+    put(
         fb,
         x0 + PAD + 2,
         y + 40,
         &alloc::format!("{}%", value),
-        theme.label_text_dim,
-        theme.menu_bg,
+        &body(theme.label_text_dim),
     );
 }
 
@@ -262,7 +284,7 @@ fn draw_toggle(
     label: &str,
     enabled: bool,
 ) {
-    draw_text(fb, x0 + PAD + 2, y, label, theme.label_text, theme.menu_bg);
+    put(fb, x0 + PAD + 2, y, label, &body(theme.label_text));
     let toggle_x = x0 + POPUP_W - PAD - 50;
     let toggle_y = y;
     let track_w = 44;
@@ -318,12 +340,10 @@ fn draw_button(
     let btn_y = y;
     fill_rounded_rect(fb, btn_x, btn_y, btn_w, btn_h, 6, theme.btn_bg);
     draw_rect_outline(fb, btn_x, btn_y, btn_w, btn_h, theme.btn_border);
-    let text = label;
-    let char_w = 8u32;
-    let text_w = text.chars().count() as u32 * char_w;
-    let text_x = btn_x + (btn_w.saturating_sub(text_w)) / 2;
-    let text_y = btn_y + (btn_h.saturating_sub(theme.font_size)) / 2;
-    draw_text(fb, text_x, text_y, text, theme.btn_text, theme.btn_bg);
+    let style = theme::chrome_text(Face::UiBold, BODY_PX, theme.btn_text, ROW_H);
+    let text_x = btn_x + btn_w.saturating_sub(text::width(label, &style)) / 2;
+    let text_y = theme::centered_line_y(btn_y, btn_h, &style);
+    text::draw(fb, text_x, text_y, label, &style);
 }
 
 fn handle_quick_settings_click(px: u32, py: u32, x0: u32, y0: u32) -> bool {
@@ -447,22 +467,20 @@ fn draw_clock(
         (secs / 60) % 60,
         secs % 60
     );
-    draw_text(
+    put(
         fb,
         x0 + PAD + 2,
-        y0 + 44,
+        y0 + 36,
         &time_str,
-        theme.label_text,
-        theme.menu_bg,
+        &theme::chrome_text(Face::UiBold, CLOCK_PX, theme.label_text, CLOCK_ROW_H),
     );
     let up_str = alloc::format!("Uptime: {}h {}m", secs / 3600, (secs / 60) % 60);
-    draw_text(
+    put(
         fb,
         x0 + PAD + 2,
-        y0 + 66,
+        y0 + 70,
         &up_str,
-        theme.label_text_dim,
-        theme.menu_bg,
+        &body(theme.label_text_dim),
     );
 
     // Notification history (most recent first)
@@ -472,13 +490,12 @@ fn draw_clock(
     } else {
         alloc::format!("Recent ({}):", count)
     };
-    draw_text(
+    put(
         fb,
         x0 + PAD + 2,
         y0 + 92,
         &label,
-        theme.label_text_dim,
-        theme.menu_bg,
+        &body(theme.label_text_dim),
     );
 
     let mut y = y0 + 114;
@@ -486,21 +503,13 @@ fn draw_clock(
         if let Some(n) = notifications::history(i) {
             // Accent dot
             draw_rect(fb, x0 + PAD + 2, y + 3, 4, 4, theme.btn_bg_hover);
-            draw_text(
-                fb,
-                x0 + PAD + 12,
-                y,
-                n.title_str(),
-                theme.label_text,
-                theme.menu_bg,
-            );
-            draw_text(
+            put(fb, x0 + PAD + 12, y, n.title_str(), &body(theme.label_text));
+            put(
                 fb,
                 x0 + PAD + 12,
                 y + 16,
                 n.body_str(),
-                theme.label_text_dim,
-                theme.menu_bg,
+                &body(theme.label_text_dim),
             );
             y += 42;
             if y + 40 > y0 + POPUP_H {
@@ -526,14 +535,7 @@ fn draw_network(
         } else {
             "No link"
         };
-        draw_text(
-            fb,
-            x0 + PAD + 2,
-            y0 + 44,
-            state,
-            theme.label_text,
-            theme.menu_bg,
-        );
+        put(fb, x0 + PAD + 2, y0 + 44, state, &body(theme.label_text));
 
         if cfg.ip_addr != [0, 0, 0, 0] {
             let ip = alloc::format!(
@@ -543,14 +545,7 @@ fn draw_network(
                 cfg.ip_addr[2],
                 cfg.ip_addr[3]
             );
-            draw_text(
-                fb,
-                x0 + PAD + 2,
-                y0 + 68,
-                &ip,
-                theme.label_text_dim,
-                theme.menu_bg,
-            );
+            put(fb, x0 + PAD + 2, y0 + 68, &ip, &body(theme.label_text_dim));
             let gw = alloc::format!(
                 "GW: {}.{}.{}.{}",
                 cfg.gateway[0],
@@ -558,24 +553,16 @@ fn draw_network(
                 cfg.gateway[2],
                 cfg.gateway[3]
             );
-            draw_text(
-                fb,
-                x0 + PAD + 2,
-                y0 + 88,
-                &gw,
-                theme.label_text_dim,
-                theme.menu_bg,
-            );
+            put(fb, x0 + PAD + 2, y0 + 88, &gw, &body(theme.label_text_dim));
         }
     }
     #[cfg(not(target_arch = "aarch64"))]
-    draw_text(
+    put(
         fb,
         x0 + PAD + 2,
         y0 + 44,
         "aarch64 only",
-        theme.label_text,
-        theme.menu_bg,
+        &body(theme.label_text),
     );
 }
 
@@ -587,7 +574,7 @@ fn bar(
     pct: u32,
     label: &str,
 ) {
-    draw_text(fb, x0 + PAD + 2, y, label, theme.label_text, theme.menu_bg);
+    put(fb, x0 + PAD + 2, y, label, &body(theme.label_text));
     let bar_w = POPUP_W - 2 * PAD - 4;
     draw_rect(fb, x0 + PAD + 2, y + 22, bar_w, 10, theme.menu_border);
     let fill = bar_w * pct / 100;
@@ -599,13 +586,12 @@ fn bar(
         10,
         crate::wm::theme::accent_color(),
     );
-    draw_text(
+    put(
         fb,
         x0 + PAD + 2,
         y + 40,
         &alloc::format!("{}%", pct),
-        theme.label_text_dim,
-        theme.menu_bg,
+        &body(theme.label_text_dim),
     );
 }
 

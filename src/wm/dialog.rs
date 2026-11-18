@@ -15,7 +15,8 @@
 //!   - take_result() -> Option<DialogResult>
 
 use crate::display::fb::FramebufferInfo;
-use crate::display::graphics::{draw_rect, draw_rect_outline, draw_text, fill_rounded_rect};
+use crate::display::graphics::{draw_rect, draw_rect_outline, fill_rounded_rect};
+use crate::display::text::{self, Face, TextStyle};
 use crate::fs::vfs::list_dir;
 use crate::wm::theme;
 use crate::wm::widget::{Button, TextInput, WidgetState};
@@ -38,6 +39,24 @@ const INPUT_H: u32 = 32;
 
 /// File picker specific dimensions
 const FILE_PICKER_H: u32 = 400;
+/// Height of a one-line message or path row.
+const MESSAGE_ROW_H: u32 = 22;
+/// Heading (dialog title) size at the Medium font setting.
+const TITLE_PX: u32 = 16;
+/// Body, list and input text size at the Medium font setting.
+const BODY_PX: u32 = 14;
+/// Button caption size at the Medium font setting.
+const BUTTON_PX: u32 = 13;
+/// Side length of the close button.
+const CLOSE_BTN_SIZE: u32 = 28;
+/// Left padding of text inside the input field.
+const INPUT_PAD_X: u32 = 6;
+/// Width reserved for the size column of a file-picker row.
+const SIZE_COLUMN_W: u32 = 84;
+/// Offset of a file name from the list's left edge (after the marker).
+const FILE_NAME_X: u32 = 24;
+/// Padding between the dialog edge and the title text.
+const TITLE_PAD_X: u32 = 16;
 const FILE_LIST_ITEM_H: u32 = 24;
 const FILE_LIST_VISIBLE: usize = 12;
 
@@ -841,26 +860,38 @@ pub fn draw(fb: &FramebufferInfo) {
         DialogKind::Prompt { title, .. } => title,
         DialogKind::FilePicker { title, .. } => title,
     };
-    draw_text(
+    let title_style = dialog_text(Face::UiBold, TITLE_PX, theme.label_text, DIALOG_TITLE_H);
+    let close_x = dx + dw - 36;
+    let close_y = dy + 4;
+    let title_room = close_x.saturating_sub(dx + TITLE_PAD_X + TITLE_PAD_X);
+    draw_row_text(
         fb,
-        dx + 16,
-        dy + (DIALOG_TITLE_H - theme.font_size) / 2,
+        dx + TITLE_PAD_X,
+        dy,
+        DIALOG_TITLE_H,
+        title_room,
         title,
-        theme.label_text,
-        theme.menu_bg,
+        &title_style,
     );
 
     // Close button (top-right)
-    let close_x = dx + dw - 36;
-    let close_y = dy + 4;
-    fill_rounded_rect(fb, close_x, close_y, 28, 28, 6, theme.close_btn);
-    draw_text(
+    fill_rounded_rect(
         fb,
-        close_x + 8,
-        close_y + 4,
-        "x",
-        0xFFFFFFFF,
+        close_x,
+        close_y,
+        CLOSE_BTN_SIZE,
+        CLOSE_BTN_SIZE,
+        6,
         theme.close_btn,
+    );
+    let glyph = dialog_text(Face::UiBold, BUTTON_PX, 0xFFFFFFFF, CLOSE_BTN_SIZE);
+    let glyph_y = theme::centered_line_y(close_y, CLOSE_BTN_SIZE, &glyph);
+    text::draw_centered(
+        fb,
+        close_x + CLOSE_BTN_SIZE / 2,
+        glyph_y,
+        "\u{2715}",
+        &glyph,
     );
 
     // Content area
@@ -868,46 +899,54 @@ pub fn draw(fb: &FramebufferInfo) {
 
     match &dialog.kind {
         DialogKind::Alert { message, .. } => {
-            draw_text(
+            let style = dialog_text(Face::Ui, BODY_PX, theme.label_text, MESSAGE_ROW_H);
+            draw_row_text(
                 fb,
                 dx + CONTENT_PAD,
                 content_y + 20,
+                MESSAGE_ROW_H,
+                dw - 2 * CONTENT_PAD,
                 message,
-                theme.label_text,
-                theme.menu_bg,
+                &style,
             );
         }
         DialogKind::Confirm { message, .. } => {
-            draw_text(
+            let style = dialog_text(Face::Ui, BODY_PX, theme.label_text, MESSAGE_ROW_H);
+            draw_row_text(
                 fb,
                 dx + CONTENT_PAD,
                 content_y + 20,
+                MESSAGE_ROW_H,
+                dw - 2 * CONTENT_PAD,
                 message,
-                theme.label_text,
-                theme.menu_bg,
+                &style,
             );
         }
         DialogKind::Prompt { message, .. } => {
-            draw_text(
+            let style = dialog_text(Face::Ui, BODY_PX, theme.label_text, MESSAGE_ROW_H);
+            draw_row_text(
                 fb,
                 dx + CONTENT_PAD,
                 content_y + 10,
+                MESSAGE_ROW_H,
+                dw - 2 * CONTENT_PAD,
                 message,
-                theme.label_text,
-                theme.menu_bg,
+                &style,
             );
             // Text input drawn below
         }
         DialogKind::FilePicker { path, .. } => {
             // Path display
             let path_text = alloc::format!("Path: {}", path);
-            draw_text(
+            let style = dialog_text(Face::Ui, BUTTON_PX, theme.label_text_dim, MESSAGE_ROW_H);
+            draw_row_text(
                 fb,
                 dx + CONTENT_PAD,
                 content_y + 5,
+                MESSAGE_ROW_H,
+                dw - 2 * CONTENT_PAD,
                 &path_text,
-                theme.label_text_dim,
-                theme.menu_bg,
+                &style,
             );
 
             // File list
@@ -940,33 +979,40 @@ pub fn draw(fb: &FramebufferInfo) {
                     );
                 }
 
-                // Icon + name
-                let icon = if entry.is_dir { "📁" } else { "📄" };
-                draw_text(
+                let marker = if entry.is_dir { "\u{25B6}" } else { "\u{2022}" };
+                let dim = dialog_text(Face::Ui, BUTTON_PX, theme.label_text_dim, FILE_LIST_ITEM_H);
+                let name = dialog_text(Face::Ui, BUTTON_PX, theme.label_text, FILE_LIST_ITEM_H);
+                draw_row_text(
                     fb,
                     list_x + 8,
-                    item_y + 4,
-                    icon,
-                    theme.label_text,
-                    theme.menu_bg,
+                    item_y,
+                    FILE_LIST_ITEM_H,
+                    FILE_NAME_X,
+                    marker,
+                    &dim,
                 );
-                draw_text(
+                let name_room = list_w.saturating_sub(FILE_NAME_X + SIZE_COLUMN_W + 12);
+                draw_row_text(
                     fb,
-                    list_x + 28,
-                    item_y + 4,
+                    list_x + FILE_NAME_X,
+                    item_y,
+                    FILE_LIST_ITEM_H,
+                    name_room,
                     &entry.name,
-                    theme.label_text,
-                    theme.menu_bg,
+                    &name,
                 );
                 if !entry.is_dir && entry.size > 0 {
                     let size_str = format_size(entry.size);
-                    draw_text(
+                    let size_x =
+                        (list_x + list_w).saturating_sub(text::width(&size_str, &dim) + 14);
+                    draw_row_text(
                         fb,
-                        list_x + list_w - 80,
-                        item_y + 4,
+                        size_x,
+                        item_y,
+                        FILE_LIST_ITEM_H,
+                        SIZE_COLUMN_W,
                         &size_str,
-                        theme.label_text_dim,
-                        theme.menu_bg,
+                        &dim,
                     );
                 }
             }
@@ -1011,19 +1057,29 @@ pub fn draw(fb: &FramebufferInfo) {
         draw_rect(fb, input_x, input_y, input.w, input.h, theme.input_bg);
         draw_rect_outline(fb, input_x, input_y, input.w, input.h, border);
 
+        let input_style = dialog_text(Face::Ui, BODY_PX, theme.input_text, input.h);
         if input.text_len > 0 {
-            graphics::draw_text(
-                fb,
-                input_x + 4,
-                input_y + 4,
+            let inner = fb.clipped(
+                input_x + 2,
+                input_y,
+                input_x + input.w - 2,
+                input_y + input.h,
+            );
+            let text_y = theme::centered_line_y(input_y, input.h, &input_style);
+            text::draw(
+                &inner,
+                input_x + INPUT_PAD_X,
+                text_y,
                 input.text_str(),
-                theme.input_text,
-                theme.input_bg,
+                &input_style,
             );
         }
 
         if input.state == WidgetState::Focused {
-            let cursor_px = input_x + 4 + (input.cursor_pos as u32 - input.scroll_offset) * 8;
+            let before =
+                core::str::from_utf8(&input.text[input.scroll_offset as usize..input.cursor_pos])
+                    .unwrap_or("");
+            let cursor_px = input_x + INPUT_PAD_X + text::width(before, &input_style);
             for dy in 2..(input.h - 2) {
                 graphics::draw_pixel(fb, cursor_px, input_y + dy, theme.input_cursor);
                 graphics::draw_pixel(fb, cursor_px + 1, input_y + dy, theme.input_cursor);
@@ -1046,11 +1102,10 @@ pub fn draw(fb: &FramebufferInfo) {
 
             if btn.text_len > 0 {
                 let text = btn.text_str();
-                let char_w = 8u32;
-                let text_w = text.chars().count() as u32 * char_w;
-                let text_x = btn.x + (btn.w.saturating_sub(text_w)) / 2;
-                let text_y = btn.y + (btn.h.saturating_sub(theme.font_size)) / 2;
-                draw_text(fb, text_x, text_y, text, theme.btn_text, bg);
+                let style = dialog_text(Face::UiBold, BUTTON_PX, theme.btn_text, btn.h);
+                let room = btn.w.saturating_sub(2 * INPUT_PAD_X);
+                let text_x = btn.x + btn.w.saturating_sub(text::width(text, &style).min(room)) / 2;
+                draw_row_text(fb, text_x, btn.y, btn.h, room, text, &style);
             }
         }
     }
@@ -1409,4 +1464,23 @@ mod tests {
         assert_eq!(entries[2].name, "b.txt");
         assert_eq!(entries[3].name, "z.txt");
     }
+}
+
+/// Chrome text style for dialog content, fitted to a `max_h` line box.
+fn dialog_text(face: Face, base_px: u32, color: u32, max_h: u32) -> TextStyle {
+    theme::chrome_text(face, base_px, color, max_h)
+}
+
+/// Draw `text` truncated to `max_w`, vertically centred in a row.
+fn draw_row_text(
+    fb: &FramebufferInfo,
+    x: u32,
+    row_y: u32,
+    row_h: u32,
+    max_w: u32,
+    text: &str,
+    style: &TextStyle,
+) {
+    let y = theme::centered_line_y(row_y, row_h, style);
+    text::draw_fitted(fb, x, y, max_w, text, style);
 }
