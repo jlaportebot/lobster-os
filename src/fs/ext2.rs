@@ -507,6 +507,19 @@ pub fn rename_backing_file(
     }
 }
 
+/// Move a directory entry to a (possibly different) parent and name.
+pub fn rename_backing_entry(
+    old_parent: u32,
+    old_name: &str,
+    new_parent: u32,
+    new_name: &str,
+) -> Result<(), VfsError> {
+    if old_parent != new_parent {
+        return Err(VfsError::InvalidPath);
+    }
+    rename_backing_file(old_parent, old_name, new_name)
+}
+
 /// Create a directory in the ext2 backing store under `parent_ino`.
 pub fn create_backing_dir(parent_ino: u32, name: &str) -> Result<u32, VfsError> {
     unsafe {
@@ -1338,7 +1351,7 @@ impl Ext2FileSystem {
         let bs = self.block_size as usize;
         while pos < bs - 12 {
             let raw = &block_buf[pos..];
-            let rec_len = u16::from_le(unsafe { *(raw.as_ptr() as *const u16).add(2) }) as usize;
+            let rec_len = u16::from_le_bytes([raw[4], raw[5]]) as usize;
             if rec_len == 0 {
                 break;
             }
@@ -2680,3 +2693,7 @@ pub fn mkfs(
 
     Ok(())
 }
+
+#[cfg(all(test, feature = "std"))]
+#[path = "ext2_tests.rs"]
+mod tests;
