@@ -386,3 +386,69 @@ pub fn blit_stored_keyed(fb: &FramebufferInfo, x: u32, y: u32, src: &[u32]) {
         }
     }
 }
+
+/// Blend premultiplied RGBA bytes (R, G, B, A in memory order, which is the
+/// stored pixel layout when read as a little-endian `u32`) over the target.
+///
+/// Fully transparent pixels leave the target untouched and fully opaque ones
+/// are copied, so only edge pixels pay for the blend.
+pub fn draw_premul_bytes(fb: &FramebufferInfo, x: u32, y: u32, data: &[u8], w: u32, h: u32) {
+    for row in 0..h {
+        let Some(mut run) = span(fb, x, y + row, w) else {
+            continue;
+        };
+        let start = ((row * w) as usize + run.skipped) * 4;
+        let Some(line) = data.get(start..start + run.len * 4) else {
+            return;
+        };
+        for (dst, px) in run.pixels().iter_mut().zip(line.chunks_exact(4)) {
+            *dst = over_premul(*dst, px);
+        }
+    }
+}
+
+/// Premultiplied `px` (`[r, g, b, a]`) over stored-format `dst`.
+#[inline]
+fn over_premul(dst: u32, px: &[u8]) -> u32 {
+    match px[3] {
+        0 => dst,
+        255 => u32::from_le_bytes([px[0], px[1], px[2], 255]),
+        alpha => {
+            let inverse = FULL_ALPHA - u32::from(alpha);
+            let mix = |shift: u32, src: u8| {
+                let d = (dst >> shift) & 0xFF;
+                (u32::from(src) + (d * inverse + 127) / FULL_ALPHA).min(FULL_ALPHA) << shift
+            };
+            OPAQUE | mix(16, px[2]) | mix(8, px[1]) | mix(0, px[0])
+        }
+    }
+}
+
+/// Rounded rectangle blended over the target with coverage `alpha`.
+pub fn blend_rounded_rect(
+    fb: &FramebufferInfo,
+    rect: (u32, u32, u32, u32),
+    radius: u32,
+    color: u32,
+    alpha: u8,
+) {
+    let (x, y, w, h) = rect;
+    if w == 0 || h == 0 {
+        return;
+    }
+    let r = radius.min(w / 2).min(h / 2);
+    blend_rect(fb, x, y + r, w, h - 2 * r, color, alpha);
+    for dy in 0..r {
+        let inset = corner_inset(r, dy);
+        blend_rect(fb, x + inset, y + dy, w - 2 * inset, 1, color, alpha);
+        blend_rect(
+            fb,
+            x + inset,
+            y + h - 1 - dy,
+            w - 2 * inset,
+            1,
+            color,
+            alpha,
+        );
+    }
+}
