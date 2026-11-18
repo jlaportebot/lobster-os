@@ -121,6 +121,27 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
       *Verified:* 158 unit tests + ruff in emulator CI.
 - [ ] **E2.9 Docs**: README rewritten around `lobstervm`; STATUS.md regenerated from facts.
 
+### E3. One-click installers (Windows, macOS, Linux) — requested 2026-11-17, re-confirmed 2026-11-18
+Goal: a user downloads one file for their OS, double-clicks it, and gets LobsterVM with the
+LobsterOS kernel + base disk + our QEMU fork, ready to create and start a VM. Everything is built
+and tested by CI; nothing is hand-assembled.
+- [ ] **E3.1 Portable QEMU fork**: lobster devices build on Linux, macOS and Windows (no POSIX-only
+      calls); CI matrix (`lobster-qemu` `.github/workflows/lobster-build.yml`) builds
+      `qemu-system-aarch64` for linux-x86_64, linux-arm64, macos-arm64, windows-x86_64, boots the
+      LobsterOS kernel headless to `desktop-ready` on each, checks the bundle is self-contained, and
+      publishes a rolling `qemu-nightly` release.
+- [ ] **E3.2 Portable `lobstervm`**: no Unix-socket/FIFO/`/tmp` assumptions (TCP or named-pipe
+      channels on Windows), per-OS data dirs, display backend auto-pick (gtk/cocoa/sdl), finds a
+      bundled QEMU next to itself; PyInstaller spec; unit tests + harness on all three OSes in CI.
+- [ ] **E3.3 Release pipeline** (emulator repo): on tag / nightly, gather `kernel-nightly`
+      (kernel8.img), `qemu-nightly` (per OS), base disk from `tools/mkbase.py`, frozen `lobstervm`
+      → Windows Inno Setup `.exe` (Start-menu + desktop shortcut), macOS `.dmg` (drag-to-Applications
+      `.app`), Linux AppImage (+ `.deb` if cheap). Each installer is installed and smoke-tested on a
+      clean runner of its OS (install → create VM → start headless → `desktop-ready` → shell
+      `uptime` → screenshot artefact → uninstall), then attached to a GitHub Release with SHA256SUMS.
+- [ ] **E3.4 Docs**: README "Install" section with the three download links and first-run steps;
+      unsigned-binary notes (SmartScreen / Gatekeeper) stated plainly.
+
 ---
 
 ## Part O — The operating system
@@ -167,7 +188,7 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
 - [x] **O3.1 Clean boot**: no windows at boot; kernel log stays on serial/`dmesg`, not in the
       Terminal; icon grid on the desktop; first-run welcome only once.
       *Verified 2026-11-16:* no app windows at boot, kernel log off the Terminal, Welcome once (marker on /sd).
-- [ ] **O3.2 Taskbar**: start button, pinned + running apps with titles, click to
+- [x] **O3.2 Taskbar**: start button, pinned + running apps with titles, click to
       focus/minimise, tray (network, volume, clock with date), show-desktop corner.
 - [ ] **O3.3 Start menu**: real icons, search box, All apps incl. installed packages, user
       row, power row (lock, log out, restart, shut down).
@@ -282,7 +303,7 @@ Work top to bottom; each step is committed and pushed when its check passes.
 1. **Foundations** — E1.1–E1.3, E2.1–E2.2 (done), O1.1, O1.2, O1.3, E2.4, O4.3 panic fix.
 2. **Desktop core** — O3.1, O2.1, O2.2, O2.3, O2.4, O3.2, O3.3.
 3. **Apps people expect** — O4.1, O4.2, O4.3, O4.7, O4.6, O3.4, O3.6, O3.8.
-4. **Emulator product** — E2.3, E2.5, E2.6, E2.8, E2.9.
+4. **Emulator product** — E2.3, E2.5, E2.6, E2.8, E2.9, then E3.1–E3.4 one-click installers (CI-built and CI-tested per OS).
 5. **Kernel keystones** — O5.2, O5.3, O5.1 remainder.
 6. **Breadth** — the rest of O2–O8, E1.4–E1.13.
 7. **Hardware** — O9 once a second board is available.
@@ -296,3 +317,4 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-10 | O2.1 scene compositor, O2.2 hit regions, O4.3 browser panic fix, E2.3 `lobstervm gui` | harness 10/10 |
 | 2026-11-16 | O3.1 clean boot, O3.6 dialogs, O3.7 quick settings, O4.7 calculator; E1.5 device properties, E1.12 deterministic clock; E2.7 disk tools + `mkbase.py` | gate + adapted harness 10/10 |
 | 2026-11-17 | QEMU: `-drive` backend gets write permission (guest writes no longer abort); host tests serialized on shared globals; E2.4/E2.6 verified | `lobstervm` write/snapshot/restart; 15× host test runs |
+| 2026-11-18 | O3.2 taskbar (pinned apps, running windows, tray, calendar); E1.13 KVM accel in QEMU (needs kernel cache enable); E3 one-click installers added to plan | gate 301 tests + harness 12/12 |
