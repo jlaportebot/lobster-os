@@ -217,6 +217,12 @@ unsafe fn send_property_message(_len: usize) -> Result<(), FbError> {
     // Convert to physical (bus) address for the GPU/mailbox
     let bus_addr = virt_to_phys(buf_virt);
 
+    // The firmware reads the request from RAM and writes the reply back, so
+    // the CPU's cached copy must be flushed out and then discarded.
+    crate::memory::cache::clean_dcache_range(
+        buf_virt as usize,
+        core::mem::size_of::<PropertyBuffer>(),
+    );
     mailbox_write((bus_addr as u32) | CHANNEL_PROPERTY);
 
     // Wait for response
@@ -224,6 +230,10 @@ unsafe fn send_property_message(_len: usize) -> Result<(), FbError> {
     if response_addr == 0 {
         return Err(FbError::MailboxTimeout);
     }
+    crate::memory::cache::invalidate_dcache_range(
+        buf_virt as usize,
+        core::mem::size_of::<PropertyBuffer>(),
+    );
 
     // Check response code
     if PROP_BUFFER.data[1] != CODE_RESPONSE_SUCCESS {
@@ -422,6 +432,11 @@ pub fn init(width: u32, height: u32, bpp: u32) -> Result<FramebufferInfo, FbErro
             info.size / 1024,
             info.pitch
         );
+
+        // Real hardware scans the framebuffer out of RAM, bypassing the CPU
+        // caches, so it must not be cached. (QEMU uses the Device alias above.)
+        #[cfg(not(feature = "qemu_raspi5b"))]
+        crate::memory::mmu::remap_non_cacheable(fb_addr, fb_size);
 
         // Store globally for later access
         set_info(info);

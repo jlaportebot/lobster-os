@@ -178,7 +178,14 @@ pub fn property_call(buf: &mut [u32]) -> bool {
 
     // Send to property channel
     let msg_ptr = buf.as_ptr() as u32;
-    match send_message(MAILBOX_CHANNEL_PROPERTY, msg_ptr) {
+    let buf_addr = buf.as_ptr() as usize;
+    let buf_len = core::mem::size_of_val(buf);
+    // SAFETY: `buf` is a live kernel slice, so its address range is mapped and cacheable.
+    unsafe { crate::memory::cache::clean_dcache_range(buf_addr, buf_len) };
+    let sent = send_message(MAILBOX_CHANNEL_PROPERTY, msg_ptr);
+    // SAFETY: same range as above; the firmware has finished writing the reply.
+    unsafe { crate::memory::cache::invalidate_dcache_range(buf_addr, buf_len) };
+    match sent {
         Ok(response) => {
             // Check response code
             if response & 0xFFFF == 0 {
