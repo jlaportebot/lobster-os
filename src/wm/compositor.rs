@@ -1794,32 +1794,30 @@ fn draw_text_alpha<F>(
 ) where
     F: Fn(u32, u32) -> u32,
 {
-    use crate::display::console::{CHAR_HEIGHT, CHAR_WIDTH, FONT};
+    use crate::display::console::CHAR_WIDTH;
 
     let mut cx = x;
     for c in text.chars() {
-        let code = c as usize;
-        if code < 128 {
-            let glyph = &FONT[code];
-            for row in 0..CHAR_HEIGHT {
-                let row_bits = glyph[row as usize];
-                for col in 0..CHAR_WIDTH {
-                    let px = cx + col;
-                    let py = y + row;
-                    if px >= fb.width || py >= fb.height {
-                        continue;
-                    }
-                    let color = if (row_bits >> (7 - col)) & 1 != 0 {
-                        fg
-                    } else {
-                        bg
-                    };
-                    set_back_pixel_alpha(*fb, back_buf, px, py, color, &blend);
-                }
+        crate::display::text::for_each_cell_pixel(c, |col, row, coverage| {
+            let (px, py) = (cx + col, y + row);
+            if px >= fb.width || py >= fb.height {
+                return;
             }
-        }
+            let color = mix_argb(bg, fg, coverage);
+            set_back_pixel_alpha(*fb, back_buf, px, py, color, &blend);
+        });
         cx += CHAR_WIDTH;
     }
+}
+
+/// Linear mix of two `0xAARRGGBB` colours by 8-bit `coverage` of `fg`.
+fn mix_argb(bg: u32, fg: u32, coverage: u8) -> u32 {
+    let weight = u32::from(coverage);
+    let channel = |shift: u32| {
+        let (f, b) = ((fg >> shift) & 0xFF, (bg >> shift) & 0xFF);
+        ((f * weight + b * (255 - weight) + 127) / 255) << shift
+    };
+    (fg & 0xFF00_0000) | channel(16) | channel(8) | channel(0)
 }
 
 /// Fill a rectangle in the back buffer

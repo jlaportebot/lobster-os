@@ -240,7 +240,6 @@ pub mod display {
         pub const DARK_GRAY: u32 = 0xFF404040;
         pub const CHAR_WIDTH: usize = 8;
         pub const CHAR_HEIGHT: usize = 16;
-        pub static FONT: [[u8; 16]; 128] = [[0; 16]; 128];
     }
     pub mod fb {
         pub struct FramebufferInfo {
