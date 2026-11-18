@@ -7,6 +7,8 @@
 //! - Quick Settings popup: brightness/volume sliders, network toggle, theme toggle.
 //! All popups render above the panel, below toasts, and close on outside click.
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use crate::display::fb::get_info;
 use crate::display::graphics::{draw_rect, draw_rect_outline, fill_rounded_rect};
 use crate::display::text::{self, Face, TextStyle};
@@ -66,15 +68,42 @@ pub enum PopupKind {
     Volume,
     Battery,
     QuickSettings,
+    /// Month calendar opened from the taskbar clock.
+    Calendar,
 }
 
 static mut OPEN: PopupKind = PopupKind::None;
+/// Screen x the open popup is centred on (the tray icon that opened it);
+/// 0 means "right-aligned to the screen edge".
+static ANCHOR_X: AtomicU32 = AtomicU32::new(0);
+/// Gap between a popup and the screen's side edges.
+const EDGE_MARGIN: u32 = 8;
 
 pub fn open(kind: PopupKind) {
+    ANCHOR_X.store(0, Ordering::Relaxed);
+    // SAFETY: popup state is only touched from the single UI thread.
     unsafe {
         OPEN = kind;
     }
     crate::wm::compositor::mark_full_redraw();
+}
+
+/// Open a popup centred above the taskbar icon at screen x `anchor_x`.
+pub fn open_anchored(kind: PopupKind, anchor_x: u32) {
+    open(kind);
+    ANCHOR_X.store(anchor_x, Ordering::Relaxed);
+}
+
+/// Whether the quick-settings network switch is on.
+pub fn network_enabled() -> bool {
+    // SAFETY: popup state is only touched from the single UI thread.
+    unsafe { NETWORK_ENABLED }
+}
+
+/// Quick-settings volume, 0 (muted) to 100.
+pub fn volume_level() -> u32 {
+    // SAFETY: popup state is only touched from the single UI thread.
+    unsafe { VOLUME_SLIDER.value }
 }
 
 pub fn close() {
@@ -151,9 +180,15 @@ pub fn handle_release(_px: u32, _py: u32) -> bool {
 fn origin() -> (u32, u32) {
     let fb = get_info();
     let panel_h = panel::panel_height();
-    // Tray items sit ~120px from the right edge (clock ~70px). Anchor the
-    // popup right side at 8px margin.
-    let x0 = fb.width.saturating_sub(POPUP_W + 8);
+    let right_aligned = fb.width.saturating_sub(POPUP_W + EDGE_MARGIN);
+    let anchor = ANCHOR_X.load(Ordering::Relaxed);
+    let x0 = if anchor == 0 {
+        right_aligned
+    } else {
+        anchor
+            .saturating_sub(POPUP_W / 2)
+            .clamp(EDGE_MARGIN, right_aligned)
+    };
     let y0 = fb.height.saturating_sub(panel_h + POPUP_H + 4);
     (x0, y0)
 }
@@ -177,6 +212,7 @@ pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
         PopupKind::Volume => draw_volume(fb, theme, x0, y0),
         PopupKind::Battery => draw_battery(fb, theme, x0, y0),
         PopupKind::QuickSettings => draw_quick_settings(fb, theme, x0, y0),
+        PopupKind::Calendar => draw_calendar(fb, theme, x0, y0),
         PopupKind::None => {}
     }
 }
@@ -517,6 +553,18 @@ fn draw_clock(
             }
         }
     }
+}
+
+fn draw_calendar(
+    fb: &crate::display::fb::FramebufferInfo,
+    theme: &crate::wm::theme::Theme,
+    x0: u32,
+    y0: u32,
+) {
+    header(fb, theme, x0, y0, "Calendar");
+    let today = crate::clock::local_at(crate::arch::ArchTimer::uptime_ms())
+        .map(|now| (now.year, now.month, now.day));
+    crate::wm::calendar::draw(fb, theme, x0, y0, today);
 }
 
 fn draw_network(
