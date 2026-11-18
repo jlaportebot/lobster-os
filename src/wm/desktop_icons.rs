@@ -1,11 +1,12 @@
 //! Desktop Icons — renders icons on the desktop background and handles clicks
 //!
 //! Icons are arranged in a grid on the left side of the screen. Each icon
-//! has a colored glyph, a label, and an action (focus existing window or
+//! has an app tile, a label, and an action (focus existing window or
 //! create a new one).
 
 use crate::display::fb;
 use crate::display::graphics;
+use crate::display::icons::{self, Icon};
 use crate::println;
 use crate::wm::theme;
 use crate::wm::window;
@@ -13,8 +14,29 @@ use crate::wm::window;
 /// Maximum number of desktop icons
 const MAX_ICONS: usize = 12;
 
-/// Icon dimensions
+/// Icon dimensions: the clickable cell is 64 px wide, the tile inside is 48.
 const ICON_SIZE: u32 = 64;
+/// Edge of the app tile drawn inside the cell.
+const TILE_SIZE: u32 = 48;
+/// Tile inset from the cell's left edge (centres it).
+const TILE_INSET_X: u32 = (ICON_SIZE - TILE_SIZE) / 2;
+/// Tile inset from the cell's top edge.
+const TILE_INSET_Y: u32 = 6;
+/// Corner radius of the selection and hover highlights.
+const HIGHLIGHT_RADIUS: u32 = 8;
+/// Highlight padding around the cell for selection and hover.
+const SELECT_PAD: u32 = 4;
+const HOVER_PAD: u32 = 2;
+/// Highlight opacity for the selected and hovered states.
+const SELECT_ALPHA: u8 = 0x70;
+const HOVER_ALPHA: u8 = 0x38;
+/// Highlight tint (selection uses the theme's focus colour instead).
+const HOVER_TINT: u32 = 0xFFFF_FFFF;
+/// Background argument that makes `draw_text` leave the pixels under glyphs alone,
+/// so the highlight shows through the label.
+const LABEL_TRANSPARENT_BG: u32 = 0;
+/// Width in pixels of one label character in the built-in font.
+const LABEL_CHAR_W: u32 = 8;
 const ICON_SPACING: u32 = 16;
 const ICON_LABEL_H: u32 = 18;
 const ICON_MARGIN_LEFT: u32 = 32;
@@ -25,8 +47,7 @@ const ICON_MARGIN_TOP: u32 = 40;
 struct DesktopIcon {
     label: [u8; 24],
     label_len: usize,
-    glyph: char,
-    color: u32, // icon background color (ARGB)
+    icon: Icon,
     action: IconAction,
     x: u32,
     y: u32,
@@ -53,8 +74,7 @@ impl DesktopIcon {
     const ZERO: DesktopIcon = DesktopIcon {
         label: [0u8; 24],
         label_len: 0,
-        glyph: ' ',
-        color: 0,
+        icon: Icon::AppGeneric,
         action: IconAction::Terminal,
         x: 0,
         y: 0,
@@ -96,19 +116,19 @@ pub fn init() {
     let mut icons = ICONS.lock();
     let mut count = 0;
 
-    let entries: &[(&str, char, u32, IconAction)] = &[
-        ("Terminal", '>', 0xFF1A1A2E, IconAction::Terminal),
-        ("Files", 'F', 0xFF2D5B8E, IconAction::FileManager),
-        ("Calc", 'C', 0xFF8E2D5B, IconAction::Calculator),
-        ("System", 'S', 0xFF5B8E2D, IconAction::SysMonitor),
-        ("Procs", 'P', 0xFF8E5B2D, IconAction::ProcessManager),
-        ("Settings", '*', 0xFF5B2D8E, IconAction::Settings),
+    let entries: &[(&str, IconAction)] = &[
+        ("Terminal", IconAction::Terminal),
+        ("Files", IconAction::FileManager),
+        ("Calc", IconAction::Calculator),
+        ("System", IconAction::SysMonitor),
+        ("Procs", IconAction::ProcessManager),
+        ("Settings", IconAction::Settings),
     ];
 
     let cols = 1;
     let row_h = ICON_SIZE + ICON_LABEL_H + ICON_SPACING;
 
-    for (i, (label, glyph, color, action)) in entries.iter().enumerate() {
+    for (i, (label, action)) in entries.iter().enumerate() {
         if count >= MAX_ICONS {
             break;
         }
@@ -118,8 +138,7 @@ pub fn init() {
         let len = label_bytes.len().min(24);
         icon.label[..len].copy_from_slice(&label_bytes[..len]);
         icon.label_len = len;
-        icon.glyph = *glyph;
-        icon.color = *color;
+        icon.icon = icons::for_app(label);
         icon.action = *action;
         icon.x = ICON_MARGIN_LEFT;
         icon.y = ICON_MARGIN_TOP + (i as u32) * row_h;
@@ -129,6 +148,31 @@ pub fn init() {
 
     *ICON_COUNT.lock() = count;
     println!("[desktop] {} desktop icons initialized", count);
+}
+
+/// Translucent rounded highlight behind a tile and its label.
+fn draw_highlight(
+    fb: &fb::FramebufferInfo,
+    x: u32,
+    y: u32,
+    selected: bool,
+    hovered: bool,
+    focus: u32,
+) {
+    let (pad, alpha, tint) = if selected {
+        (SELECT_PAD, SELECT_ALPHA, focus)
+    } else if hovered {
+        (HOVER_PAD, HOVER_ALPHA, HOVER_TINT)
+    } else {
+        return;
+    };
+    let rect = (
+        x.saturating_sub(pad),
+        y.saturating_sub(pad),
+        ICON_SIZE + 2 * pad,
+        ICON_SIZE + ICON_LABEL_H + 2 * pad,
+    );
+    graphics::blend_rounded_rect(fb, rect, HIGHLIGHT_RADIUS, tint, alpha);
 }
 
 /// Draw all desktop icons to the framebuffer
@@ -145,46 +189,19 @@ pub fn draw(fb: &fb::FramebufferInfo) {
         let x = icon.x;
         let y = icon.y;
 
-        // Selection highlight (behind icon + label)
-        if sel == Some(i) {
-            graphics::fill_rounded_rect(
-                fb,
-                x.saturating_sub(4),
-                y.saturating_sub(4),
-                ICON_SIZE + 8,
-                ICON_SIZE + ICON_LABEL_H + 6,
-                6,
-                theme.input_border_focused,
-            );
-        } else if hov == Some(i) {
-            // Subtle hover tint
-            graphics::fill_rounded_rect(
-                fb,
-                x.saturating_sub(2),
-                y.saturating_sub(2),
-                ICON_SIZE + 4,
-                ICON_SIZE + ICON_LABEL_H + 2,
-                6,
-                0x3388C0D0,
-            );
-        }
-
-        // Icon background: rounded rectangle effect (solid for now)
-        // Draw border (slightly lighter)
-        graphics::draw_rect(fb, x, y, ICON_SIZE, ICON_SIZE, 0xFF333333);
-        // Fill with icon color
-        graphics::fill_rect(fb, x + 2, y + 2, ICON_SIZE - 4, ICON_SIZE - 4, icon.color);
-
-        // Draw glyph (single character centered)
-        let glyph_str: [u8; 1] = [icon.glyph as u8];
-        let glyph_str = core::str::from_utf8(&glyph_str).unwrap_or("?");
-        let text_x = x + ICON_SIZE / 2 - 4;
-        let text_y = y + ICON_SIZE / 2 - 8;
-        graphics::draw_text(fb, text_x, text_y, glyph_str, 0xFFFFFFFF, icon.color);
+        draw_highlight(
+            fb,
+            x,
+            y,
+            sel == Some(i),
+            hov == Some(i),
+            theme.input_border_focused,
+        );
+        icons::draw(fb, icon.icon, TILE_SIZE, x + TILE_INSET_X, y + TILE_INSET_Y);
 
         // Draw label below icon
         let label = core::str::from_utf8(&icon.label[..icon.label_len]).unwrap_or("");
-        let label_w = (label.len() as u32) * 8;
+        let label_w = (label.len() as u32) * LABEL_CHAR_W;
         let label_x = x + ICON_SIZE / 2 - label_w / 2;
         let label_y = y + ICON_SIZE + 2;
         graphics::draw_text(
@@ -193,7 +210,7 @@ pub fn draw(fb: &fb::FramebufferInfo) {
             label_y,
             label,
             theme.title_text,
-            theme.desktop_bg,
+            LABEL_TRANSPARENT_BG,
         );
     }
 }
