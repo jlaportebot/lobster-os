@@ -16,6 +16,7 @@ use core::arch::asm;
 pub mod dlinker;
 pub mod elf;
 pub mod init;
+pub mod preempt;
 pub mod process;
 pub mod shared_lib;
 pub mod signal;
@@ -120,7 +121,28 @@ pub struct FpContext {
     pub fpsr: u32,
 }
 
+/// FP/SIMD registers as stored by the EL0 IRQ vector in boot.S: q0-q31 as
+/// 16 consecutive pairs (the `stp qN, qN+1` order) followed by FPCR/FPSR.
+/// 528 bytes, which boot.S hard-codes as its stack reservation.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct FpSnapshot {
+    /// q0-q31 as 16 register pairs.
+    pub q: [[u128; 2]; 16],
+    /// FPCR at IRQ entry.
+    pub fpcr: u64,
+    /// FPSR at IRQ entry.
+    pub fpsr: u64,
+}
+
 impl FpContext {
+    /// Adopt a snapshot taken by the EL0 IRQ vector.
+    pub fn load_snapshot(&mut self, snap: &FpSnapshot) {
+        self.q[..snap.q.len()].copy_from_slice(&snap.q);
+        self.fpcr = snap.fpcr as u32;
+        self.fpsr = snap.fpsr as u32;
+    }
+
     pub const fn zeroed() -> Self {
         Self {
             q: [[0; 2]; 32],
@@ -1395,8 +1417,6 @@ pub unsafe extern "C" fn run_and_wait_body(_pid: u64) -> i64 {
         None => return -1,
     };
 
-    println!("[sched] run_and_wait: entered for PID {}", pid);
-
     // Record the resume address for the exception handler once.
     unsafe {
         if COOP_RESUME == 0 {
@@ -1416,6 +1436,10 @@ pub unsafe extern "C" fn run_and_wait_body(_pid: u64) -> i64 {
         if let Some(ref mut task) = TASK_TABLE[idx] {
             task.state = TaskState::Running;
             task.time_slice = time_slice_for(task.priority);
+            preempt::begin_slice();
+            if task.is_user && task.ttbr0_phys != 0 {
+                elf::activate_user_mappings(pid, task.ttbr0_phys);
+            }
 
             // User pages are dual-mapped into kernel TTBR0 at ELF load time,
             // so no TTBR0 switch is needed. eret into EL0 will work with the
@@ -1549,66 +1573,75 @@ pub fn slice_mode_active() -> bool {
     }
 }
 
-/// Pick the next background EL0 task to run: earliest wake_ms that has
-/// arrived, round-robin among ties. Returns its PID, or None.
+/// Pick the next background EL0 task to run: among tasks whose wake time
+/// has arrived, the one that ran longest ago (round-robin). Returns its PID.
 pub fn pick_bg_task(now_ms: u64) -> Option<Pid> {
+    static mut NEXT_TICKET: u64 = 1;
+    let mut candidates = [preempt::Candidate {
+        index: 0,
+        wake_ms: 0,
+        ticket: 0,
+    }; MAX_TASKS];
+    let mut count = 0;
+    // SAFETY: single core; the main loop is the only caller and no EL0 task
+    // runs while it walks the table.
     unsafe {
-        let mut best: Option<(usize, u64, u64)> = None; // (idx, wake, ticket)
-        for i in 0..MAX_TASKS {
-            let Some(ref t) = TASK_TABLE[i] else { continue };
-            if !t.bg || !t.is_user {
-                continue;
-            }
-            if t.state != TaskState::Ready {
-                continue;
-            }
-            if t.wake_ms > now_ms {
-                continue; // still sleeping
-            }
-            let key = (t.wake_ms, t.rr_ticket);
-            match best {
-                Some((_, w, tk)) if (w, tk) <= key => {}
-                _ => best = Some((i, t.wake_ms, t.rr_ticket)),
+        for (i, slot) in TASK_TABLE.iter().enumerate() {
+            let Some(t) = slot else { continue };
+            if t.bg && t.is_user && t.state == TaskState::Ready {
+                candidates[count] = preempt::Candidate {
+                    index: i,
+                    wake_ms: t.wake_ms,
+                    ticket: t.rr_ticket,
+                };
+                count += 1;
             }
         }
-        let (idx, _, _) = best?;
-        // Bump the round-robin ticket so others go first next time.
-        static mut NEXT_TICKET: u64 = 1;
-        if let Some(ref mut t) = TASK_TABLE[idx] {
-            t.rr_ticket = NEXT_TICKET;
-            NEXT_TICKET += 1;
-            Some(t.pid)
-        } else {
-            None
-        }
+        let idx = preempt::pick_round_robin(&candidates[..count], now_ms)?;
+        let t = TASK_TABLE[idx].as_mut()?;
+        t.rr_ticket = NEXT_TICKET;
+        NEXT_TICKET += 1;
+        Some(t.pid)
     }
 }
 
-/// Run one slice of every runnable background task (called from the main
-/// loop). Returns true if any task ran. A slice ends at the task's next
-/// SYS_SLEEP or its exit — both resume the main loop through the
-/// cooperative-exit path.
+/// Run one slice of the next runnable background/foreground task (called
+/// from the main loop). Returns true if a task ran. A slice ends at the
+/// task's next SYS_SLEEP, its exit, or the timer IRQ once the slice budget
+/// is spent — all three resume the main loop through the cooperative-exit
+/// path.
 pub fn run_bg_slices() -> bool {
     let now = crate::arch::ArchTimer::uptime_ms();
-    let mut ran = false;
-    // One task per call keeps main-loop latency bounded; round-robin
-    // tickets ensure fairness across calls.
-    if let Some(pid) = pick_bg_task(now) {
-        let code = unsafe { run_and_wait(pid as u64) };
-        if code as u64 != SLICE_YIELD_MARKER as u64 {
-            println!("[sched] bg PID {} exited with code {}", pid, code);
-        } else if let Some(idx) = find_task_index(pid) {
-            // run_and_wait marked it Running; a slice end makes it Ready
-            // again (wake_ms gates the next slice).
-            unsafe {
-                if let Some(ref mut t) = TASK_TABLE[idx] {
+    let Some(pid) = pick_bg_task(now) else {
+        return false;
+    };
+    // SAFETY: called from the main loop at EL1h with no EL0 task live; the
+    // task was just picked from the table, so it exists and is Ready.
+    let code = unsafe { run_and_wait(pid as u64) };
+    if code as u64 == SLICE_YIELD_MARKER as u64 {
+        mark_slice_ended(pid);
+    } else {
+        println!("[sched] bg PID {} exited with code {}", pid, code);
+        preempt::foreground_note_exit(pid, code);
+    }
+    true
+}
+
+/// A slice ended without the task exiting: make it runnable again and park
+/// CURRENT_PID so main-loop work (and tick accounting) is not billed to it.
+fn mark_slice_ended(pid: Pid) {
+    if let Some(idx) = find_task_index(pid) {
+        // SAFETY: single core, main loop context; no other reference to the
+        // table entry is live across this write.
+        unsafe {
+            if let Some(ref mut t) = TASK_TABLE[idx] {
+                if t.state == TaskState::Running {
                     t.state = TaskState::Ready;
                 }
             }
         }
-        ran = true;
     }
-    ran
+    set_current_pid(0);
 }
 
 /// Save the current EL0 trap frame into the task's register context so a
@@ -1616,7 +1649,16 @@ pub fn run_bg_slices() -> bool {
 /// `regs` is the exception-stack save block (x0-x30 at 0..240, SP_EL0 at
 /// 248). `elr`/`spsr` are the exception-time values (SVC ELR already
 /// points past the svc instruction).
-pub unsafe fn save_slice_frame(pid: Pid, regs: *const u64, elr: u64, spsr: u64) {
+///
+/// `fp` is the FP/SIMD snapshot taken at IRQ entry; `None` means the vector
+/// registers still hold the task's state (syscall path) and are read live.
+pub unsafe fn save_slice_frame(
+    pid: Pid,
+    regs: *const u64,
+    elr: u64,
+    spsr: u64,
+    fp: Option<&FpSnapshot>,
+) {
     let Some(idx) = find_task_index(pid) else {
         return;
     };
@@ -1626,9 +1668,12 @@ pub unsafe fn save_slice_frame(pid: Pid, regs: *const u64, elr: u64, spsr: u64) 
     if regs.is_null() {
         return;
     }
-    // Q3: snapshot the user's live FP/SIMD state before the kernel runs any
+    // Q3: snapshot the user's FP/SIMD state before the kernel runs any
     // vector code on the next slice's behalf.
-    t.fp.save();
+    match fp {
+        Some(snap) => t.fp.load_snapshot(snap),
+        None => t.fp.save(),
+    }
     let f = &mut t.regs;
     f.x0 = *regs.add(0);
     f.x1 = *regs.add(1);
@@ -1664,6 +1709,19 @@ pub unsafe fn save_slice_frame(pid: Pid, regs: *const u64, elr: u64, spsr: u64) 
     t.regs.sp = *regs.add(31);
     t.regs.elr = elr;
     t.regs.spsr = spsr;
+}
+
+/// Called from the EL0 timer IRQ: true when the interrupted code was EL0
+/// and the current sliced task has used up its slice budget. IRQs taken at
+/// EL1 never end a slice — kernel code is not preemptible.
+pub fn preempt_slice_due(spsr: u64) -> bool {
+    if !preempt::spsr_is_el0(spsr) || !preempt_enabled() {
+        return false;
+    }
+    if !coop_active() || !slice_mode_active() || cooperative_exit_pending() {
+        return false;
+    }
+    preempt::on_el0_tick()
 }
 
 /// S3: true once `preempt on` has enabled the architectural-timer tick.
@@ -1704,82 +1762,141 @@ pub fn mark_bg(pid: Pid) -> bool {
     false
 }
 
-/// Kill a task by PID
+/// Kill a task by PID (SIGKILL semantics).
 pub fn kill(pid: Pid) -> bool {
-    if let Some(idx) = find_task_index(pid) {
-        unsafe {
-            if let Some(ref mut task) = TASK_TABLE[idx] {
-                task.state = TaskState::Zombie;
-                task.exit_code = -9; // SIGKILL equivalent
-                println!("[sched] PID {} killed", pid);
-                return true;
-            }
+    terminate_task(pid, signal::SIGKILL)
+}
+
+/// Mark `pid` a zombie as if signal `sig` ended it, and tell the shell if
+/// it was the foreground job. The task is reclaimed by `reap_zombies`.
+fn terminate_task(pid: Pid, sig: u64) -> bool {
+    let Some(idx) = find_task_index(pid) else {
+        return false;
+    };
+    // SAFETY: single core; callers are the main loop / exception path, so
+    // nothing else holds a reference into the table.
+    unsafe {
+        let Some(ref mut task) = TASK_TABLE[idx] else {
+            return false;
+        };
+        task.state = TaskState::Zombie;
+        task.exit_code = -(sig as i64);
+        task.exit_signal = sig;
+    }
+    println!("[sched] PID {} killed (signal {})", pid, sig);
+    preempt::foreground_note_exit(pid, preempt::status_for_signal(sig));
+    true
+}
+
+/// Result of sending a signal with [`signal_task`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KillResult {
+    /// No task with that PID.
+    NoSuchTask,
+    /// The task was terminated.
+    Terminated,
+    /// The task ignores the signal.
+    Ignored,
+    /// The task has a handler; the signal is pending until its next syscall.
+    Queued,
+}
+
+/// Send `sig` to `pid`: terminate it, drop the signal, or leave it pending
+/// for the task's own handler, per the task's registered disposition.
+pub fn signal_task(pid: Pid, sig: u64) -> KillResult {
+    let Some(idx) = find_task_index(pid) else {
+        return KillResult::NoSuchTask;
+    };
+    // SAFETY: single core read of one table entry.
+    let handler = unsafe {
+        TASK_TABLE[idx]
+            .as_ref()
+            .and_then(|t| t.signal_handlers.get(sig as usize).copied())
+            .unwrap_or(signal::SIG_DFL)
+    };
+    match preempt::signal_outcome(sig, handler) {
+        preempt::SignalOutcome::Terminate => {
+            terminate_task(pid, sig);
+            KillResult::Terminated
+        }
+        preempt::SignalOutcome::Ignore => KillResult::Ignored,
+        preempt::SignalOutcome::Queue => {
+            signal::kill(pid, sig);
+            KillResult::Queued
         }
     }
-    false
+}
+
+/// Ctrl+C: send SIGINT to the foreground job. Returns its PID if one was
+/// running. Reaps right away so the task's memory and windows are freed
+/// before the prompt returns.
+pub fn interrupt_foreground() -> Option<Pid> {
+    let pid = preempt::foreground_pid()?;
+    signal_task(pid, signal::SIGINT);
+    reap_zombies();
+    Some(pid)
 }
 
 /// Reap zombie tasks (free their resources)
 pub fn reap_zombies() -> usize {
     let mut reaped = 0;
-    unsafe {
-        for i in 0..MAX_TASKS {
-            if let Some(ref task) = TASK_TABLE[i] {
-                if task.state == TaskState::Zombie {
-                    // S6: tear down any user windows the app left open
-                    // (frames + WM chrome) before freeing the task.
-                    crate::wm::user_windows::close_all_for_pid(task.pid);
-                    // Q4: destroy the process's own page-table tree — frees
-                    // the L1/L2/L3 tables and stops the dual-mapped kernel
-                    // entries from leaking user frames past task death.
-                    // (close_all_for_pid already frees window frames and
-                    // unmaps the window mirror; this reclaims the tree.)
-                    if task.ttbr0_phys != 0 && task.is_user {
-                        crate::memory::process_vmem::destroy_address_space(
-                            &crate::memory::process_vmem::AddressSpace {
-                                ttbr0_phys: task.ttbr0_phys,
-                                vmas: [crate::memory::process_vmem::Vma {
-                                    start: 0,
-                                    size: 0,
-                                    prot: 0,
-                                    file_offset: 0,
-                                    shared: false,
-                                    in_use: false,
-                                };
-                                    crate::memory::process_vmem::MAX_VMAS],
-                                vma_count: 0,
-                                brk: 0,
-                            },
-                        );
-                    }
-                    // Free kernel stack
-                    for page in 0..KERN_STACK_PAGES {
-                        let offset = (page as u64) * PAGE_SIZE;
-                        let vaddr = task.kernel_stack_base + offset;
-                        if let Some(paddr) = crate::memory::vmem::translate_va(VirtAddr::new(vaddr))
-                        {
-                            frame_alloc::deallocate_frame(paddr);
-                        }
-                    }
-                    // Free user stack
-                    if task.user_stack_base != 0 {
-                        for page in 0..USER_STACK_PAGES {
-                            let offset = (page as u64) * PAGE_SIZE;
-                            let vaddr = task.user_stack_base + offset;
-                            if let Some(paddr) =
-                                crate::memory::vmem::translate_va(VirtAddr::new(vaddr))
-                            {
-                                frame_alloc::deallocate_frame(paddr);
-                            }
-                        }
-                    }
-                    TASK_TABLE[i] = None;
-                    reaped += 1;
-                }
-            }
+    for i in 0..MAX_TASKS {
+        // SAFETY: single core, main-loop context; the slot is only read.
+        let is_zombie =
+            unsafe { matches!(&TASK_TABLE[i], Some(t) if t.state == TaskState::Zombie) };
+        if !is_zombie {
+            continue;
+        }
+        // SAFETY: as above; the zombie is removed from the table here, so
+        // nothing can reach it while its memory is being freed.
+        if let Some(task) = unsafe { TASK_TABLE[i].take() } {
+            release_task_resources(&task);
+            reaped += 1;
         }
     }
     reaped
+}
+
+/// Free everything a dead task owns: windows, user pages and page tables,
+/// and its kernel stack.
+fn release_task_resources(task: &Task) {
+    // S6: tear down any user windows the app left open (frames + WM chrome).
+    crate::wm::user_windows::close_all_for_pid(task.pid);
+    if task.is_user && task.ttbr0_phys != 0 {
+        free_user_address_space(task);
+    }
+    for page in 0..KERN_STACK_PAGES {
+        let vaddr = task.kernel_stack_base + (page as u64) * PAGE_SIZE;
+        if let Some(paddr) = crate::memory::vmem::translate_va(VirtAddr::new(vaddr)) {
+            frame_alloc::deallocate_frame(paddr);
+        }
+    }
+}
+
+/// Q4: free a user task's data frames (stack, code, heap) by walking its
+/// OWN page tree, then the tree itself. User VAs live in TTBR0, so they
+/// cannot be translated through the kernel's TTBR1 walk. The kernel-TTBR0
+/// mirror is dropped first so no mapping outlives the frames.
+fn free_user_address_space(task: &Task) {
+    elf::release_user_mappings(task.pid);
+    let root = (crate::memory::PHYS_MAP_OFFSET + task.ttbr0_phys) as *mut [u64; 512];
+    // SAFETY: `ttbr0_phys` is the task's own live tree; the task is dead, so
+    // no CPU walks it, and window pages were unmapped by close_all_for_pid.
+    unsafe { crate::memory::process_vmem::free_user_pages(root, 0) };
+    let space = crate::memory::process_vmem::AddressSpace {
+        ttbr0_phys: task.ttbr0_phys,
+        vmas: [crate::memory::process_vmem::Vma {
+            start: 0,
+            size: 0,
+            prot: 0,
+            file_offset: 0,
+            shared: false,
+            in_use: false,
+        }; crate::memory::process_vmem::MAX_VMAS],
+        vma_count: 0,
+        brk: 0,
+    };
+    crate::memory::process_vmem::destroy_address_space(&space);
 }
 
 /// Kill the current user process and force return to kernel cooperative mode.
@@ -1863,13 +1980,14 @@ where
                 }
                 let kind = if task.is_user { "EL0" } else { "EL1" };
                 write_line(&alloc::format!(
-                    "[sched]   PID {} | {} | {:?} | {:?} | ticks={} slice={}",
+                    "[sched]   PID {} | {} | {:?} | {:?} | ticks={} slice={} | {}",
                     task.pid,
                     kind,
                     task.state,
                     task.priority,
                     task.runtime_ticks,
-                    task.time_slice
+                    task.time_slice,
+                    task_mode(task)
                 ));
             }
         }
@@ -1880,6 +1998,22 @@ where
             blocked,
             zombie
         ));
+    }
+    write_line(&alloc::format!(
+        "[sched] Main loop max gap: {} ms (since last ps)",
+        preempt::take_max_loop_gap_ms()
+    ));
+    preempt::restart_loop_gap_window();
+}
+
+/// `fg` for the foreground job, `bg` for other sliced tasks, `-` for the rest.
+fn task_mode(task: &Task) -> &'static str {
+    if preempt::foreground_pid() == Some(task.pid) {
+        "fg"
+    } else if task.bg {
+        "bg"
+    } else {
+        "-"
     }
 }
 

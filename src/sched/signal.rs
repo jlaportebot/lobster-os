@@ -486,3 +486,49 @@ pub unsafe fn sigreturn(regs: *mut TrapFrame) -> Result<(), &'static str> {
 
     Ok(())
 }
+
+/// Signal sent by `kill` when no signal is named.
+pub const DEFAULT_KILL_SIGNAL: u64 = SIGTERM;
+
+/// Parse the signal option of `kill`: `-9`, `-KILL`, `-SIGKILL`, `-TERM`,
+/// `-INT`, ... (leading `-` included). `None` if it is not a known signal.
+pub fn parse_signal_option(opt: &str) -> Option<u64> {
+    let name = opt.strip_prefix('-')?;
+    if let Ok(num) = name.parse::<u64>() {
+        return (1..=MAX_SIG).contains(&num).then_some(num);
+    }
+    let short = name.strip_prefix("SIG").unwrap_or(name);
+    match short {
+        "HUP" => Some(SIGHUP),
+        "INT" => Some(SIGINT),
+        "QUIT" => Some(SIGQUIT),
+        "KILL" => Some(SIGKILL),
+        "USR1" => Some(SIGUSR1),
+        "USR2" => Some(SIGUSR2),
+        "ALRM" => Some(SIGALRM),
+        "TERM" => Some(SIGTERM),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_numeric_and_named_signals() {
+        assert_eq!(parse_signal_option("-9"), Some(SIGKILL));
+        assert_eq!(parse_signal_option("-15"), Some(SIGTERM));
+        assert_eq!(parse_signal_option("-KILL"), Some(SIGKILL));
+        assert_eq!(parse_signal_option("-SIGINT"), Some(SIGINT));
+        assert_eq!(parse_signal_option("-TERM"), Some(SIGTERM));
+    }
+
+    #[test]
+    fn rejects_unknown_or_out_of_range() {
+        assert_eq!(parse_signal_option("-0"), None);
+        assert_eq!(parse_signal_option("-64"), None);
+        assert_eq!(parse_signal_option("-BOGUS"), None);
+        assert_eq!(parse_signal_option("12"), None);
+    }
+}

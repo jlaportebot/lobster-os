@@ -105,6 +105,18 @@ pub fn is_window_on_active(window_id: u32) -> bool {
     false
 }
 
+/// True when a window should be shown on the active workspace: it is
+/// assigned to it, or to no workspace at all (windows are only tracked once
+/// moved, so unassigned ones follow the user across desktops).
+pub fn is_visible_here(window_id: u32) -> bool {
+    if is_window_on_active(window_id) {
+        return true;
+    }
+    let ws = WORKSPACES.lock();
+    !ws.iter()
+        .any(|w| w.window_ids[..w.window_count].contains(&window_id))
+}
+
 /// Switch to a workspace by index (0-based)
 pub fn switch_to(target: usize) {
     if target >= MAX_WORKSPACES {

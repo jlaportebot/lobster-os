@@ -344,10 +344,17 @@ pub fn focus(id: u32) {
     // Focus the target
     for i in 0..MAX_WINDOWS {
         if windows[i].active && windows[i].id == id {
+            let was_minimized = windows[i].state == WinState::Minimized;
+            if was_minimized {
+                windows[i].state = WinState::Normal;
+            }
             windows[i].focused = true;
             *focused_id = id;
             drop(windows);
             drop(focused_id);
+            if was_minimized {
+                compositor::set_layer_visible(id, true);
+            }
             compositor::raise_layer(id);
             return;
         }
@@ -445,7 +452,20 @@ pub fn minimize(id: u32) {
     }
 }
 
-/// Maximize a window (fill screen)
+/// Bring a minimised window back, focused and on top. A window that is not
+/// minimised is left alone.
+pub fn restore_minimized(id: u32) {
+    if is_minimized(id) {
+        focus(id);
+    }
+}
+
+/// True when the window exists and is minimised.
+pub fn is_minimized(id: u32) -> bool {
+    get(id).is_some_and(|win| win.state == WinState::Minimized)
+}
+
+/// Maximize a window (fill the work area above the taskbar)
 pub fn maximize(id: u32) {
     let fb = match compositor::fb_info() {
         Some(fb) => fb,
@@ -464,7 +484,7 @@ pub fn maximize(id: u32) {
             } else {
                 windows[i].state = WinState::Maximized;
                 drop(windows);
-                resize(id, fb.width, fb.height);
+                resize(id, fb.width, fb.height.saturating_sub(panel_height()));
                 move_window(id, 0, 0);
             }
             return;
@@ -985,7 +1005,7 @@ pub enum SnapPosition {
 
 /// Get the panel height to avoid covering windows under the panel
 fn panel_height() -> u32 {
-    36
+    crate::wm::panel::panel_height()
 }
 
 /// Snap a window to a position on screen

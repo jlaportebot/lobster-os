@@ -1018,6 +1018,7 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     loop {
         // Drive window manager (runs every iteration on QEMU)
         crate::wm::tick();
+        crate::sched::preempt::note_main_loop_iteration(crate::arch::ArchTimer::uptime_ms());
 
         // Drive splash screen (handles transition to desktop)
         crate::display::splash::tick();

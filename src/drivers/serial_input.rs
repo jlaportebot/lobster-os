@@ -184,6 +184,8 @@ unsafe fn process_byte(byte: u8) {
                 Uart10::puts("^C\r\n");
             }
             INPUT_LEN = 0;
+            // SIGINT for the foreground `run` job; delivered by the main loop.
+            crate::shell::foreground::request_interrupt();
         }
         // Ctrl+U — kill entire line
         0x15 => {

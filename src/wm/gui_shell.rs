@@ -90,6 +90,19 @@ impl Default for LineBuffer {
 
 static LINE: Spinlock<LineBuffer> = Spinlock::new(LineBuffer::new());
 
+/// Whether Ctrl is held. The QEMU input device reports modifiers in its own
+/// bit layout (ctrl is bit 1), which `usb::hid` would misread as Shift, so
+/// ask the device directly when it is the active keyboard source.
+fn ctrl_down() -> bool {
+    #[cfg(target_arch = "aarch64")]
+    {
+        if crate::drivers::qemu_input::is_present() {
+            return crate::drivers::qemu_input::ctrl_held();
+        }
+    }
+    crate::usb::hid::ctrl_held()
+}
+
 /// Whether the Terminal window currently owns keyboard input.
 pub fn terminal_focused() -> bool {
     let fid = window::focused_id();
@@ -113,13 +126,20 @@ fn submit() {
     if !line.is_empty() {
         crate::console::with_terminal_mirror(|| crate::shell::execute_for_gui(&line));
     }
-    prompt();
+    if !crate::shell::foreground::holds_prompt() {
+        prompt();
+    }
 }
 
-/// Ctrl+C: abandon the typed line.
+/// Ctrl+C: interrupt the foreground job (its exit brings the prompt back);
+/// with no job, abandon the typed line and reprompt.
 fn cancel_line() {
-    LINE.lock().clear();
     echo("^C\r\n");
+    if crate::shell::foreground::is_active() {
+        crate::shell::foreground::request_interrupt();
+        return;
+    }
+    LINE.lock().clear();
     prompt();
 }
 
@@ -153,7 +173,7 @@ pub fn handle_key(scancode: u8, ch: Option<char>) -> bool {
     if !terminal_focused() {
         return false;
     }
-    if crate::usb::hid::ctrl_held() && handle_ctrl(scancode) {
+    if ctrl_down() && handle_ctrl(scancode) {
         return true;
     }
     match scancode {
