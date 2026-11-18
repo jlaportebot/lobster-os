@@ -349,6 +349,23 @@ pub fn has_mouse() -> bool {
     })
 }
 
+/// Translate the QEMU input device's modifier flags (its own layout, see
+/// `qemu_input`) into the HID boot-protocol layout every caller expects.
+/// The device cannot tell left from right, so the left-hand bit is used;
+/// unknown bits are dropped.
+pub(crate) fn qemu_flags_to_hid(flags: u8) -> u8 {
+    use crate::drivers::qemu_input::{MOD_ALT, MOD_CTRL, MOD_GUI, MOD_SHIFT};
+    const MAP: [(u8, u8); 4] = [
+        (MOD_SHIFT, MOD_LSHIFT),
+        (MOD_CTRL, MOD_LCTRL),
+        (MOD_ALT, MOD_LALT),
+        (MOD_GUI, MOD_LGUI),
+    ];
+    MAP.iter()
+        .filter(|(qemu, _)| flags & qemu != 0)
+        .fold(0, |acc, (_, hid)| acc | hid)
+}
+
 /// Get the modifier keys currently held (from the first keyboard)
 pub fn get_modifiers() -> u8 {
     let devices = HID_DEVICES.lock();
@@ -363,7 +380,7 @@ pub fn get_modifiers() -> u8 {
     #[cfg(target_arch = "aarch64")]
     {
         if crate::drivers::qemu_input::is_present() {
-            return crate::drivers::qemu_input::modifiers();
+            return qemu_flags_to_hid(crate::drivers::qemu_input::modifiers());
         }
     }
     0
@@ -391,4 +408,41 @@ pub fn alt_held() -> bool {
 pub fn gui_held() -> bool {
     let mods = get_modifiers();
     (mods & (MOD_LGUI | MOD_RGUI)) != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qemu_shift_maps_to_hid_left_shift() {
+        assert_eq!(qemu_flags_to_hid(0x01), MOD_LSHIFT);
+    }
+
+    #[test]
+    fn qemu_ctrl_maps_to_hid_left_ctrl() {
+        assert_eq!(qemu_flags_to_hid(0x02), MOD_LCTRL);
+    }
+
+    #[test]
+    fn qemu_alt_and_gui_map_to_hid_left_keys() {
+        assert_eq!(qemu_flags_to_hid(0x04), MOD_LALT);
+        assert_eq!(qemu_flags_to_hid(0x08), MOD_LGUI);
+    }
+
+    #[test]
+    fn qemu_combinations_translate_bitwise() {
+        assert_eq!(qemu_flags_to_hid(0x03), MOD_LSHIFT | MOD_LCTRL);
+        assert_eq!(
+            qemu_flags_to_hid(0x0F),
+            MOD_LSHIFT | MOD_LCTRL | MOD_LALT | MOD_LGUI
+        );
+    }
+
+    #[test]
+    fn qemu_unknown_bits_are_dropped() {
+        assert_eq!(qemu_flags_to_hid(0xF0), 0);
+        assert_eq!(qemu_flags_to_hid(0x11), MOD_LSHIFT);
+        assert_eq!(qemu_flags_to_hid(0), 0);
+    }
 }

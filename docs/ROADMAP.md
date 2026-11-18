@@ -29,7 +29,7 @@ Gate every push on `tools/gui_test.py` in the emulator repo.
 
 ## 0. Where things stand
 
-**2026-11-18:** execution-order steps 1–2 are done (desktop core incl. fonts, icons, taskbar, start menu); in flight: desktop icons O3.4, cache enable for KVM/real hardware, VFS directory caps, portable QEMU builds E3.1; next: installers E3.3, Settings O4.1, Files O4.2. The list below is the original 2026-11-09 baseline, kept for reference.
+**2026-11-18 (evening):** execution-order steps 1–2 are done (desktop core incl. fonts, icons, taskbar, start menu), plus desktop icons O3.4 (rubber-band left), caches + KVM, `lobstervm --accel kvm`, portable QEMU builds E3.1; in flight: VFS directory fidelity (O6.1 follow-up), Settings O4.1, Browser v2 O4.3, installers E3.3/E3.4; next: Files O4.2, App Store O4.6, lock screen O3.8. The list below is the original 2026-11-09 baseline, kept for reference.
 
 ### Baseline (verified 2026-11-09)
 
@@ -91,10 +91,11 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
 - [ ] **E1.11 Debug view** (audit Q22): `info ltasks`, `lbt <pid>` monitor commands.
 - [x] **E1.12 Deterministic mode** (audit Q21): `-icount` profile for the harness.
       *Verified 2026-11-16:* deterministic clock mode (QEMU 767ab9f).
-- [ ] **E1.13 Performance**: profile TCG hot paths for the desktop workload; evaluate KVM on
+- [~] **E1.13 Performance**: profile TCG hot paths for the desktop workload; evaluate KVM on
       the Pi 5 host (same CPU: Cortex-A76) behind a `--accel kvm` option. *KVM works end to end
-      since 2026-11-18 (QEMU in-kernel GIC + kernel D/I-cache enable: desktop-ready 884 ms under
-      KVM vs. a hang after heap init before); left: `lobstervm --accel kvm`, TCG profiling.*
+      since 2026-11-18 (QEMU in-kernel GIC + kernel D/I-cache enable): `lobstervm --accel kvm`
+      (emulator bfcc749) boots to desktop-ready in ~0.9 s vs ~1.4 s under TCG, GUI harness 12/12
+      under both; TCG stays the default (CI). Left: TCG hot-path profiling.*
 
 ### E2. `lobstervm` — VM manager (emulator repo)
 - [x] **E2.1 Core library**: VM definitions on disk (`~/.local/share/lobstervm/<name>/vm.json`),
@@ -331,3 +332,4 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-18 | O3.3 start menu; E3.2 portable `lobstervm`; O2.3/O2.4/E2.9 ticked (landed 11-17) | gate 354 tests + harness 12/12 (both transports) + bundle smoke |
 | 2026-11-18 | D- and I-caches on (SCTLR C/I) with DMA/code cache maintenance; the kernel now boots under KVM | gate 363 tests + harness 12/12 (TCG) + KVM boot to desktop-ready |
 | 2026-11-18 | O3.4 desktop icons (all but rubber-band); Welcome window visible again; dialogs dim instead of black; `dmesg` from a bounded kernel-log ring; Terminal runs shell commands and shows their output | gate 391 tests + harness 12/12 + screenshots |
+| 2026-11-18 | QEMU input modifiers translated to the HID layout (Shift/Ctrl were swapped); `lobstervm --accel kvm`; `/bin/spin` test programs on the base image; QEMU fork builds portably (E3.1, `qemu-nightly`) | gate 396 tests + harness (Shift path, Esc now asserted) + CI 4/4 platforms |
