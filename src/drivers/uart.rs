@@ -105,6 +105,13 @@ impl Uart10 {
         #[cfg(all(target_arch = "aarch64", feature = "qemu"))]
         {
             crate::drivers::fast_serial::write(b);
+            // The bulk window bypasses `putc`, so mirror here for Terminal output.
+            #[cfg(feature = "qemu_raspi5b")]
+            if crate::console::mirror_to_terminal_enabled() {
+                for &byte in b {
+                    crate::apps::terminal::mirror_serial_byte(byte);
+                }
+            }
         }
         #[cfg(all(target_arch = "aarch64", not(feature = "qemu")))]
         {
