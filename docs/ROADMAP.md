@@ -129,11 +129,15 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
 Goal: a user downloads one file for their OS, double-clicks it, and gets LobsterVM with the
 LobsterOS kernel + base disk + our QEMU fork, ready to create and start a VM. Everything is built
 and tested by CI; nothing is hand-assembled.
-- [ ] **E3.1 Portable QEMU fork**: lobster devices build on Linux, macOS and Windows (no POSIX-only
+- [x] **E3.1 Portable QEMU fork**: lobster devices build on Linux, macOS and Windows (no POSIX-only
       calls); CI matrix (`lobster-qemu` `.github/workflows/lobster-build.yml`) builds
       `qemu-system-aarch64` for linux-x86_64, linux-arm64, macos-arm64, windows-x86_64, boots the
       LobsterOS kernel headless to `desktop-ready` on each, checks the bundle is self-contained, and
       publishes a rolling `qemu-nightly` release.
+      *Verified 2026-11-18:* run 44403570985 green on all four + publish; `qemu-nightly` (3a0ab1b) has the
+      four archives + SHA256SUMS; the linux-aarch64 archive, checksum-verified and run with
+      `env -i PATH=/usr/bin:/bin`, boots kernel 366a773 to desktop-ready (1.7 s). Guest URL fetches now
+      spawn curl without a shell (the old popen command line was injectable from the guest).
 - [x] **E3.2 Portable `lobstervm`**: no Unix-socket/FIFO/`/tmp` assumptions (TCP or named-pipe
       channels on Windows), per-OS data dirs, display backend auto-pick (gtk/cocoa/sdl), finds a
       bundled QEMU next to itself; PyInstaller spec; unit tests + harness on all three OSes in CI.
