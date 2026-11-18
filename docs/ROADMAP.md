@@ -27,7 +27,11 @@ Gate every push on `tools/gui_test.py` in the emulator repo.
 
 ---
 
-## 0. Where things stand (verified 2026-11-09)
+## 0. Where things stand
+
+**2026-11-17:** items above the line in the execution order are done except O2.3/O2.4/O3.2/O3.3 (in progress); the emulator writes guest disks safely (QEMU fix), host tests are deterministic (crate-wide test lock), and KVM acceleration (E1.13) is being evaluated. The list below is the original 2026-11-09 baseline, kept for reference.
+
+### Baseline (verified 2026-11-09)
 
 Baseline measured this session: kernel builds clean, boots to desktop in ~1.2–2.0 s guest
 time under TCG, GUI harness 10/10.
@@ -70,9 +74,11 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
       revision memory fields corrected. *Verified:* `-M help` lists all four with the right RAM.
 - [x] **E1.3 Quiet device tree fix-ups** (audit Q20): removal list de-duplicated, one optional
       summary line instead of ~35 warnings.
-- [ ] **E1.4 GIC "duplicate property" errors** at realize (double init in `bcm2712.c`).
-- [ ] **E1.5 Device config as properties**, not environment variables (`LBST_DISKIMG`,
+- [x] **E1.4 GIC "duplicate property" errors** at realize (double init in `bcm2712.c`).
+      *Closed 2026-11-16:* no longer reproduces on either QEMU build (stale).
+- [x] **E1.5 Device config as properties**, not environment variables (`LBST_DISKIMG`,
       `LBST_SHARE`, `LBST_RES` → `-global`/machine options); keep env as fallback.
+      *Verified 2026-11-17:* `lobster-disk` `drive`/`diskimg` properties, `-drive if=none,id=lobsterdisk` now requests write permission (guest writes used to abort QEMU); env fallback kept.
 - [ ] **E1.6 Host clipboard bridge** in `lobster-sys` (text both ways via QEMU's clipboard API).
 - [ ] **E1.7 Host-driven resize**: resizing the VM window sends the guest a new mode.
 - [ ] **E1.8 Real Pi 5 peripherals** so a stock Pi 5 kernel can use them instead of the
@@ -83,7 +89,8 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
       E1.4 + timer/IRQ path review + E1.8 UART/SD at minimum.
 - [ ] **E1.10 SMP**: bring cores 1–3 up via the spin-table/PSCI path the guest expects.
 - [ ] **E1.11 Debug view** (audit Q22): `info ltasks`, `lbt <pid>` monitor commands.
-- [ ] **E1.12 Deterministic mode** (audit Q21): `-icount` profile for the harness.
+- [x] **E1.12 Deterministic mode** (audit Q21): `-icount` profile for the harness.
+      *Verified 2026-11-16:* deterministic clock mode (QEMU 767ab9f).
 - [ ] **E1.13 Performance**: profile TCG hot paths for the desktop workload; evaluate KVM on
       the Pi 5 host (same CPU: Cortex-A76) behind a `--accel kvm` option.
 
@@ -94,18 +101,24 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
 - [x] **E2.2 CLI** (`lobstervm.sh`): `list create modify show delete start stop reset pause
       resume factory-reset snapshot screenshot click move drag key type shell hmp serial doctor`.
       *Verified:* create → `start --headless --wait` → `shell uptime` → `screenshot`.
-- [ ] **E2.3 Graphical manager** (`lobstervm gui`): VM list, details pane, New/Settings
+- [x] **E2.3 Graphical manager** (`lobstervm gui`): VM list, details pane, New/Settings
       dialogs, Start/Stop/Pause/Reset, snapshot tree, live serial console, screenshot button.
-- [ ] **E2.4 Clean guest shutdown** from the manager (`stop` → guest `shutdown` → QEMU exits)
+      *Verified:* `lobstervm gui` (tkinter, emulator 4997a86).
+- [x] **E2.4 Clean guest shutdown** from the manager (`stop` → guest `shutdown` → QEMU exits)
       and guest-initiated reboot. Needs O1.1.
-- [ ] **E2.5 Harness on `lobstervm`**: port `tools/gui_test.py` to `Machine`, throwaway disk
+      *Verified 2026-11-17:* `lobstervm stop` types `shutdown`, QEMU exits, data written before persists across restart.
+- [x] **E2.5 Harness on `lobstervm`**: port `tools/gui_test.py` to `Machine`, throwaway disk
       per run (never touch the tracked base image), unique runtime paths, JUnit-style summary.
-- [ ] **E2.6 Desktop integration**: one `.desktop` launcher, icon, `install.sh` that puts
+      *Verified:* `tools/gui_test_vm.py` on `lobstervm.Machine`, throwaway overlay per run, JUnit output.
+- [x] **E2.6 Desktop integration**: one `.desktop` launcher, icon, `install.sh` that puts
       `lobstervm` on `PATH`; delete the stale `run_*.sh`, `lobsteros_gui.py`, `vm.sh`, tracked
       `__pycache__`, and the stale `hw/` + `include/` copies of QEMU sources.
-- [ ] **E2.7 Disk tools**: `lobstervm disk import/export/resize`, build the base image from a
+      *Verified 2026-11-17:* `install.sh` links `lobstervm` into `~/.local/bin` and installs `lobstervm-gui.desktop`; stale launchers and source copies removed.
+- [x] **E2.7 Disk tools**: `lobstervm disk import/export/resize`, build the base image from a
       manifest (`tools/mkbase.sh`) instead of tracking a 64 MB binary.
-- [ ] **E2.8 Unit tests** for `lobstervm` (config validation, command line, HMP parsing) in CI.
+      *Verified 2026-11-16:* `lobstervm disk info/export/import/resize`; `tools/mkbase.py` builds an fsck-clean base image from a tracked tree.
+- [x] **E2.8 Unit tests** for `lobstervm` (config validation, command line, HMP parsing) in CI.
+      *Verified:* 158 unit tests + ruff in emulator CI.
 - [ ] **E2.9 Docs**: README rewritten around `lobstervm`; STATUS.md regenerated from facts.
 
 ---
@@ -113,24 +126,29 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
 ## Part O — The operating system
 
 ### O1. Platform services
-- [ ] **O1.1 Power**: `shutdown`/`reboot` through `lobster-sys` on QEMU, PSCI/PM watchdog on
+- [x] **O1.1 Power**: `shutdown`/`reboot` through `lobster-sys` on QEMU, PSCI/PM watchdog on
       hardware; filesystems synced first. *Verify:* `shutdown` makes QEMU exit 0; `reboot`
       prints a second boot banner.
-- [ ] **O1.2 Wall clock**: read host RTC at boot, keep time with the arch timer, timezone,
+      *Verified 2026-11-09:* `shutdown` exits QEMU 0; `reboot` reboots (lobster-sys).
+- [x] **O1.2 Wall clock**: read host RTC at boot, keep time with the arch timer, timezone,
       `date` command, panel clock shows real local time and date.
-- [ ] **O1.3 Resolution from the VM manager**: honour the `lobster-sys` hint at boot.
+      *Verified 2026-11-09:* RTC from lobster-sys at boot, `date`, panel clock shows local time.
+- [x] **O1.3 Resolution from the VM manager**: honour the `lobster-sys` hint at boot.
+      *Verified 2026-11-09:* `LBST_RES` hint honoured at boot.
 - [ ] **O1.4 Memory sizing**: frame allocator and heap sized from the device tree for
       2/4/8/16 GB. *Verify:* `mem` total matches on each machine variant.
 - [ ] **O1.5 Entropy + crypto hygiene**: seeded CSPRNG for ASLR, salts, TLS later.
 
 ### O2. Graphics stack (the keystone for "looks and behaves like a desktop")
-- [ ] **O2.1 Surface compositor**: every window owns an off-screen surface; apps draw in
+- [x] **O2.1 Surface compositor**: every window owns an off-screen surface; apps draw in
       window-local coordinates; the compositor blends wallpaper → windows in z-order → shell
       overlays into a back buffer and copies only damaged rectangles to the framebuffer.
       Removes the fixed draw order, the redraw cascades and the bleed-through.
       *Verify:* overlap two windows, raise each in turn, pixel-check the overlap region.
-- [ ] **O2.2 Hit regions**: apps register clickable rectangles while drawing; one router
+      *Verified 2026-11-10:* scene compositor with per-window surfaces (merge 6befb0a).
+- [x] **O2.2 Hit regions**: apps register clickable rectangles while drawing; one router
       stage dispatches presses to the topmost window's region. Replaces per-app router stages.
+      *Verified 2026-11-16:* hit-region registry + single click router (ed69507, 7ba9f51 EL0/tab-strip fix).
 - [ ] **O2.3 Font engine** (audit Q24): anti-aliased proportional UI font and a monospace
       font, several sizes, generated at build time into alpha atlases; `text::draw/width`.
 - [ ] **O2.4 Icon set**: real 48/24 px icons for apps, files, folders, tray, generated at
@@ -146,8 +164,9 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
 - [ ] **O2.10 V3D GPU acceleration** on hardware (long-term).
 
 ### O3. Desktop shell
-- [ ] **O3.1 Clean boot**: no windows at boot; kernel log stays on serial/`dmesg`, not in the
+- [x] **O3.1 Clean boot**: no windows at boot; kernel log stays on serial/`dmesg`, not in the
       Terminal; icon grid on the desktop; first-run welcome only once.
+      *Verified 2026-11-16:* no app windows at boot, kernel log off the Terminal, Welcome once (marker on /sd).
 - [ ] **O3.2 Taskbar**: start button, pinned + running apps with titles, click to
       focus/minimise, tray (network, volume, clock with date), show-desktop corner.
 - [ ] **O3.3 Start menu**: real icons, search box, All apps incl. installed packages, user
@@ -158,8 +177,10 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
 - [ ] **O3.5 Window management polish**: resize from all edges with cursor feedback, snap
       preview, keyboard shortcuts (Super, Alt+Tab, Alt+F4, Super+arrows, Super+E/T/L),
       window list previews.
-- [ ] **O3.6 Dialogs** (audit Q9a): alert/confirm/prompt, file open/save picker.
-- [ ] **O3.7 Notifications + quick settings** (volume, brightness, network, theme toggle).
+- [x] **O3.6 Dialogs** (audit Q9a): alert/confirm/prompt, file open/save picker.
+      *Verified 2026-11-16:* modal alert/confirm/prompt + file picker; modal blocks clicks underneath.
+- [x] **O3.7 Notifications + quick settings** (volume, brightness, network, theme toggle).
+      *Verified 2026-11-16:* notification centre + quick settings popup with working sliders.
 - [ ] **O3.8 Lock screen + login with passwords** (audit Q14): salted hash, lock on demand,
       logout tears the session down.
 - [ ] **O3.9 Clipboard**: system-wide text clipboard, Ctrl+C/V/X in every text field, host
@@ -177,17 +198,19 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
 - [ ] **O4.2 Files**: mouse selection, double-click open-with by type, back/forward/up,
       breadcrumb, new/rename/delete/copy/cut/paste, drag-move, properties, trash, list/icon
       views, sidebar places, shared folder.
-- [ ] **O4.3 Browser v2**: fix the panic; HTML tokenizer + block/inline layout (headings,
+- [~] **O4.3 Browser v2**: fix the panic; HTML tokenizer + block/inline layout (headings,
       paragraphs, lists, links, emphasis, pre, tables-lite), proportional text, address bar,
       back/forward/reload, clickable links, scrolling, history/bookmarks, images (O2.6),
       basic CSS colours; HTTPS through the host proxy on QEMU; native TLS on hardware later.
+      *2026-11-10:* panic on repeated/large responses fixed, entity decoding fixed (ff1b0c9); layout engine (v2) still to do.
 - [ ] **O4.4 Terminal**: own shell per tab, correct CR/LF, scrollback, copy/paste, resize
       reflow (audit Q15).
 - [ ] **O4.5 Text editor / Code**: undo/redo, selection, click-to-place, syntax highlight,
       run button (compile + run with output pane) (audit Q8, Q16).
 - [ ] **O4.6 App Store**: real catalogue from the package index, install/remove/update with
       progress, installed apps appear in the start menu (audit Q11).
-- [ ] **O4.7 Calculator**: mouse input, decimals, history, shared window frame (audit Q17).
+- [x] **O4.7 Calculator**: mouse input, decimals, history, shared window frame (audit Q17).
+      *Verified 2026-11-16:* mouse keypad through hit regions, decimals, history line; `5 % 0` does not panic.
 - [ ] **O4.8 Task Manager**: per-process CPU/memory, end task, performance graphs.
 - [ ] **O4.9 Image viewer** (PNG/JPEG/BMP, zoom, next/previous), **Notes**, **Clock**
       (alarm/timer/stopwatch), **Screenshot tool**, **Paint**, **Minesweeper/Solitaire**,
@@ -270,3 +293,6 @@ Work top to bottom; each step is committed and pushed when its check passes.
 |---|---|---|
 | 2026-11-09 | Roadmap written; baseline harness 10/10 | `tools/gui_test.py` |
 | 2026-11-09 | E1.1, E1.2, E1.3 (QEMU), E2.1, E2.2 (`lobstervm`) | boot + `shell uptime` + `xp` RTC |
+| 2026-11-10 | O2.1 scene compositor, O2.2 hit regions, O4.3 browser panic fix, E2.3 `lobstervm gui` | harness 10/10 |
+| 2026-11-16 | O3.1 clean boot, O3.6 dialogs, O3.7 quick settings, O4.7 calculator; E1.5 device properties, E1.12 deterministic clock; E2.7 disk tools + `mkbase.py` | gate + adapted harness 10/10 |
+| 2026-11-17 | QEMU: `-drive` backend gets write permission (guest writes no longer abort); host tests serialized on shared globals; E2.4/E2.6 verified | `lobstervm` write/snapshot/restart; 15× host test runs |
