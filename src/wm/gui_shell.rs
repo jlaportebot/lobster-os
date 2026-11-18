@@ -16,6 +16,19 @@ static mut LINE_LEN: usize = 0;
 /// Set-1 scancode of the `C` key.
 const SCANCODE_C: u8 = 0x2E;
 
+/// Whether Ctrl is held. The QEMU input device reports modifiers in its own
+/// bit layout (ctrl is bit 1), which `usb::hid` would misread as Shift, so
+/// ask the device directly when it is the active keyboard source.
+fn ctrl_down() -> bool {
+    #[cfg(target_arch = "aarch64")]
+    {
+        if crate::drivers::qemu_input::is_present() {
+            return crate::drivers::qemu_input::ctrl_held();
+        }
+    }
+    crate::usb::hid::ctrl_held()
+}
+
 /// Ctrl+C in the Terminal: SIGINT to the foreground job (its exit brings the
 /// prompt back); with no job, drop the half-typed line and reprompt.
 fn handle_ctrl_c() {
@@ -50,7 +63,7 @@ pub fn handle_key(scancode: u8, ch: Option<char>) -> bool {
 
     // Ctrl+Plus / Ctrl+Minus: terminal font scale (set-1: '=' 0x0D, '-' 0x0C,
     // keypad + 0x4E, keypad - 0x4A)
-    if crate::usb::hid::ctrl_held() {
+    if ctrl_down() {
         match scancode {
             0x0D | 0x4E => {
                 crate::apps::terminal::font_scale_up();
@@ -91,7 +104,7 @@ pub fn handle_key(scancode: u8, ch: Option<char>) -> bool {
 
     // Ctrl+C (set-1 'C' = 0x2E): interrupt the foreground job, or abandon
     // the line being typed.
-    if scancode == SCANCODE_C && crate::usb::hid::ctrl_held() {
+    if scancode == SCANCODE_C && ctrl_down() {
         handle_ctrl_c();
         return true;
     }
