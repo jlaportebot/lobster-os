@@ -3,7 +3,7 @@
 //! Shows a vertical list of menu items with icons/labels,
 //! handles hover highlighting and click dispatch.
 
-use crate::display::fb::get_info;
+use crate::display::fb::FramebufferInfo;
 use crate::display::graphics;
 use crate::display::text::{self, Face};
 use crate::sync::spinlock::Spinlock;
@@ -89,6 +89,8 @@ pub fn show(x: u32, y: u32, items: &[(&str, u32)]) {
         menu.items[i].set_label(label);
         menu.items[i].action_id = *action_id;
     }
+    drop(menu);
+    crate::wm::compositor::mark_full_redraw();
 }
 
 /// Show the desktop context menu
@@ -97,18 +99,11 @@ pub fn show_desktop_menu(x: u32, y: u32) {
         x,
         y,
         &[
-            ("New File", 30),
             ("New Folder", 31),
+            ("New Text File", 30),
             ("---", 0),
-            ("Open Terminal", 1),
-            ("File Manager", 2),
-            ("---", 0),
+            ("Change Wallpaper...", 10),
             ("Display Settings", 32),
-            ("Change Wallpaper", 10),
-            ("Toggle Dark/Light", 33),
-            ("---", 0),
-            ("Refresh", 34),
-            ("About LobsterOS", 20),
         ],
     );
 }
@@ -116,6 +111,7 @@ pub fn show_desktop_menu(x: u32, y: u32) {
 /// Hide the context menu
 pub fn hide() {
     MENU.lock().visible = false;
+    crate::wm::compositor::mark_full_redraw();
 }
 
 /// Check if menu is visible
@@ -123,34 +119,27 @@ pub fn is_visible() -> bool {
     MENU.lock().visible
 }
 
-/// Handle a mouse click — returns Some(action_id) if an item was clicked
+/// Handle a mouse click — returns Some(action_id) if an item was clicked.
+/// Any click closes the menu; the lock is released first because `hide`
+/// takes it again.
 pub fn handle_click(cx: u32, cy: u32) -> Option<u32> {
-    let menu = MENU.lock();
-    if !menu.visible {
-        return None;
-    }
-
-    // Check if click is inside menu bounds
-    let menu_h = MENU_PAD * 2 + menu.item_count as u32 * ITEM_H;
-    if cx < menu.x || cx >= menu.x + menu.width || cy < menu.y || cy >= menu.y + menu_h {
-        hide();
-        return None;
-    }
-
-    // Find which item was clicked
-    let rel_y = cy.saturating_sub(menu.y + MENU_PAD);
-    let item_idx = (rel_y / ITEM_H) as usize;
-
-    if item_idx < menu.item_count {
-        let action = menu.items[item_idx].action_id;
-        if action > 0 {
-            hide();
-            return Some(action);
+    let action = {
+        let menu = MENU.lock();
+        if !menu.visible {
+            return None;
         }
-    }
-
+        let menu_h = MENU_PAD * 2 + menu.item_count as u32 * ITEM_H;
+        let inside =
+            cx >= menu.x && cx < menu.x + menu.width && cy >= menu.y && cy < menu_h + menu.y;
+        let idx = (cy.saturating_sub(menu.y + MENU_PAD) / ITEM_H) as usize;
+        let hit = menu
+            .items
+            .get(idx)
+            .filter(|_| inside && idx < menu.item_count);
+        hit.map(|item| item.action_id).filter(|id| *id > 0)
+    };
     hide();
-    None
+    action
 }
 
 /// Handle mouse move for hover highlighting
@@ -159,32 +148,26 @@ pub fn handle_hover(cx: u32, cy: u32) {
     if !menu.visible {
         return;
     }
-
     let menu_h = MENU_PAD * 2 + menu.item_count as u32 * ITEM_H;
-    if cx < menu.x || cx >= menu.x + menu.width || cy < menu.y || cy >= menu.y + menu_h {
-        for i in 0..menu.item_count {
-            menu.items[i].hovered = false;
-        }
-        return;
-    }
-
-    let rel_y = cy.saturating_sub(menu.y + MENU_PAD);
-    let item_idx = (rel_y / ITEM_H) as usize;
-
+    let inside = cx >= menu.x && cx < menu.x + menu.width && cy >= menu.y && cy < menu.y + menu_h;
+    let hovered_idx = inside.then(|| (cy.saturating_sub(menu.y + MENU_PAD) / ITEM_H) as usize);
+    let mut changed = false;
     for i in 0..menu.item_count {
-        menu.items[i].hovered = i == item_idx;
+        let now = hovered_idx == Some(i);
+        changed |= menu.items[i].hovered != now;
+        menu.items[i].hovered = now;
+    }
+    drop(menu);
+    if changed {
+        crate::wm::compositor::mark_full_redraw();
     }
 }
 
-/// Draw the context menu
-pub fn draw() {
+/// Draw the context menu into `target` (the scene's back buffer, so the
+/// menu is composited like every other overlay).
+pub fn draw(fb: &FramebufferInfo) {
     let menu = MENU.lock();
     if !menu.visible {
-        return;
-    }
-
-    let fb = get_info();
-    if fb.width == 0 {
         return;
     }
 
@@ -195,9 +178,9 @@ pub fn draw() {
     let w = menu.width;
 
     // Draw menu background with shadow
-    graphics::draw_rect(&fb, x + 2, y + 2, w, menu_h, 0x80000000); // Shadow
-    graphics::draw_rect(&fb, x, y, w, menu_h, theme.menu_bg); // Background
-    graphics::draw_rect_outline(&fb, x, y, w, menu_h, theme.menu_border); // Border
+    graphics::draw_rect(fb, x + 2, y + 2, w, menu_h, 0x80000000); // Shadow
+    graphics::draw_rect(fb, x, y, w, menu_h, theme.menu_bg); // Background
+    graphics::draw_rect_outline(fb, x, y, w, menu_h, theme.menu_border); // Border
 
     // Draw items
     for i in 0..menu.item_count {
@@ -206,19 +189,19 @@ pub fn draw() {
         if menu.items[i].action_id == 0 {
             // Separator
             let sep_y = item_y + ITEM_H / 2;
-            graphics::draw_rect(&fb, x + 8, sep_y, w - 16, 1, theme.menu_separator);
+            graphics::draw_rect(fb, x + 8, sep_y, w - 16, 1, theme.menu_separator);
             continue;
         }
 
         if menu.items[i].hovered {
             // Hover highlight
-            graphics::draw_rect(&fb, x + 1, item_y, w - 2, ITEM_H, theme.menu_item_hover);
+            graphics::draw_rect(fb, x + 1, item_y, w - 2, ITEM_H, theme.menu_item_hover);
         }
 
         // Item text
         let label = menu.items[i].label();
         let style = theme::chrome_text(Face::Ui, ITEM_TEXT_PX, theme.menu_item_text, ITEM_H);
         let text_y = theme::centered_line_y(item_y, ITEM_H, &style);
-        text::draw_fitted(&fb, x + 12, text_y, w.saturating_sub(24), label, &style);
+        text::draw_fitted(fb, x + 12, text_y, w.saturating_sub(24), label, &style);
     }
 }

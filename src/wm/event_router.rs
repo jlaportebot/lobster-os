@@ -140,12 +140,21 @@ pub fn route_right_press(x: u32, y: u32) {
         context_menu::hide();
         return;
     }
-    // Only offer the desktop menu when no window is focused
-    let focused = window::focused_id();
-    let on_window = window::get_info(focused).is_some();
-    if !on_window {
-        context_menu::show_desktop_menu(x, y);
+    if is_bare_desktop(x, y) {
+        desktop_icons::right_click(x, y);
     }
+}
+
+/// True when nothing but wallpaper (and icons) lies under the point: no
+/// window of any kind and not the taskbar.
+fn is_bare_desktop(x: u32, y: u32) -> bool {
+    let panel_top = crate::display::fb::device_info()
+        .height
+        .saturating_sub(panel::PANEL_HEIGHT);
+    y < panel_top
+        && !window::is_window_at(x, y)
+        && hit_region::topmost_window_at(x, y).is_none()
+        && user_windows::hit_test(x, y).is_none()
 }
 
 /// Pointer moved (cursor already updated). Hover observers consume nothing;
@@ -154,6 +163,8 @@ pub fn route_move(x: u32, y: u32, dx: i16, dy: i16) {
     // Hover tracking
     start_menu::handle_move(x, y);
     desktop_icons::update_hover(x, y);
+    context_menu::handle_hover(x, y);
+    desktop_icons::drag_move(x, y);
 
     // Drag / resize bookkeeping
     window::handle_event(HidEvent::MouseMove { dx, dy });
@@ -187,7 +198,7 @@ fn hit_press_or_release(ev: &ButtonEv) -> bool {
 }
 
 fn hit_desktop_icon(ev: &ButtonEv) -> bool {
-    ev.left_press() && desktop_icons::hit_test(ev.x, ev.y).is_some()
+    ev.left_press() && is_bare_desktop(ev.x, ev.y) && desktop_icons::hit_test(ev.x, ev.y).is_some()
 }
 
 /// Dialog modal: hits on any button edge when a dialog is open.
@@ -261,7 +272,7 @@ fn handle_start_menu(ev: &ButtonEv) -> bool {
 
 fn handle_desktop_icons(ev: &ButtonEv) -> bool {
     if let Some(icon_idx) = desktop_icons::hit_test(ev.x, ev.y) {
-        desktop_icons::handle_click(icon_idx);
+        desktop_icons::press(icon_idx, ev.x, ev.y);
         return true;
     }
     false
@@ -271,7 +282,10 @@ fn handle_desktop_icons(ev: &ButtonEv) -> bool {
 /// (focus / drag / resize / buttons on press; ends drag/resize on release).
 fn handle_window_chrome(ev: &ButtonEv) -> bool {
     if ev.left_press() {
-        desktop_icons::select(None);
+        desktop_icons::press_empty();
+    }
+    if ev.left_release() {
+        desktop_icons::release();
     }
     window::handle_event(HidEvent::MouseButton {
         left: ev.left,

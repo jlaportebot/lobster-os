@@ -15,7 +15,9 @@ pub mod alt_tab;
 pub mod compositor;
 pub mod config;
 pub mod context_menu;
+pub mod desktop_files;
 pub mod desktop_icons;
+pub mod desktop_layout;
 pub mod dialog;
 pub mod dirty;
 pub mod event_router;
@@ -112,6 +114,7 @@ fn render_apps(content_dirty: bool) {
         render_app(crate::apps::browser::render_to_windows);
         render_app(crate::apps::editor::render_to_windows);
         render_app(crate::apps::notes::render_to_windows);
+        render_app(crate::apps::welcome::render_to_windows);
         render_app(crate::apps::settings::render_settings_window);
         render_app(crate::apps::image_viewer::bmp_view::render_to_windows);
         render_app(crate::wm::user_windows::render_to_windows);
@@ -174,6 +177,7 @@ fn tick_scene(user_only: bool) {
     if !user_only {
         window_frame::tick_animations();
         notifications::tick();
+        desktop_icons::tick();
     }
     damage_live_regions(content_dirty);
     scene::compose();
@@ -222,7 +226,7 @@ fn tick_hardware() {
     tray_popups::draw(&fb);
     alt_tab::draw(&fb);
     notifications::draw(&fb);
-    context_menu::draw();
+    context_menu::draw(&fb);
     dialog::draw(&fb);
 }
 
