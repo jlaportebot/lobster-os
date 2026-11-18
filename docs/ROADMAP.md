@@ -92,7 +92,9 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
 - [x] **E1.12 Deterministic mode** (audit Q21): `-icount` profile for the harness.
       *Verified 2026-11-16:* deterministic clock mode (QEMU 767ab9f).
 - [ ] **E1.13 Performance**: profile TCG hot paths for the desktop workload; evaluate KVM on
-      the Pi 5 host (same CPU: Cortex-A76) behind a `--accel kvm` option.
+      the Pi 5 host (same CPU: Cortex-A76) behind a `--accel kvm` option. *KVM works end to end
+      since 2026-11-18 (QEMU in-kernel GIC + kernel D/I-cache enable: desktop-ready 884 ms under
+      KVM vs. a hang after heap init before); left: `lobstervm --accel kvm`, TCG profiling.*
 
 ### E2. `lobstervm` — VM manager (emulator repo)
 - [x] **E2.1 Core library**: VM definitions on disk (`~/.local/share/lobstervm/<name>/vm.json`),
@@ -326,3 +328,4 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-18 | O3.2 taskbar (pinned apps, running windows, tray, calendar); E1.13 KVM accel in QEMU (needs kernel cache enable); E3 one-click installers added to plan | gate 301 tests + harness 12/12 |
 | 2026-11-18 | O5.2 timer preemption of EL0 slices, foreground `run` sliced; O5.3 Ctrl+C + `kill` with resource reclaim | gate 319 tests + harness 12/12 + live spinner check |
 | 2026-11-18 | O3.3 start menu; E3.2 portable `lobstervm`; O2.3/O2.4/E2.9 ticked (landed 11-17) | gate 354 tests + harness 12/12 (both transports) + bundle smoke |
+| 2026-11-18 | D- and I-caches on (SCTLR C/I) with DMA/code cache maintenance; the kernel now boots under KVM | gate 363 tests + harness 12/12 (TCG) + KVM boot to desktop-ready |
