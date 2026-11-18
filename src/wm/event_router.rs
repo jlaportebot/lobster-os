@@ -15,10 +15,10 @@
 //! |---|------------------|-----------------------|------------------|
 //! | 0 | `dialog`         | every button edge     | Application-modal dialog (O3.6). While open it swallows ALL button edges so nothing behind it can be clicked. |
 //! | 1 | `context_menu`   | every button edge     | Modal popup drawn above everything else. While visible it swallows ALL button edges (even outside clicks and releases) so a click can never leak to what is drawn beneath it. |
-//! | 2 | `hit_region`     | left press            | Single hit-region dispatch (O2.2). Consults only the topmost window under the pointer: EL0 app content is an implicit full-content region (press captured so the release is paired); kernel windows dispatch through regions registered with `hit_region::register` to the handler set with `hit_region::set_handler` (Task Manager, Terminal and Editor tab strips, Calculator keys). Chrome or unmatched client area falls through. |
-//! | 3 | `panel`          | left press            | Launcher, task buttons, tray. Above desktop icons and plain windows. |
-//! | 4 | `tray_popups`    | left press            | Popups inside click is consumed; outside click closes (and is consumed). |
-//! | 5 | `start_menu`     | left press            | Same inside-consume / outside-close contract. |
+//! | 2 | `start_menu`     | left press            | Modal while open: a press inside is consumed, a press outside closes the menu and is consumed too, so nothing underneath (windows, taskbar, icons) ever sees it. The taskbar launcher therefore closes an open menu by being an outside press. |
+//! | 3 | `hit_region`     | left press            | Single hit-region dispatch (O2.2). Consults only the topmost window under the pointer: EL0 app content is an implicit full-content region (press captured so the release is paired); kernel windows dispatch through regions registered with `hit_region::register` to the handler set with `hit_region::set_handler` (Task Manager, Terminal and Editor tab strips, Calculator keys). Chrome or unmatched client area falls through. |
+//! | 4 | `panel`          | left press            | Launcher, task buttons, tray. Above desktop icons and plain windows. |
+//! | 5 | `tray_popups`    | left press            | Popups inside click is consumed; outside click closes (and is consumed). |
 //! | 6 | `desktop_icons`  | left press on an icon | Icons are the bottom-most clickable surface. |
 //! | 7 | `window_chrome`  | left press + release  | Catch-all: focus, drag, resize, close/min/max (window.rs). Also owns the left-release that ends drag/resize. |
 //!
@@ -86,6 +86,11 @@ pub static STAGES: [Stage; 8] = [
         handle: handle_context_menu,
     },
     Stage {
+        name: "start_menu",
+        hit: hit_left_press,
+        handle: handle_start_menu,
+    },
+    Stage {
         name: "hit_region",
         hit: hit_left_press,
         handle: handle_hit_region,
@@ -99,11 +104,6 @@ pub static STAGES: [Stage; 8] = [
         name: "tray_popups",
         hit: hit_left_press,
         handle: handle_tray_popups,
-    },
-    Stage {
-        name: "start_menu",
-        hit: hit_left_press,
-        handle: handle_start_menu,
     },
     Stage {
         name: "desktop_icons",

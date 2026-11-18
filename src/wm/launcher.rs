@@ -86,6 +86,35 @@ pub fn parse_desktop_file(content: &str) -> Option<DesktopEntry> {
     }
 }
 
+/// Directories searched for `.desktop` files, in priority order.
+pub const APPLICATION_DIRS: [&str; 3] = [
+    "/usr/share/applications",
+    "/usr/local/share/applications",
+    "/home/.local/share/applications",
+];
+
+/// Placeholders in an `Exec=` line that stand for files or URLs the menu
+/// never passes.
+const EXEC_PLACEHOLDERS: [&str; 4] = ["%f", "%u", "%F", "%U"];
+
+/// Directories packages install runnable programs into. `pkg install hello`
+/// puts its EL0 GUI app in `/apps`; classic tools go to a `bin` directory.
+const PROGRAM_DIRS: [&str; 4] = ["/apps/", "/bin/", "/usr/bin/", "/usr/local/bin/"];
+
+/// Whether `path` is a file inside one of [`PROGRAM_DIRS`].
+pub fn is_program_path(path: &str) -> bool {
+    PROGRAM_DIRS.iter().any(|dir| path.starts_with(dir))
+}
+
+/// Program path of an `Exec=` value: first word once placeholders are gone.
+pub fn exec_program(exec: &str) -> Option<String> {
+    let mut cleaned = exec.to_string();
+    for placeholder in EXEC_PLACEHOLDERS {
+        cleaned = cleaned.replace(placeholder, "");
+    }
+    cleaned.split_whitespace().next().map(ToString::to_string)
+}
+
 // ─── Application Database ────────────────────────────────────────────────
 
 /// Manages the application database from .desktop files
@@ -104,13 +133,7 @@ impl AppLauncher {
 
     /// Scan for .desktop files in standard locations
     pub fn scan_applications(&mut self) {
-        let paths = [
-            "/usr/share/applications",
-            "/usr/local/share/applications",
-            "/home/.local/share/applications",
-        ];
-
-        for path in paths {
+        for path in APPLICATION_DIRS {
             if let Ok(entries) = list_dir(path) {
                 for entry in entries {
                     if entry.name_str().ends_with(".desktop") {
@@ -162,27 +185,10 @@ impl AppLauncher {
     pub fn launch(&self, name: &str) -> Result<(), &'static str> {
         let entry = self.apps.get(name).ok_or("Application not found")?;
 
-        // Parse exec command (handle %f, %u, etc. placeholders)
-        let cmd = entry
-            .exec
-            .replace("%f", "")
-            .replace("%u", "")
-            .replace("%F", "")
-            .replace("%U", "");
-        let cmd = cmd.trim();
-
-        if cmd.is_empty() {
-            return Err("Empty exec command");
-        }
-
-        // Extract executable path (first word before space)
-        let exec_path = cmd
-            .split_whitespace()
-            .next()
-            .ok_or("No executable in command")?;
+        let exec_path = exec_program(&entry.exec).ok_or("Empty exec command")?;
 
         // Spawn the process via scheduler
-        match spawn_from_path(exec_path, Priority::Normal) {
+        match spawn_from_path(&exec_path, Priority::Normal) {
             Some(pid) => {
                 println!(
                     "[launcher] Launched {} (PID {}) from {}",
@@ -202,6 +208,116 @@ impl Default for AppLauncher {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ─── Installed applications (start menu) ─────────────────────────────────
+
+/// An application provided by an installed package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledApp {
+    /// Label shown in the menu.
+    pub name: String,
+    /// Program to spawn (absolute path).
+    pub exec: String,
+    /// Extra search words (description, comment).
+    pub keywords: String,
+}
+
+/// What the menu needs to know about one installed package: its name,
+/// description and the executables it put into the binary directory.
+pub struct PackageBins {
+    pub name: String,
+    pub description: String,
+    pub binaries: Vec<String>,
+}
+
+/// Merge `.desktop` entries and package executables into one app list.
+///
+/// A package that ships a `.desktop` file is listed once, under the
+/// desktop entry's name. A package without one is listed under its own name
+/// with its first executable, so `pkg install` makes something visible.
+pub fn collect_installed_apps(
+    desktop_files: &[String],
+    packages: &[PackageBins],
+) -> Vec<InstalledApp> {
+    let mut apps: Vec<InstalledApp> = desktop_files
+        .iter()
+        .filter_map(|content| parse_desktop_file(content))
+        .filter(|entry| !entry.hidden && !entry.no_display)
+        .filter_map(|entry| {
+            let exec = exec_program(&entry.exec)?;
+            Some(InstalledApp {
+                name: entry.name,
+                exec,
+                keywords: entry.comment,
+            })
+        })
+        .collect();
+    for package in packages {
+        let Some(binary) = package.binaries.first() else {
+            continue;
+        };
+        if apps.iter().any(|app| package.binaries.contains(&app.exec)) {
+            continue;
+        }
+        apps.push(InstalledApp {
+            name: package.name.clone(),
+            exec: binary.clone(),
+            keywords: package.description.clone(),
+        });
+    }
+    apps
+}
+
+/// Installed applications on this system: `.desktop` files in the standard
+/// directories plus executables of packages in the package database.
+pub fn scan_installed_apps() -> Vec<InstalledApp> {
+    let mut desktop_files = Vec::new();
+    for dir in APPLICATION_DIRS {
+        let Ok(entries) = list_dir(dir) else { continue };
+        for entry in entries
+            .iter()
+            .filter(|e| e.name_str().ends_with(".desktop"))
+        {
+            let path = alloc::format!("{}/{}", dir, entry.name_str());
+            if let Ok(bytes) = read_file(&path) {
+                desktop_files.push(String::from_utf8_lossy(&bytes).into_owned());
+            }
+        }
+    }
+    collect_installed_apps(&desktop_files, &installed_package_bins())
+}
+
+fn installed_package_bins() -> Vec<PackageBins> {
+    let Ok(db) = crate::pkg::install::PackageDatabase::load() else {
+        return Vec::new();
+    };
+    db.list_installed()
+        .into_iter()
+        .map(|installed| PackageBins {
+            name: installed.metadata.name.clone(),
+            description: installed.metadata.description.clone(),
+            binaries: installed
+                .files
+                .iter()
+                .filter(|file| is_program_path(&file.path) && !file.is_symlink)
+                .map(|file| file.path.clone())
+                .collect(),
+        })
+        .collect()
+}
+
+/// Start an installed app the way `run <path> &` does: spawn it as a
+/// background user process so the desktop stays responsive.
+pub fn launch_installed(app: &InstalledApp) -> Result<(), &'static str> {
+    let pid = crate::sched::spawn_from_path_args(&app.exec, Priority::Normal, &[])
+        .ok_or("Failed to spawn process")?;
+    crate::sched::mark_bg(pid);
+    println!(
+        "[launcher] Launched {} (PID {}) from {}",
+        app.name, pid, app.exec
+    );
+    Ok(())
 }
 
 // ─── Launcher UI Integration ─────────────────────────────────────────────
@@ -251,7 +367,10 @@ pub fn launch_app(launcher: &AppLauncher, name: &str) -> Result<(), &'static str
 
 #[cfg(all(test, feature = "std"))]
 mod tests {
-    use super::{parse_desktop_file, AppLauncher, DesktopEntry};
+    use super::{
+        collect_installed_apps, exec_program, is_program_path, parse_desktop_file, AppLauncher,
+        DesktopEntry, PackageBins,
+    };
 
     #[test]
     fn test_parse_desktop_file_basic() {
@@ -332,6 +451,67 @@ Exec=app
 Name=App
 "#;
         assert!(parse_desktop_file(content).is_none());
+    }
+
+    fn package(name: &str, binaries: &[&str]) -> PackageBins {
+        PackageBins {
+            name: name.to_string(),
+            description: format!("{name} tool"),
+            binaries: binaries.iter().map(|b| b.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn installed_app_from_desktop_sample() {
+        let sample =
+            "[Desktop Entry]\nName=Hello World\nExec=/usr/bin/hello %f\nComment=Greets you\n";
+        let apps = collect_installed_apps(&[sample.to_string()], &[]);
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].name, "Hello World");
+        assert_eq!(apps[0].exec, "/usr/bin/hello");
+        assert_eq!(apps[0].keywords, "Greets you");
+    }
+
+    #[test]
+    fn hidden_desktop_entries_are_not_listed() {
+        let hidden = "[Desktop Entry]\nName=H\nExec=h\nNoDisplay=true\n";
+        assert!(collect_installed_apps(&[hidden.to_string()], &[]).is_empty());
+    }
+
+    #[test]
+    fn package_without_desktop_file_uses_its_binary() {
+        let apps = collect_installed_apps(&[], &[package("hello", &["/usr/bin/hello"])]);
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].name, "hello");
+        assert_eq!(apps[0].exec, "/usr/bin/hello");
+    }
+
+    #[test]
+    fn package_with_desktop_file_is_listed_once() {
+        let sample = "[Desktop Entry]\nName=Hello World\nExec=/usr/bin/hello\n";
+        let apps = collect_installed_apps(
+            &[sample.to_string()],
+            &[
+                package("hello", &["/usr/bin/hello"]),
+                package("data-only", &[]),
+            ],
+        );
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].name, "Hello World");
+    }
+
+    #[test]
+    fn program_paths_cover_apps_and_bin_directories() {
+        assert!(is_program_path("/apps/hello"));
+        assert!(is_program_path("/usr/bin/tool"));
+        assert!(!is_program_path("/etc/tool.conf"));
+        assert!(!is_program_path("/usr/share/doc/readme"));
+    }
+
+    #[test]
+    fn exec_program_strips_placeholders() {
+        assert_eq!(exec_program("viewer %U").as_deref(), Some("viewer"));
+        assert_eq!(exec_program("%f"), None);
     }
 
     #[test]
