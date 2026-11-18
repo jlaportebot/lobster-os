@@ -1,0 +1,12 @@
+[package]
+name = "icongen"
+version = "0.1.0"
+edition = "2021"
+description = "Build-time generator for the LobsterOS icon set (Tabler Icons, MIT)"
+publish = false
+
+# Standalone host tool: keep it out of the kernel's workspace resolution.
+[workspace]
+
+[dependencies]
+resvg = { version = "0.47", default-features = false }
