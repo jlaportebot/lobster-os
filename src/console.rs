@@ -126,6 +126,7 @@ mod tests {
 
     #[test]
     fn test_mirror_gate_defaults_to_false() {
+        let _guard = crate::test_support::serial_guard();
         assert!(
             !mirror_to_terminal_enabled(),
             "Mirror gate should default to false"
@@ -134,6 +135,7 @@ mod tests {
 
     #[test]
     fn test_mirror_gate_set_get() {
+        let _guard = crate::test_support::serial_guard();
         set_mirror_to_terminal(true);
         assert!(
             mirror_to_terminal_enabled(),
@@ -148,6 +150,7 @@ mod tests {
 
     #[test]
     fn test_with_terminal_mirror_restores_state() {
+        let _guard = crate::test_support::serial_guard();
         // Start with gate off
         set_mirror_to_terminal(false);
         assert!(!mirror_to_terminal_enabled());
@@ -193,6 +196,7 @@ mod tests {
 
     #[test]
     fn test_print_macros_exist() {
+        let _guard = crate::test_support::serial_guard();
         // These are compile-time checks — if they compile, the macros exist.
         print!("test");
         println!("test");

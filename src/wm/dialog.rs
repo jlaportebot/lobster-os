@@ -1078,12 +1078,14 @@ mod tests {
 
     #[test]
     fn dialog_stack_push_pop_order() {
+        let _guard = crate::test_support::serial_guard();
         init();
         assert!(!is_open());
         assert_eq!(depth(), 0);
 
         // We can't easily test the full dialog without a framebuffer,
         // but we can test the stack logic directly
+        // SAFETY: serialized by test_support::serial_guard
         unsafe {
             STACK_DEPTH = 0;
             for i in 0..MAX_DIALOG_DEPTH {
@@ -1140,7 +1142,9 @@ mod tests {
 
     #[test]
     fn dialog_max_depth() {
+        let _guard = crate::test_support::serial_guard();
         init();
+        // SAFETY: serialized by test_support::serial_guard
         unsafe {
             STACK_DEPTH = 0;
             for i in 0..MAX_DIALOG_DEPTH {
@@ -1186,8 +1190,10 @@ mod tests {
 
     #[test]
     fn confirm_result_on_enter_escape() {
+        let _guard = crate::test_support::serial_guard();
         // Test the result logic without full UI
         init();
+        // SAFETY: serialized by test_support::serial_guard
         unsafe {
             STACK_DEPTH = 0;
             for i in 0..MAX_DIALOG_DEPTH {
@@ -1247,7 +1253,9 @@ mod tests {
 
     #[test]
     fn prompt_result_value() {
+        let _guard = crate::test_support::serial_guard();
         init();
+        // SAFETY: serialized by test_support::serial_guard
         unsafe {
             STACK_DEPTH = 0;
             for i in 0..MAX_DIALOG_DEPTH {

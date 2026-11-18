@@ -124,6 +124,8 @@ mod tests {
 
     #[test]
     fn test_namespace_create_and_get() {
+        let _guard = crate::test_support::serial_guard();
+        // SAFETY: serialized by test_support::serial_guard
         unsafe { NAMESPACE_MANAGER = None };
         init();
         let id = create(NamespaceType::Pid, Some("init-pid-ns".to_string())).unwrap();
@@ -135,6 +137,8 @@ mod tests {
 
     #[test]
     fn test_unshare_and_setns() {
+        let _guard = crate::test_support::serial_guard();
+        // SAFETY: serialized by test_support::serial_guard
         unsafe { NAMESPACE_MANAGER = None };
         init();
         assert!(unshare(0).is_ok());

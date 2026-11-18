@@ -70,6 +70,8 @@ pub mod security;
 pub mod sync;
 pub mod syslog;
 pub mod terminal;
+#[cfg(all(test, feature = "std"))]
+pub(crate) mod test_support;
 
 // AArch64-specific modules
 #[cfg(target_arch = "aarch64")]

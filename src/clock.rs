@@ -179,6 +179,7 @@ mod tests {
 
     #[test]
     fn wall_time_advances_with_uptime_and_applies_offset() {
+        let _guard = crate::test_support::serial_guard();
         set_boot_time(1_794_281_629, 2_000, -18_000);
         assert!(is_set());
         assert_eq!(epoch_secs_at(2_000), Some(1_794_281_629));

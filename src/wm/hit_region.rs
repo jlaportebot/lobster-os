@@ -394,6 +394,7 @@ mod tests {
 
     #[test]
     fn destroy_drops_handler_and_regions() {
+        let _guard = crate::test_support::serial_guard();
         const WIN: u32 = 31;
         set_handler(WIN, no_op_handler);
         assert!(register(WIN, 0, 0, 4, 4, 0, HitKind::Tab));
@@ -405,6 +406,7 @@ mod tests {
 
     #[test]
     fn dispatch_returns_false_without_handler() {
+        let _guard = crate::test_support::serial_guard();
         const WIN: u32 = 30;
         on_window_destroyed(WIN);
         assert!(!dispatch(&sample_hit(WIN)));
@@ -412,6 +414,7 @@ mod tests {
 
     #[test]
     fn dispatch_calls_registered_handler() {
+        let _guard = crate::test_support::serial_guard();
         const WIN: u32 = 29;
         set_handler(WIN, no_op_handler);
         assert!(dispatch(&sample_hit(WIN)));

@@ -138,22 +138,12 @@ pub fn cache_stats() -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    /// The cache is one global table; tests that flush and refill it must
-    /// not interleave, so each takes this lock for its whole body.
-    static CACHE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn lock_cache() -> std::sync::MutexGuard<'static, ()> {
-        CACHE_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
     use super::*;
     use alloc::format;
 
     #[test]
     fn test_cache_entry_matches() {
-        let _cache_guard = lock_cache();
+        let _guard = crate::test_support::serial_guard();
         let mut entry = DnsCacheEntry::empty();
         let now = 10000;
         entry.name[..11].copy_from_slice(b"example.com");
@@ -181,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_cache_insert_and_lookup() {
-        let _cache_guard = lock_cache();
+        let _guard = crate::test_support::serial_guard();
         cache_flush();
 
         // Insert a record
@@ -201,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_cache_lru_eviction() {
-        let _cache_guard = lock_cache();
+        let _guard = crate::test_support::serial_guard();
         cache_flush();
 
         // Fill the cache completely
@@ -242,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_cache_stats() {
-        let _cache_guard = lock_cache();
+        let _guard = crate::test_support::serial_guard();
         cache_flush();
         let (valid, total) = cache_stats();
         assert_eq!(valid, 0);

@@ -298,6 +298,7 @@ mod tests {
 
     #[test]
     fn notification_queue_fifo_expiry() {
+        let _guard = crate::test_support::serial_guard();
         // Test that notifications are added to history in FIFO order
         clear_history();
         assert_eq!(history_count(), 0);
@@ -335,6 +336,7 @@ mod tests {
 
     #[test]
     fn notify_public_api() {
+        let _guard = crate::test_support::serial_guard();
         clear_history();
         notify("Test Title", "Test Body", Level::Error);
         assert_eq!(history_count(), 1);

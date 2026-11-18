@@ -206,6 +206,7 @@ mod tests {
 
     #[test]
     fn test_marker_path_prefers_persistent_when_sd_mounted() {
+        let _guard = crate::test_support::serial_guard();
         // Without a disk the volatile path is used.
         assert_eq!(marker_path(), WELCOME_MARKER_VOLATILE);
     }

@@ -1044,6 +1044,7 @@ mod tests {
 
     #[test]
     fn max_id_covers_windows_created_after_an_earlier_one_closed() {
+        let _guard = crate::test_support::serial_guard();
         let first = create(0, 0, 0, 0, "regression-first").expect("window table has room");
         let second = create(0, 0, 0, 0, "regression-second").expect("window table has room");
         destroy(first);

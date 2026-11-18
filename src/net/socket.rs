@@ -231,6 +231,7 @@ mod tests {
 
     #[test]
     fn test_socket_allocate() {
+        let _guard = crate::test_support::serial_guard();
         init();
         let fd1 = socket(SocketType::Udp);
         assert!(fd1.is_some());
@@ -241,6 +242,7 @@ mod tests {
 
     #[test]
     fn test_socket_bind() {
+        let _guard = crate::test_support::serial_guard();
         init();
         let fd = socket(SocketType::Udp).unwrap();
         assert!(bind(fd, 8080));

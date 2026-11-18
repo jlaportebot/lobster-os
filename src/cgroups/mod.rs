@@ -148,6 +148,8 @@ mod tests {
 
     #[test]
     fn test_hierarchy_and_cgroup_create() {
+        let _guard = crate::test_support::serial_guard();
+        // SAFETY: serialized by test_support::serial_guard
         unsafe { CGROUP_MANAGER = None };
         init();
         let hid = create_hierarchy(vec![ControllerType::Cpu, ControllerType::Memory]).unwrap();
@@ -161,6 +163,8 @@ mod tests {
 
     #[test]
     fn test_apply_limits() {
+        let _guard = crate::test_support::serial_guard();
+        // SAFETY: serialized by test_support::serial_guard
         unsafe { CGROUP_MANAGER = None };
         init();
         assert!(apply_limits(1).is_ok());

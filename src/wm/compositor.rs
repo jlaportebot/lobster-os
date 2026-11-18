@@ -2277,6 +2277,7 @@ mod tests {
 
     #[test]
     fn test_frame_stats_zero() {
+        let _guard = crate::test_support::serial_guard();
         reset_frame_stats();
         let stats = frame_stats();
         assert_eq!(stats.total_frames, 0);
@@ -2291,6 +2292,7 @@ mod tests {
 
     #[test]
     fn test_frame_stats_recording() {
+        let _guard = crate::test_support::serial_guard();
         reset_frame_stats();
 
         // Record a few frames
@@ -2335,6 +2337,7 @@ mod tests {
 
     #[test]
     fn test_frame_history() {
+        let _guard = crate::test_support::serial_guard();
         reset_frame_stats();
 
         record_frame_timing(FrameTiming {
