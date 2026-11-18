@@ -13,6 +13,28 @@ const MAX_LINE: usize = 256;
 static mut LINE: [u8; MAX_LINE] = [0; MAX_LINE];
 static mut LINE_LEN: usize = 0;
 
+/// Set-1 scancode of the `C` key.
+const SCANCODE_C: u8 = 0x2E;
+
+/// Ctrl+C in the Terminal: SIGINT to the foreground job (its exit brings the
+/// prompt back); with no job, drop the half-typed line and reprompt.
+fn handle_ctrl_c() {
+    crate::console::with_terminal_mirror(|| {
+        crate::drivers::uart::Uart10::puts("^C\r\n");
+    });
+    if crate::shell::foreground::is_active() {
+        crate::shell::foreground::request_interrupt();
+        return;
+    }
+    // SAFETY: the window manager (the only caller path) is single-threaded.
+    unsafe {
+        LINE_LEN = 0;
+    }
+    crate::console::with_terminal_mirror(|| {
+        crate::drivers::uart::Uart10::puts("lobster:/# ");
+    });
+}
+
 /// Whether the Terminal window currently owns keyboard input.
 pub fn terminal_focused() -> bool {
     let fid = window::focused_id();
@@ -56,11 +78,21 @@ pub fn handle_key(scancode: u8, ch: Option<char>) -> bool {
                 // Execute in the shell (output mirrors into the window)
                 let _ = crate::shell::execute_for_gui(line);
             }
-            // New prompt inside the window
-            crate::console::with_terminal_mirror(|| {
-                crate::drivers::uart::Uart10::puts("lobster:/# ");
-            });
+            // New prompt inside the window — unless a foreground job now
+            // owns it (its exit prints the prompt).
+            if !crate::shell::foreground::holds_prompt() {
+                crate::console::with_terminal_mirror(|| {
+                    crate::drivers::uart::Uart10::puts("lobster:/# ");
+                });
+            }
         }
+        return true;
+    }
+
+    // Ctrl+C (set-1 'C' = 0x2E): interrupt the foreground job, or abandon
+    // the line being typed.
+    if scancode == SCANCODE_C && crate::usb::hid::ctrl_held() {
+        handle_ctrl_c();
         return true;
     }
 

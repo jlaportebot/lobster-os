@@ -11,6 +11,8 @@
 //! - Variable expansion: $VAR, ${VAR}, $? (last exit code)
 //! - Integrates with scheduler, memory, and process subsystems
 
+pub mod foreground;
+
 use crate::drivers::serial_input;
 use crate::drivers::uart::Uart10;
 use alloc::string::String;
@@ -101,6 +103,14 @@ static mut ENV_COUNT: usize = 0;
 
 /// Last command exit code (like $? in bash)
 static mut LAST_EXIT_CODE: i32 = 0;
+
+/// Record the exit status of a finished foreground job as `$?`.
+fn set_last_exit_code(code: i32) {
+    // SAFETY: the shell runs only from the single-core main loop.
+    unsafe {
+        LAST_EXIT_CODE = code;
+    }
+}
 
 /// Set an environment variable
 fn env_set(name: &str, value: &str) {
@@ -535,6 +545,7 @@ pub fn run_with_pty(pty_slave_fd: Option<usize>) -> ! {
 /// Poll the shell once (non-blocking). Called from the cooperative main loop.
 /// Returns true if a command was executed.
 pub fn poll() -> bool {
+    foreground::poll();
     // On QEMU, the UART RX interrupt (SPI 121) doesn't fire reliably.
     // Poll the UART directly for input bytes instead.
     let byte_avail = crate::drivers::uart::Uart10::has_data();
@@ -555,9 +566,11 @@ pub fn poll() -> bool {
     {
         let cmd_str = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
         let _result = execute_command(cmd_str.trim());
-        // Re-print prompt after command (with CWD)
-        let prompt = build_prompt();
-        Uart10::puts(&prompt);
+        // A foreground job owns the terminal until it ends; its exit
+        // brings the prompt back (foreground::poll).
+        if !foreground::holds_prompt() {
+            Uart10::puts(&build_prompt());
+        }
     }
     true
 }
@@ -641,7 +654,9 @@ pub fn print_initial_prompt() {
 /// Output flows through println! (UART), which mirrors into the terminal
 /// window's VT screen.
 pub fn execute_for_gui(line: &str) -> i32 {
+    foreground::set_gui_executing(true);
     let _ = execute_command(line);
+    foreground::set_gui_executing(false);
     0
 }
 
@@ -1890,25 +1905,41 @@ fn cmd_ps(out: &ShellOut) {
 }
 
 fn cmd_kill(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) -> i32 {
-    if argc < 2 {
-        out.puts("Usage: kill <pid>\r\n");
+    use crate::sched::KillResult;
+    let (sig, first_pid) = match args
+        .get(1)
+        .and_then(|a| crate::sched::signal::parse_signal_option(a))
+    {
+        Some(sig) => (sig, 2),
+        None => (crate::sched::signal::DEFAULT_KILL_SIGNAL, 1),
+    };
+    if argc <= first_pid {
+        out.puts("Usage: kill [-9|-KILL|-TERM|-INT] <pid>...\r\n");
         return 1;
     }
-    match parse_u64(args[1]) {
-        Some(pid) => {
-            if crate::sched::kill(pid) {
-                out.puts(&alloc::format!("Killed PID {}\r\n", pid));
-                0
-            } else {
-                out.puts(&alloc::format!("kill: no such PID {}\r\n", pid));
-                1
-            }
-        }
-        None => {
+    let mut status = 0;
+    for arg in &args[first_pid..argc] {
+        let Some(pid) = parse_u64(arg) else {
             out.puts("Invalid PID\r\n");
-            1
-        }
+            status = 1;
+            continue;
+        };
+        let msg = match crate::sched::signal_task(pid, sig) {
+            KillResult::Terminated => alloc::format!("Killed PID {}\r\n", pid),
+            KillResult::Ignored => alloc::format!("PID {} ignores signal {}\r\n", pid, sig),
+            KillResult::Queued => {
+                alloc::format!("Signal {} queued for PID {}'s handler\r\n", sig, pid)
+            }
+            KillResult::NoSuchTask => {
+                status = 1;
+                alloc::format!("kill: no such PID {}\r\n", pid)
+            }
+        };
+        out.puts(&msg);
     }
+    // Free the victims' memory and windows now so `ps`/`mem` are exact.
+    crate::sched::reap_zombies();
+    status
 }
 
 fn cmd_echo(args: [&str; MAX_ARGS], argc: usize, out: &ShellOut) -> i32 {
@@ -4543,18 +4574,54 @@ fn cmd_run(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     if argc < 2 {
         Uart10::puts("Usage: run <path|demo> [priority] [&]\r\n");
         Uart10::puts("  run demo       Run built-in hello-EL0 test binary\r\n");
-        Uart10::puts("  run <path>     Load ELF from VFS and spawn as user process\r\n");
+        Uart10::puts(
+            "  run <path>     Load ELF from VFS and run it in the foreground (Ctrl+C stops it)\r\n",
+        );
         Uart10::puts("  run <path> &   Spawn in the background — shell stays live\r\n");
         return 1;
     }
 
-    // `run <path> &` — background (sliced) execution.
+    // `run <path> &` — background (sliced) execution. The tokenizer strips
+    // a trailing `&` into BG_PENDING (see execute pipeline); honor both.
     let bg = args[argc - 1] == "&";
     let argc_eff = if bg { argc - 1 } else { argc };
-    // The tokenizer strips a trailing `&` into BG_PENDING (see
-    // execute pipeline); honor it for both run forms.
     let bg = bg || BG_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed);
 
+    if !bg {
+        if let Some(busy) = crate::sched::preempt::foreground_pid() {
+            crate::println!(
+                "run: foreground job PID {} is still running (Ctrl+C or kill it, or use &)",
+                busy
+            );
+            return 1;
+        }
+    }
+    let Some((pid, label)) = spawn_run_target(args, argc_eff) else {
+        crate::println!("run: failed to spawn {}", args[1]);
+        return 1;
+    };
+    // Both modes run as sliced tasks: the timer ends a slice, the main
+    // loop keeps ticking, and the foreground job reports its exit later.
+    crate::sched::mark_bg(pid);
+    if bg {
+        crate::println!("run: {} spawned as PID {} (background)", label, pid);
+        return 0;
+    }
+    crate::println!("run: {} spawned as PID {}", label, pid);
+    foreground::begin(pid);
+    0
+}
+
+/// Spawn the program named by `run`'s arguments. Returns its PID and a
+/// display label.
+fn spawn_run_target(
+    args: [&str; MAX_ARGS],
+    argc_eff: usize,
+) -> Option<(crate::sched::Pid, String)> {
+    if args[1] == "demo" {
+        let pid = crate::sched::spawn_demo()?;
+        return Some((pid, String::from("hello-EL0 demo")));
+    }
     let priority = if argc_eff >= 3 {
         match args[2] {
             "high" | "hi" => crate::sched::Priority::High,
@@ -4564,66 +4631,11 @@ fn cmd_run(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     } else {
         crate::sched::Priority::Normal
     };
-
-    if bg {
-        if args[1] == "demo" {
-            match crate::sched::spawn_demo() {
-                Some(pid) => {
-                    crate::sched::mark_bg(pid);
-                    crate::println!("run: hello-EL0 demo spawned as PID {} (background)", pid);
-                    0
-                }
-                None => {
-                    Uart10::puts("run: failed to spawn demo\r\n");
-                    1
-                }
-            }
-        } else {
-            let path = resolve_path(args[1]);
-            // C8: pass trailing tokens (before '&') as argv to the program.
-            let extra: Vec<&str> = args[2..argc_eff].to_vec();
-            match crate::sched::spawn_from_path_args(&path, priority, &extra) {
-                Some(pid) => {
-                    crate::sched::mark_bg(pid);
-                    crate::println!("run: {} spawned as PID {} (background)", path, pid);
-                    0
-                }
-                None => {
-                    crate::println!("run: failed to spawn {}", path);
-                    1
-                }
-            }
-        }
-    } else if args[1] == "demo" {
-        match crate::sched::spawn_demo() {
-            Some(pid) => {
-                crate::println!("run: hello-EL0 demo spawned as PID {}", pid);
-                let exit_code = unsafe { crate::sched::run_and_wait(pid as u64) };
-                crate::println!("run: process exited with code {}", exit_code);
-                0
-            }
-            None => {
-                Uart10::puts("run: failed to spawn demo\r\n");
-                1
-            }
-        }
-    } else {
-        let path = resolve_path(args[1]);
-        // C8: pass trailing tokens as argv (program sees argc/argv).
-        let extra: Vec<&str> = args[2..argc].to_vec();
-        match crate::sched::spawn_from_path_args(&path, priority, &extra) {
-            Some(pid) => {
-                crate::println!("run: {} spawned as PID {}", path, pid);
-                let exit_code = unsafe { crate::sched::run_and_wait(pid as u64) };
-                crate::println!("run: process exited with code {}", exit_code);
-                0
-            }
-            None => {
-                crate::println!("run: failed to spawn {}", path);
-                1
-            }
-        }
-    }
+    let path = resolve_path(args[1]);
+    // C8: pass trailing tokens as argv to the program.
+    let extra: Vec<&str> = args[2..argc_eff].to_vec();
+    let pid = crate::sched::spawn_from_path_args(&path, priority, &extra)?;
+    Some((pid, path))
 }
 
 fn cmd_chmod(args: [&str; MAX_ARGS], argc: usize) -> i32 {
