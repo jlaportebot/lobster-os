@@ -8,6 +8,16 @@ use core::sync::atomic::{AtomicBool, Ordering};
 /// Console writer that implements fmt::Write
 struct ConsoleWriter;
 
+/// Kernel-log writer: console output that is also recorded for `dmesg`.
+struct LogWriter;
+
+impl fmt::Write for LogWriter {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        crate::klog::capture(s);
+        ConsoleWriter.write_str(s)
+    }
+}
+
 impl fmt::Write for ConsoleWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         #[cfg(all(target_arch = "aarch64", not(feature = "std")))]
@@ -58,7 +68,7 @@ pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
     #[cfg(all(target_arch = "aarch64", not(feature = "std")))]
     crate::arch::cpu::disable_irqs();
-    let _ = ConsoleWriter.write_fmt(args);
+    let _ = LogWriter.write_fmt(args);
     #[cfg(all(target_arch = "aarch64", not(feature = "std")))]
     crate::arch::cpu::enable_irqs();
 }

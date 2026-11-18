@@ -13,7 +13,7 @@
 
 use crate::ipc::{pty_ioctl, pty_master_read, pty_master_write};
 use crate::println;
-use crate::terminal::{parser::Parser, screen::ScreenBuffer, COLS, ROWS};
+use crate::terminal::{parser::Parser, screen::ScreenBuffer, NlFilter, COLS, ROWS};
 use crate::wm::hit_region::{self, HitKind};
 use crate::wm::widget::{WidgetId, WidgetTable};
 use alloc::boxed::Box;
@@ -35,6 +35,9 @@ fn shell_task_entry() -> ! {
         crate::shell::run_with_pty(None);
     }
 }
+
+/// Greeting shown at the top of a fresh Terminal.
+const TERMINAL_BANNER: &str = "LobsterOS Terminal\r\nType 'help' for commands.\r\n";
 
 /// Terminal dimensions
 pub const TERM_COLS: u32 = COLS as u32;
@@ -87,6 +90,8 @@ pub struct Terminal {
     saved: [Option<Box<(ScreenBuffer, Parser)>>; MAX_TABS],
     /// Font scale: 1 = 8x16 glyphs, 2 = 16x32
     font_scale: u32,
+    /// Turns the bare LF of kernel `println!` output into CR LF.
+    nl_filter: NlFilter,
 }
 
 impl Terminal {
@@ -112,6 +117,19 @@ impl Terminal {
             active_tab: 0,
             saved: [None, None, None, None],
             font_scale: 1,
+            nl_filter: NlFilter::new(),
+        }
+    }
+
+    /// Reset the active tab's screen and print the greeting plus a prompt,
+    /// through the VT parser so the cursor ends up after the prompt.
+    #[cfg(feature = "qemu_raspi5b")]
+    fn print_banner(&mut self) {
+        self.screen = ScreenBuffer::new();
+        self.parser = Parser::new();
+        let banner = alloc::format!("{}{}", TERMINAL_BANNER, crate::shell::gui_prompt());
+        for byte in banner.bytes() {
+            self.parser.feed(byte, &mut self.screen);
         }
     }
 
@@ -122,7 +140,11 @@ impl Terminal {
         }
         let idx = self.tab_count;
         let mut tab = Box::new((ScreenBuffer::new(), Parser::new()));
-        let banner = alloc::format!("LobsterOS Terminal - tab {}\r\nlobster:/# ", idx + 1);
+        let banner = alloc::format!(
+            "LobsterOS Terminal - tab {}\r\n{}",
+            idx + 1,
+            crate::shell::gui_prompt()
+        );
         for b in banner.bytes() {
             tab.1.feed(b, &mut tab.0);
         }
@@ -467,37 +489,8 @@ pub fn create_terminal_window(
     // Initialize the terminal widget inside the window
     term.init_widget(registry, x, y, w, h);
 
-    // On QEMU, populate the screen buffer with a welcome message so the terminal
-    // widget shows something useful immediately
     #[cfg(feature = "qemu_raspi5b")]
-    {
-        term.screen = ScreenBuffer::new();
-        // Write welcome text into the screen buffer lines
-        let lines = [
-            "LobsterOS Terminal [QEMU mode]",
-            "",
-            "Type 'help' for commands.",
-            "Shell output appears here.",
-            "",
-        ];
-        for (row, line) in lines.iter().enumerate() {
-            if row < term.screen.rows {
-                let chars: Vec<char> = line.chars().collect();
-                for (col, ch) in chars.iter().enumerate() {
-                    if col < term.screen.cols {
-                        term.screen.cells[row][col] = crate::terminal::screen::Cell {
-                            ch: *ch,
-                            fg: 0x00FFFFFF,
-                            bg: 0x00000000,
-                            bold: false,
-                            underline: false,
-                            blink: false,
-                        };
-                    }
-                }
-            }
-        }
-    }
+    term.print_banner();
 
     // Register the widget_id with the window for keyboard routing
     if let Some(widget_id) = term.widget_id {
@@ -527,7 +520,8 @@ pub fn mirror_serial_byte(byte: u8) {
         return;
     }
     // Feed through the VT100 parser into the screen buffer
-    term.parser.feed(byte, &mut term.screen);
+    term.nl_filter
+        .feed(byte, &mut term.parser, &mut term.screen);
 }
 
 /// x offset (from the client area's left edge) of tab-bar button `i`

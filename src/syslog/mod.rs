@@ -177,7 +177,6 @@ pub fn start() -> ! {
 
     // Main loop: poll kmsg and write to log
     let mut last_seq: usize = 0;
-    let mut poll_count: u32 = 0;
 
     loop {
         // Read from kernel log ring buffer
@@ -204,12 +203,6 @@ pub fn start() -> ! {
             });
 
             // last_seq is updated by klog_read via &mut reference
-        }
-
-        // Clear old messages periodically (every 100 polls)
-        poll_count += 1;
-        if poll_count % 100 == 0 {
-            klog::klog_clear();
         }
 
         // Yield to scheduler

@@ -587,6 +587,11 @@ pub fn chrome_window_at(cx: u32, cy: u32) -> Option<u32> {
     }
 }
 
+/// True when any window (title bar or body) lies under the point.
+pub fn is_window_at(cx: u32, cy: u32) -> bool {
+    window_at(cx, cy).is_some()
+}
+
 /// Check if point is on the close button of a window
 fn is_on_close_button(cx: u32, cy: u32, win_x: u32, win_y: u32, win_w: u32) -> bool {
     let btn_x = win_x + win_w - CLOSE_BTN_OFFSET_X;
