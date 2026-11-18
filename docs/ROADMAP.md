@@ -242,9 +242,9 @@ and tested by CI; nothing is hand-assembled.
 - [~] **O5.1 Per-process address spaces** (audit Q4): pointer checks + page-table teardown
       done; remaining: stop dual-mapping user pages into the kernel table, drop the global
       window mirror, validate every syscall pointer, `two_apps`/`leak`/`efault` tests.
-- [ ] **O5.2 Real preemption** (audit Q5): timer IRQ ends an EL0 slice; foreground `run`
+- [x] **O5.2 Real preemption** (audit Q5): timer IRQ ends an EL0 slice; foreground `run`
       becomes a sliced task. *Verify:* `while(1);` app does not freeze the desktop.
-- [ ] **O5.3 Signals + Ctrl+C + kill** end to end (audit Q6).
+- [x] **O5.3 Signals + Ctrl+C + kill** end to end (audit Q6).
 - [ ] **O5.4 SMP**: bring up cores 1–3, per-core run queues, locked task table.
 - [ ] **O5.5 Syscall surface for real programs**: `mmap`/`brk`, `fork`/`exec`/`wait`, pipes,
       `poll`, time, sockets — enough for a libc (newlib or relibc) and then ports.
@@ -318,3 +318,4 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-16 | O3.1 clean boot, O3.6 dialogs, O3.7 quick settings, O4.7 calculator; E1.5 device properties, E1.12 deterministic clock; E2.7 disk tools + `mkbase.py` | gate + adapted harness 10/10 |
 | 2026-11-17 | QEMU: `-drive` backend gets write permission (guest writes no longer abort); host tests serialized on shared globals; E2.4/E2.6 verified | `lobstervm` write/snapshot/restart; 15× host test runs |
 | 2026-11-18 | O3.2 taskbar (pinned apps, running windows, tray, calendar); E1.13 KVM accel in QEMU (needs kernel cache enable); E3 one-click installers added to plan | gate 301 tests + harness 12/12 |
+| 2026-11-18 | O5.2 timer preemption of EL0 slices, foreground `run` sliced; O5.3 Ctrl+C + `kill` with resource reclaim | gate 319 tests + harness 12/12 + live spinner check |
