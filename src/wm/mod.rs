@@ -12,6 +12,7 @@
 //! All rendering goes through `display::graphics` primitives.
 
 pub mod alt_tab;
+pub mod calendar;
 pub mod compositor;
 pub mod config;
 pub mod context_menu;
@@ -27,6 +28,7 @@ pub mod input;
 pub mod launcher;
 pub mod notifications;
 pub mod panel;
+pub mod panel_layout;
 pub mod scene;
 pub mod start_menu;
 pub mod theme;
