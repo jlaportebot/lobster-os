@@ -53,16 +53,12 @@ unsafe fn mmio_write32(offset: u64, val: u32) {
 
 #[inline]
 unsafe fn mmio_read_bytes(offset: u64, buf: &mut [u8]) {
-    for (i, slot) in buf.iter_mut().enumerate() {
-        *slot = core::ptr::read_volatile((LBST_DISK_BASE + offset + i as u64) as *const u8);
-    }
+    crate::drivers::mmio::read_bytes(LBST_DISK_BASE + offset, buf);
 }
 
 #[inline]
 unsafe fn mmio_write_bytes(offset: u64, buf: &[u8]) {
-    for (i, &b) in buf.iter().enumerate() {
-        core::ptr::write_volatile((LBST_DISK_BASE + offset + i as u64) as *mut u8, b);
-    }
+    crate::drivers::mmio::write_bytes(LBST_DISK_BASE + offset, buf);
 }
 
 /// Probe for the device. Returns total block count, or None if absent.

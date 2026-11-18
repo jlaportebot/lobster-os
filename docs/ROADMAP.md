@@ -92,7 +92,9 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
 - [x] **E1.12 Deterministic mode** (audit Q21): `-icount` profile for the harness.
       *Verified 2026-11-16:* deterministic clock mode (QEMU 767ab9f).
 - [ ] **E1.13 Performance**: profile TCG hot paths for the desktop workload; evaluate KVM on
-      the Pi 5 host (same CPU: Cortex-A76) behind a `--accel kvm` option.
+      the Pi 5 host (same CPU: Cortex-A76) behind a `--accel kvm` option. *KVM works end to end
+      since 2026-11-18 (QEMU in-kernel GIC + kernel D/I-cache enable: desktop-ready 884 ms under
+      KVM vs. a hang after heap init before); left: `lobstervm --accel kvm`, TCG profiling.*
 
 ### E2. `lobstervm` — VM manager (emulator repo)
 - [x] **E2.1 Core library**: VM definitions on disk (`~/.local/share/lobstervm/<name>/vm.json`),
@@ -197,9 +199,10 @@ and tested by CI; nothing is hand-assembled.
 - [x] **O3.3 Start menu**: real icons, search box, All apps incl. installed packages, user
       row, power row (lock, log out, restart, shut down).
       *Verified 2026-11-18:* live search + keyboard, pinned grid, All apps with `pkg install`ed apps, power menu (Restart/Shut down work; Lock/Log out disabled until O3.8), Super/Esc/outside click close; above the panel at 1920×1080…800×600 (bd672c9, gate 354 tests, harness 12/12).
-- [ ] **O3.4 Desktop icons**: grid layout, drag to arrange (persisted), rubber-band select,
+- [~] **O3.4 Desktop icons**: grid layout, drag to arrange (persisted), rubber-band select,
       double-click to open, files in `~/Desktop` appear as icons, right-click menu
       (new folder/file, change wallpaper, display settings).
+      *Verified 2026-11-18:* all of it except rubber-band select (left): grid, drag persisted across reboot, double-click opens apps and files (Editor), `~/Desktop` files as icons, right-click menu; start menu and desktop routing coexist (c81fd39, gate 391 tests, harness 12/12).
 - [ ] **O3.5 Window management polish**: resize from all edges with cursor feedback, snap
       preview, keyboard shortcuts (Super, Alt+Tab, Alt+F4, Super+arrows, Super+E/T/L),
       window list previews.
@@ -326,3 +329,5 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-18 | O3.2 taskbar (pinned apps, running windows, tray, calendar); E1.13 KVM accel in QEMU (needs kernel cache enable); E3 one-click installers added to plan | gate 301 tests + harness 12/12 |
 | 2026-11-18 | O5.2 timer preemption of EL0 slices, foreground `run` sliced; O5.3 Ctrl+C + `kill` with resource reclaim | gate 319 tests + harness 12/12 + live spinner check |
 | 2026-11-18 | O3.3 start menu; E3.2 portable `lobstervm`; O2.3/O2.4/E2.9 ticked (landed 11-17) | gate 354 tests + harness 12/12 (both transports) + bundle smoke |
+| 2026-11-18 | D- and I-caches on (SCTLR C/I) with DMA/code cache maintenance; the kernel now boots under KVM | gate 363 tests + harness 12/12 (TCG) + KVM boot to desktop-ready |
+| 2026-11-18 | O3.4 desktop icons (all but rubber-band); Welcome window visible again; dialogs dim instead of black; `dmesg` from a bounded kernel-log ring; Terminal runs shell commands and shows their output | gate 391 tests + harness 12/12 + screenshots |

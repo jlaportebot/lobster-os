@@ -345,6 +345,11 @@ fn handle_key_press(scancode: u8, _extended: bool) {
         return;
     }
 
+    // Desktop: Enter opens the selected icon when no window has focus.
+    if crate::wm::desktop_icons::handle_key(scancode) {
+        return;
+    }
+
     // GUI file manager: keyboard shortcuts when the Files window is focused.
     if crate::wm::gui_files::handle_key(scancode) {
         return;
@@ -456,48 +461,6 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
     });
 }
 
-/// Create a new file or folder in the user desktop dir (falls back to /tmp)
-fn new_desktop_item(is_dir: bool) {
-    use crate::fs::vfs::{self, VfsError};
-    let base = "/sd/home/user";
-    // Ensure the user dir is resolvable (expansion is lazy)
-    let name = if is_dir { "New Folder" } else { "New File" };
-    // Find a non-clashing name
-    for n in 0..100 {
-        let candidate = if n == 0 {
-            alloc::format!("{}/{}", base, name)
-        } else {
-            alloc::format!("{}/{} ({})", base, name, n)
-        };
-        let exists = vfs::resolve_path(&candidate).is_ok();
-        if !exists {
-            let result = if is_dir {
-                vfs::mkdir(&candidate)
-            } else {
-                vfs::create(&candidate)
-            };
-            match result {
-                Ok(_) => {
-                    crate::wm::notifications::success(
-                        if is_dir { "Folder" } else { "File" },
-                        &alloc::format!("Created {}", candidate),
-                    );
-                    crate::wm::compositor::mark_full_redraw();
-                    return;
-                }
-                Err(VfsError::AlreadyExists) => continue,
-                Err(e) => {
-                    crate::wm::notifications::error(
-                        "Desktop",
-                        &alloc::format!("create failed: {:?}", e),
-                    );
-                    return;
-                }
-            }
-        }
-    }
-}
-
 /// Handle context menu actions (IDs from context_menu::show_desktop_menu)
 pub(super) fn handle_context_action(action: u32) {
     match action {
@@ -526,14 +489,6 @@ pub(super) fn handle_context_action(action: u32) {
             crate::wm::wallpaper::next();
             crate::wm::compositor::mark_full_redraw();
         }
-        30 => {
-            // New File on the desktop (/sd/home/user/Desktop or /tmp)
-            new_desktop_item(false);
-        }
-        31 => {
-            // New Folder on the desktop
-            new_desktop_item(true);
-        }
         32 => {
             // Display Settings: open the Settings app
             crate::wm::start_menu::launch_by_name("Settings");
@@ -551,6 +506,8 @@ pub(super) fn handle_context_action(action: u32) {
             // About LobsterOS
             println!("[wm] LobsterOS v0.2 — Bare-metal Rust OS for Pi 5");
         }
-        _ => {}
+        other => {
+            crate::wm::desktop_icons::handle_action(other);
+        }
     }
 }

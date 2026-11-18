@@ -15,7 +15,7 @@
 //!   - take_result() -> Option<DialogResult>
 
 use crate::display::fb::FramebufferInfo;
-use crate::display::graphics::{draw_rect, draw_rect_outline, fill_rounded_rect};
+use crate::display::graphics::{blend_rect, draw_rect, draw_rect_outline, fill_rounded_rect};
 use crate::display::text::{self, Face, TextStyle};
 use crate::fs::vfs::list_dir;
 use crate::wm::theme;
@@ -30,6 +30,10 @@ const MAX_DIALOG_DEPTH: usize = 4;
 /// Dialog dimensions
 const DIALOG_W: u32 = 400;
 const DIALOG_H: u32 = 200;
+/// Colour laid over the desktop behind a modal dialog.
+const BACKDROP_COLOR: u32 = 0xFF00_0000;
+/// Opacity of the backdrop (0x66 of 0xFF = 40 % black).
+const BACKDROP_DIM_ALPHA: u8 = 0x66;
 const DIALOG_TITLE_H: u32 = 32;
 const BUTTON_W: u32 = 80;
 const BUTTON_H: u32 = 28;
@@ -843,8 +847,16 @@ pub fn draw(fb: &FramebufferInfo) {
     let dw = DIALOG_W;
     let dh = get_dialog_height(&dialog.kind);
 
-    // Dim background
-    draw_rect(fb, 0, 0, fb.width, fb.height, 0xAA000000);
+    // Dim (not replace) the desktop so the windows behind stay recognisable.
+    blend_rect(
+        fb,
+        0,
+        0,
+        fb.width,
+        fb.height,
+        BACKDROP_COLOR,
+        BACKDROP_DIM_ALPHA,
+    );
 
     // Dialog card background
     fill_rounded_rect(fb, dx, dy, dw, dh, 12, theme.menu_bg);

@@ -465,6 +465,11 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
                 0
             };
 
+            // The page was written through the data cache; make it fetchable.
+            unsafe {
+                crate::memory::cache::sync_icache_range(page_virt as usize, PAGE_SIZE as usize)
+            };
+
             file_offset += copy_in_page as u64;
             va += PAGE_SIZE;
         }

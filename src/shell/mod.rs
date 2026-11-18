@@ -575,6 +575,11 @@ pub fn poll() -> bool {
     true
 }
 
+/// Prompt text for the GUI Terminal (same format as the serial shell).
+pub fn gui_prompt() -> alloc::string::String {
+    build_prompt()
+}
+
 /// Build a dynamic prompt that shows CWD (like a real shell)
 fn build_prompt() -> alloc::string::String {
     let dir = cwd();
@@ -1443,6 +1448,31 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
             }
             0
         }
+        "rclick" => {
+            // The emulator can only inject left clicks; this stands in for a
+            // right-button press at the given screen position.
+            let x = args.get(1).and_then(|a| a.parse::<u32>().ok());
+            let y = args.get(2).and_then(|a| a.parse::<u32>().ok());
+            match (x, y) {
+                (Some(x), Some(y)) => {
+                    #[cfg(target_arch = "aarch64")]
+                    crate::wm::event_router::route_right_press(x, y);
+                    crate::println!("rclick: {} {}", x, y);
+                    0
+                }
+                _ => {
+                    crate::println!("rclick: usage: rclick <x> <y>");
+                    1
+                }
+            }
+        }
+        "deskicons" => {
+            #[cfg(target_arch = "aarch64")]
+            for line in crate::wm::desktop_icons::describe() {
+                crate::println!("deskicon {}", line);
+            }
+            0
+        }
         "iconsel" => {
             #[cfg(target_arch = "aarch64")]
             {
@@ -1468,9 +1498,9 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                     // Route as if typed: chars, or special names enter/back
                     let arg = args[1];
                     if arg == "enter" {
-                        crate::wm::gui_shell::handle_key(0x28, None);
+                        crate::wm::gui_shell::handle_key(0x1C, None);
                     } else if arg == "back" {
-                        crate::wm::gui_shell::handle_key(0x2A, None);
+                        crate::wm::gui_shell::handle_key(0x0E, None);
                     } else {
                         let c = arg.chars().next().unwrap_or(' ');
                         crate::wm::gui_shell::handle_key(0x04, Some(c));

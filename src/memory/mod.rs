@@ -1,5 +1,6 @@
 //! Memory management module
 
+pub mod cache;
 pub mod frame_alloc;
 pub mod heap;
 pub mod mmu;

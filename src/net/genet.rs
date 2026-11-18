@@ -12,6 +12,7 @@
 
 #[cfg(target_arch = "aarch64")]
 use crate::arch::gic::Gic;
+use crate::memory::cache;
 use crate::memory::{phys_to_virt, virt_to_phys, VirtAddr};
 use crate::println;
 
@@ -502,6 +503,10 @@ impl Genet {
         for q in 0..NUM_RX_QUEUES {
             core::ptr::write_bytes(self.rx_descs[q].0 as *mut u8, 0, rx_desc_size);
         }
+        cache::clean_invalidate_dcache_range(self.tx_descs.0 as usize, tx_desc_size);
+        for q in 0..NUM_RX_QUEUES {
+            cache::clean_invalidate_dcache_range(self.rx_descs[q].0 as usize, rx_desc_size);
+        }
 
         // Allocate TX packet buffers
         for i in 0..NUM_TX_DESC {
@@ -554,6 +559,10 @@ impl Genet {
             (*desc_ptr.add(i)).addr_lo = buf_phys.0 as u32;
             (*desc_ptr.add(i)).addr_hi = (buf_phys.0 >> 32) as u32;
         }
+        cache::clean_dcache_range(
+            self.tx_descs.0 as usize,
+            NUM_TX_DESC * core::mem::size_of::<DmaDesc>(),
+        );
     }
 
     /// Configure the RX DMA rings and post receive buffers (multi-queue for RSS)
@@ -606,7 +615,13 @@ impl Genet {
                 (*desc_ptr.add(i)).addr_lo = buf_phys.0 as u32;
                 (*desc_ptr.add(i)).addr_hi = (buf_phys.0 >> 32) as u32;
                 (*desc_ptr.add(i)).ctrl = MAX_FRAME_SIZE as u32; // Buffer length
+                                                                 // The MAC will DMA into the buffer; make sure no dirty line can land on top.
+                cache::clean_invalidate_dcache_range(self.rx_bufs[q][i].0 as usize, MAX_FRAME_SIZE);
             }
+            cache::clean_dcache_range(
+                self.rx_descs[q].0 as usize,
+                NUM_RX_DESC * core::mem::size_of::<DmaDesc>(),
+            );
 
             // Set RX producer index to number of posted buffers
             self.rx_prod[q] = NUM_RX_DESC as u32;
@@ -641,6 +656,7 @@ impl Genet {
         let buf_ptr = self.tx_bufs[idx].0 as *mut u8;
         unsafe {
             core::ptr::copy_nonoverlapping(data.as_ptr(), buf_ptr, data.len());
+            cache::clean_dcache_range(buf_ptr as usize, data.len());
         }
 
         // Fill in TX descriptor
@@ -648,6 +664,7 @@ impl Genet {
         unsafe {
             (*desc_ptr.add(idx)).status = data.len() as u32;
             (*desc_ptr.add(idx)).ctrl = TX_DESC_SOP | TX_DESC_EOP | TX_DESC_CRC;
+            cache::clean_dcache_range(desc_ptr.add(idx) as usize, core::mem::size_of::<DmaDesc>());
         }
 
         // Advance producer index
@@ -676,7 +693,14 @@ impl Genet {
 
         let idx = self.rx_cons[Q] as usize % NUM_RX_DESC;
         let desc_ptr = self.rx_descs[Q].0 as *mut DmaDesc;
-        let desc = unsafe { *desc_ptr.add(idx) };
+        // SAFETY: `desc_ptr + idx` lies inside the RX descriptor ring allocated at init.
+        let desc = unsafe {
+            cache::invalidate_dcache_range(
+                desc_ptr.add(idx) as usize,
+                core::mem::size_of::<DmaDesc>(),
+            );
+            *desc_ptr.add(idx)
+        };
 
         let pkt_len = (desc.status & RX_DESC_PKT_LEN_MASK) as usize;
         if pkt_len == 0 || pkt_len > buf.len() {
@@ -689,6 +713,7 @@ impl Genet {
         // Copy packet data from RX buffer
         let rx_buf_ptr = self.rx_bufs[Q][idx].0 as *const u8;
         unsafe {
+            cache::invalidate_dcache_range(rx_buf_ptr as usize, pkt_len);
             core::ptr::copy_nonoverlapping(rx_buf_ptr, buf.as_mut_ptr(), pkt_len);
         }
 
@@ -696,6 +721,7 @@ impl Genet {
         unsafe {
             (*desc_ptr.add(idx)).ctrl = MAX_FRAME_SIZE as u32;
             (*desc_ptr.add(idx)).status = 0;
+            cache::clean_dcache_range(desc_ptr.add(idx) as usize, core::mem::size_of::<DmaDesc>());
         }
 
         // Advance consumer index

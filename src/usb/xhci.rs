@@ -9,6 +9,7 @@
 //! References: xHCI Specification 1.2, BCM2712 peripherals datasheet
 
 use crate::arch::cpu::delay_us;
+use crate::memory::cache;
 use crate::memory::frame_alloc::allocate_contiguous;
 use crate::memory::{phys_to_virt, PhysAddr, VirtAddr, PAGE_SIZE};
 use crate::println;
@@ -120,6 +121,9 @@ const COMP_SUCCESS: u32 = 1;
 const COMP_TRB_ERR: u32 = 5;
 const COMP_STALL: u32 = 6;
 const COMP_SHORT_PKT: u32 = 13;
+
+/// Size of one TRB; the unit of cache maintenance on the rings.
+const TRB_BYTES: usize = 16;
 
 // ─── TRB Structure (16 bytes) ─────────────────────────────────────────
 
@@ -238,6 +242,7 @@ impl CmdRing {
         trb.set_cycle(self.cycle);
         unsafe {
             ptr.add(self.enqueue_idx).write(trb);
+            cache::clean_dcache_range(ptr.add(self.enqueue_idx) as usize, TRB_BYTES);
         }
 
         let phys_addr = PhysAddr(self.phys.0 + (self.enqueue_idx as u64 * 16));
@@ -252,6 +257,7 @@ impl CmdRing {
             );
             unsafe {
                 ptr.add(CMD_RING_SIZE - 1).write(link);
+                cache::clean_dcache_range(ptr.add(CMD_RING_SIZE - 1) as usize, TRB_BYTES);
             }
             self.enqueue_idx = 0;
             self.cycle = !self.cycle;
@@ -289,7 +295,11 @@ impl EvtRing {
 
     fn dequeue(&mut self) -> Option<Trb> {
         let ptr = self.base.0 as *const Trb;
-        let trb = unsafe { ptr.add(self.dequeue_idx).read() };
+        // The controller writes events by DMA; drop any stale cached copy first.
+        let trb = unsafe {
+            cache::invalidate_dcache_range(ptr.add(self.dequeue_idx) as usize, TRB_BYTES);
+            ptr.add(self.dequeue_idx).read()
+        };
 
         if trb.cycle_bit() == self.cycle {
             self.dequeue_idx += 1;
@@ -333,6 +343,7 @@ impl XferRing {
         trb.set_cycle(self.cycle);
         unsafe {
             ptr.add(self.enqueue_idx).write(trb);
+            cache::clean_dcache_range(ptr.add(self.enqueue_idx) as usize, TRB_BYTES);
         }
         self.enqueue_idx += 1;
         if self.enqueue_idx >= XFER_RING_SIZE - 1 {
@@ -343,6 +354,7 @@ impl XferRing {
             );
             unsafe {
                 ptr.add(XFER_RING_SIZE - 1).write(link);
+                cache::clean_dcache_range(ptr.add(XFER_RING_SIZE - 1) as usize, TRB_BYTES);
             }
             self.enqueue_idx = 0;
             self.cycle = !self.cycle;
@@ -530,6 +542,7 @@ pub fn init() -> Result<(), &'static str> {
         for i in 0..(PAGE_SIZE as usize) {
             ptr.add(i).write(0);
         }
+        cache::clean_dcache_range(ptr as usize, PAGE_SIZE as usize);
     }
 
     unsafe {
@@ -554,6 +567,7 @@ pub fn init() -> Result<(), &'static str> {
         for i in 0..(PAGE_SIZE as usize) {
             ptr.add(i).write(0);
         }
+        cache::clean_invalidate_dcache_range(ptr as usize, PAGE_SIZE as usize);
     }
 
     let erst_phys = allocate_contiguous(1).ok_or("xHCI: failed to alloc ERST")?;
@@ -565,6 +579,7 @@ pub fn init() -> Result<(), &'static str> {
         (*erst_ptr).addr = evt_ring_phys.0;
         (*erst_ptr).size = EVT_RING_SIZE as u32;
         (*erst_ptr)._res = 0;
+        cache::clean_dcache_range(erst_ptr as usize, core::mem::size_of::<ErstEntry>());
     }
 
     unsafe {
@@ -597,6 +612,7 @@ pub fn init() -> Result<(), &'static str> {
         for i in 0..(PAGE_SIZE as usize) {
             ptr.add(i).write(0);
         }
+        cache::clean_dcache_range(ptr as usize, PAGE_SIZE as usize);
         DCBA_PHYS = dcba_phys;
     }
 
@@ -754,6 +770,7 @@ fn enumerate_device(port: u8, speed: UsbSpeed) -> Result<(), &'static str> {
         for i in 0..(PAGE_SIZE as usize * 2) {
             ptr.add(i).write(0);
         }
+        cache::clean_dcache_range(ptr as usize, PAGE_SIZE as usize * 2);
     }
 
     // 3. Allocate EP0 transfer ring
@@ -766,6 +783,7 @@ fn enumerate_device(port: u8, speed: UsbSpeed) -> Result<(), &'static str> {
         for i in 0..(PAGE_SIZE as usize) {
             ptr.add(i).write(0);
         }
+        cache::clean_dcache_range(ptr as usize, PAGE_SIZE as usize);
     }
 
     // Store slot info
@@ -806,6 +824,7 @@ fn enumerate_device(port: u8, speed: UsbSpeed) -> Result<(), &'static str> {
         // Input control context (32 bytes at offset 0)
         // Set A(0) = 1 (add slot context), A(1) = 1 (add EP0)
         input_ctx.add(1).write(0x3); // Add bit flags
+        cache::clean_dcache_range(input_ctx as usize, PAGE_SIZE as usize);
     }
 
     let config_trb = Trb::new(

@@ -358,6 +358,10 @@ unsafe fn write_reg(addr: u64, val: u32) {
 /// Returns true on success
 unsafe fn send_property_message(_size: usize) -> bool {
     let buf_ptr = &PROPERTY_BUFFER as *const _ as u32;
+    let buf_len = core::mem::size_of_val(&PROPERTY_BUFFER);
+
+    // The firmware reads the request from RAM, so flush the CPU's copy first.
+    crate::memory::cache::clean_dcache_range(buf_ptr as usize, buf_len);
 
     // Wait for mailbox to not be full
     while read_reg(MAILBOX_STATUS) & MAILBOX_STATUS_FULL != 0 {
@@ -379,6 +383,8 @@ unsafe fn send_property_message(_size: usize) -> bool {
             let data = response & !0xF;
             // Check if it's our response (same address)
             if data == buf_ptr {
+                // The firmware wrote the reply to RAM; drop stale cached lines.
+                crate::memory::cache::invalidate_dcache_range(buf_ptr as usize, buf_len);
                 // Check response code: bit 31 = success
                 return PROPERTY_BUFFER[1] & 0x80000000 != 0;
             }
