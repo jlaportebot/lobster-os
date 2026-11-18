@@ -29,9 +29,7 @@ unsafe fn mmio_write32(offset: u64, val: u32) {
 
 #[inline]
 unsafe fn mmio_write_bytes(offset: u64, buf: &[u8]) {
-    for (i, &b) in buf.iter().enumerate() {
-        core::ptr::write_volatile((AUDIO_BASE + offset + i as u64) as *mut u8, b);
-    }
+    crate::drivers::mmio::write_bytes(AUDIO_BASE + offset, buf);
 }
 
 /// Probe for the device.

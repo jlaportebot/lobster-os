@@ -63,14 +63,12 @@ unsafe fn mmio_write32(offset: u64, val: u32) {
 
 #[inline]
 unsafe fn mmio_read_bytes(offset: u64, buf: &mut [u8]) {
-    let src = (LOBSTER_NET_BASE + offset) as *const u8;
-    core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), buf.len());
+    crate::drivers::mmio::read_bytes(LOBSTER_NET_BASE + offset, buf);
 }
 
 #[inline]
 unsafe fn mmio_write_bytes(offset: u64, buf: &[u8]) {
-    let dst = (LOBSTER_NET_BASE + offset) as *mut u8;
-    core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, buf.len());
+    crate::drivers::mmio::write_bytes(LOBSTER_NET_BASE + offset, buf);
 }
 
 /// Check if the lobster-net MMIO device is present
@@ -166,15 +164,15 @@ fn fetch_impl(url: &str, token: Option<&str>) -> Option<alloc::vec::Vec<u8>> {
 
     // Write token prefix (if any) followed by URL bytes, contiguously
     unsafe {
-        let dst = (LOBSTER_NET_BASE + LOBSTER_NET_URL_DATA) as *mut u8;
+        let dst = LOBSTER_NET_BASE + LOBSTER_NET_URL_DATA;
         let mut off = 0usize;
         if let Some(tok) = token {
-            core::ptr::copy_nonoverlapping(tok.as_ptr(), dst, tok.len());
+            crate::drivers::mmio::write_bytes(dst, tok.as_bytes());
             off = tok.len();
-            *dst.add(off) = b'\n';
+            crate::drivers::mmio::write8(dst + off as u64, b'\n');
             off += 1;
         }
-        core::ptr::copy_nonoverlapping(url_bytes.as_ptr(), dst.add(off), url_bytes.len());
+        crate::drivers::mmio::write_bytes(dst + off as u64, url_bytes);
     }
 
     // Trigger fetch
@@ -192,9 +190,11 @@ fn fetch_impl(url: &str, token: Option<&str>) -> Option<alloc::vec::Vec<u8>> {
             if resp_code == 200 && resp_len > 0 && resp_len <= MAX_RESP_LEN as u32 {
                 let mut resp = alloc::vec::Vec::with_capacity(resp_len as usize);
                 unsafe {
-                    let src = (LOBSTER_NET_BASE + LOBSTER_NET_RESP_DATA) as *const u8;
-                    core::ptr::copy_nonoverlapping(src, resp.as_mut_ptr(), resp_len as usize);
-                    resp.set_len(resp_len as usize);
+                    resp.resize(resp_len as usize, 0);
+                    crate::drivers::mmio::read_bytes(
+                        LOBSTER_NET_BASE + LOBSTER_NET_RESP_DATA,
+                        &mut resp,
+                    );
                 }
                 unsafe {
                     mmio_write32(LOBSTER_NET_CMD, NET_CMD_RESET);
@@ -278,9 +278,11 @@ pub fn compile(source: &str) -> Option<alloc::vec::Vec<u8>> {
                 // Success — read ELF binary
                 let mut elf = alloc::vec::Vec::with_capacity(resp_len as usize);
                 unsafe {
-                    let src = (LOBSTER_NET_BASE + LOBSTER_NET_RESP_DATA) as *const u8;
-                    core::ptr::copy_nonoverlapping(src, elf.as_mut_ptr(), resp_len as usize);
-                    elf.set_len(resp_len as usize);
+                    elf.resize(resp_len as usize, 0);
+                    crate::drivers::mmio::read_bytes(
+                        LOBSTER_NET_BASE + LOBSTER_NET_RESP_DATA,
+                        &mut elf,
+                    );
                 }
                 unsafe {
                     mmio_write32(LOBSTER_NET_CMD, NET_CMD_RESET);
@@ -298,9 +300,11 @@ pub fn compile(source: &str) -> Option<alloc::vec::Vec<u8>> {
             if resp_len > 0 && resp_len <= MAX_RESP_LEN as u32 {
                 let mut err_msg = alloc::vec::Vec::with_capacity(resp_len as usize);
                 unsafe {
-                    let src = (LOBSTER_NET_BASE + LOBSTER_NET_RESP_DATA) as *const u8;
-                    core::ptr::copy_nonoverlapping(src, err_msg.as_mut_ptr(), resp_len as usize);
-                    err_msg.set_len(resp_len as usize);
+                    err_msg.resize(resp_len as usize, 0);
+                    crate::drivers::mmio::read_bytes(
+                        LOBSTER_NET_BASE + LOBSTER_NET_RESP_DATA,
+                        &mut err_msg,
+                    );
                 }
                 let err_str = core::str::from_utf8(&err_msg).unwrap_or("(binary error)");
                 crate::println!("[lobster-net] compile error:\n{}", err_str);

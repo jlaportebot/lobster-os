@@ -47,16 +47,12 @@ unsafe fn mmio_write32(offset: u64, val: u32) {
 
 #[inline]
 unsafe fn mmio_read_bytes(offset: u64, buf: &mut [u8]) {
-    for (i, slot) in buf.iter_mut().enumerate() {
-        *slot = core::ptr::read_volatile((SHARE_BASE + offset + i as u64) as *const u8);
-    }
+    crate::drivers::mmio::read_bytes(SHARE_BASE + offset, buf);
 }
 
 #[inline]
 unsafe fn mmio_write_bytes(offset: u64, buf: &[u8]) {
-    for (i, &b) in buf.iter().enumerate() {
-        core::ptr::write_volatile((SHARE_BASE + offset + i as u64) as *mut u8, b);
-    }
+    crate::drivers::mmio::write_bytes(SHARE_BASE + offset, buf);
 }
 
 /// Probe for the device. Some(()) if the share is present and configured.

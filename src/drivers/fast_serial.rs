@@ -76,12 +76,10 @@ pub fn write(bytes: &[u8]) {
             // register write. The window is write-only so use copy_nonoverlapping
             // against the MMIO region byte by byte (it is not cacheable RAM;
             // volatile byte writes are required for correctness).
-            for i in 0..chunk {
-                core::ptr::write_volatile(
-                    (FAST_SERIAL_BASE + REG_TXBUF + (off + i) as u64) as *mut u8,
-                    bytes[off + i],
-                );
-            }
+            crate::drivers::mmio::write_bytes(
+                FAST_SERIAL_BASE + REG_TXBUF,
+                &bytes[off..off + chunk],
+            );
             mmio_write32(REG_TXLEN, chunk as u32);
         }
         off += chunk;

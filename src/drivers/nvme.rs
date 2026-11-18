@@ -14,6 +14,7 @@
 
 use crate::arch::cpu::delay_us;
 use crate::drivers::pcie;
+use crate::memory::cache;
 use crate::memory::frame_alloc::{allocate_contiguous, allocate_frame, deallocate_frame};
 use crate::memory::{phys_to_virt, virt_to_phys, VirtAddr, PAGE_SIZE};
 use crate::println;
@@ -361,6 +362,10 @@ impl NvmeQueue {
         unsafe {
             core::ptr::write_bytes(sq_virt as *mut u8, 0, sq_pages * PAGE_SIZE as usize);
             core::ptr::write_bytes(cq_virt as *mut u8, 0, cq_pages * PAGE_SIZE as usize);
+            // The controller owns these pages from now on; push the zeroes to
+            // RAM and drop the lines so a later eviction cannot undo its writes.
+            cache::clean_invalidate_dcache_range(sq_virt as usize, sq_pages * PAGE_SIZE as usize);
+            cache::clean_invalidate_dcache_range(cq_virt as usize, cq_pages * PAGE_SIZE as usize);
         }
 
         Some(NvmeQueue {
@@ -395,7 +400,10 @@ impl NvmeQueue {
     fn cq_peek(&self) -> &NvmeCqe {
         unsafe {
             let offset = self.cq_head as usize * size_of::<NvmeCqe>();
-            &*((self.cq_base + offset as u64) as *const NvmeCqe)
+            let entry = self.cq_base + offset as u64;
+            // The controller writes completions by DMA; never trust a cached copy.
+            cache::invalidate_dcache_range(entry as usize, size_of::<NvmeCqe>());
+            &*(entry as *const NvmeCqe)
         }
     }
 
@@ -700,6 +708,7 @@ unsafe fn admin_submit_wait(cmd: &mut NvmeCmd) -> NvmeCqe {
     // Copy command to admin SQ
     let sq_entry = NVME_CTRL.admin_q.sq_entry();
     core::ptr::copy_nonoverlapping(cmd as *const NvmeCmd, sq_entry as *mut NvmeCmd, 1);
+    cache::clean_dcache_range(sq_entry as *mut NvmeCmd as usize, size_of::<NvmeCmd>());
 
     // Ring admin SQ doorbell
     let tail = NVME_CTRL.admin_q.sq_push();
@@ -741,6 +750,10 @@ unsafe fn admin_submit_wait(cmd: &mut NvmeCmd) -> NvmeCqe {
         NVME_CTRL.admin_q.cq_head as usize - 1
     };
     let offset = idx * size_of::<NvmeCqe>();
+    cache::invalidate_dcache_range(
+        (NVME_CTRL.admin_q.cq_base + offset as u64) as usize,
+        size_of::<NvmeCqe>(),
+    );
     let cqe = read_volatile((NVME_CTRL.admin_q.cq_base + offset as u64) as *const NvmeCqe);
 
     // Clear the entry for next use
@@ -763,6 +776,7 @@ unsafe fn identify_controller() -> bool {
 
     // Zero the buffer
     core::ptr::write_bytes(id_virt as *mut u8, 0, PAGE_SIZE as usize);
+    cache::clean_invalidate_dcache_range(id_virt as usize, PAGE_SIZE as usize);
 
     let mut cmd = NvmeCmd::new();
     cmd.cdw0 = (ADMIN_IDENTIFY as u32) | (0 << 14); // FUSE=0, PSDT=0
@@ -771,6 +785,7 @@ unsafe fn identify_controller() -> bool {
     cmd.cdw10 = 1; // CNS=1 (Identify Controller)
 
     let cqe = admin_submit_wait(&mut cmd);
+    cache::invalidate_dcache_range(id_virt as usize, PAGE_SIZE as usize);
 
     if !cqe.success() {
         println!(
@@ -810,6 +825,7 @@ unsafe fn identify_namespace(nsid: u32) -> bool {
     let id_virt = phys_to_virt(id_phys).0;
 
     core::ptr::write_bytes(id_virt as *mut u8, 0, PAGE_SIZE as usize);
+    cache::clean_invalidate_dcache_range(id_virt as usize, PAGE_SIZE as usize);
 
     let mut cmd = NvmeCmd::new();
     cmd.cdw0 = ADMIN_IDENTIFY as u32;
@@ -818,6 +834,7 @@ unsafe fn identify_namespace(nsid: u32) -> bool {
     cmd.cdw10 = 0; // CNS=0 (Identify Namespace)
 
     let cqe = admin_submit_wait(&mut cmd);
+    cache::invalidate_dcache_range(id_virt as usize, PAGE_SIZE as usize);
 
     if !cqe.success() {
         println!(
@@ -901,6 +918,7 @@ unsafe fn io_submit_wait(cmd: &mut NvmeCmd) -> NvmeCqe {
     // Copy command to I/O SQ
     let sq_entry = NVME_CTRL.io_q.sq_entry();
     core::ptr::copy_nonoverlapping(cmd as *const NvmeCmd, sq_entry as *mut NvmeCmd, 1);
+    cache::clean_dcache_range(sq_entry as *mut NvmeCmd as usize, size_of::<NvmeCmd>());
 
     // Ring I/O SQ doorbell
     let tail = NVME_CTRL.io_q.sq_push();
@@ -942,13 +960,13 @@ unsafe fn io_submit_wait(cmd: &mut NvmeCmd) -> NvmeCqe {
         NVME_CTRL.io_q.cq_head as usize - 1
     };
     let offset = idx * size_of::<NvmeCqe>();
-    let cqe = read_volatile((NVME_CTRL.io_q.cq_base + offset as u64) as *const NvmeCqe);
+    let entry = (NVME_CTRL.io_q.cq_base + offset as u64) as usize;
+    cache::invalidate_dcache_range(entry, size_of::<NvmeCqe>());
+    let cqe = read_volatile(entry as *const NvmeCqe);
 
-    // Clear entry
-    write_volatile(
-        (NVME_CTRL.io_q.cq_base + offset as u64) as *mut NvmeCqe,
-        NvmeCqe::default(),
-    );
+    // Clear entry, and push the clear to RAM so the next lap's phase check is honest.
+    write_volatile(entry as *mut NvmeCqe, NvmeCqe::default());
+    cache::clean_dcache_range(entry, size_of::<NvmeCqe>());
 
     cqe
 }
@@ -979,7 +997,11 @@ pub fn read(block: u64, count: u32, buf: *mut u8) -> i64 {
         cmd.cdw11 = (block >> 32) as u32; // Starting LBA (high 32 bits)
         cmd.cdw12 = (count - 1) & 0xFFFF; // Number of logical blocks (0-based)
 
+        // Evict any dirty CPU lines first so they cannot overwrite the DMA data later.
+        let xfer_len = count as usize * NVME_CTRL.sector_size as usize;
+        cache::clean_invalidate_dcache_range(buf as usize, xfer_len);
         let cqe = io_submit_wait(&mut cmd);
+        cache::invalidate_dcache_range(buf as usize, xfer_len);
 
         if !cqe.success() {
             println!(
@@ -1016,6 +1038,11 @@ pub fn write(block: u64, count: u32, buf: *const u8) -> i64 {
         cmd.cdw11 = (block >> 32) as u32;
         cmd.cdw12 = (count - 1) & 0xFFFF;
 
+        // The controller reads the payload from RAM.
+        cache::clean_dcache_range(
+            buf as usize,
+            count as usize * NVME_CTRL.sector_size as usize,
+        );
         let cqe = io_submit_wait(&mut cmd);
 
         if !cqe.success() {
@@ -1055,6 +1082,9 @@ pub fn flush() -> bool {
 const SDHCI_BASE: u64 = 0x10_00C0_0000;
 
 /// SDHCI register offsets
+/// Bytes per SD data block moved by one SDMA transfer.
+const SD_BLOCK_BYTES: usize = 512;
+
 const SDHCI_DMA_ADDR: u64 = SDHCI_BASE + 0x00;
 const SDHCI_BLK_SIZE: u64 = SDHCI_BASE + 0x04;
 const SDHCI_BLK_COUNT: u64 = SDHCI_BASE + 0x06;
@@ -1596,6 +1626,7 @@ pub unsafe fn sdhci_read_block(block: u32, buf: *mut u8) -> bool {
     // Set up DMA address
     let buf_phys = virt_to_phys(VirtAddr::new(buf as u64));
     sdhci_write32(SDHCI_DMA_ADDR, buf_phys.0 as u32);
+    cache::clean_invalidate_dcache_range(buf as usize, SD_BLOCK_BYTES);
 
     // Set block size and count
     sdhci_write16(SDHCI_BLK_SIZE, 512);
@@ -1623,6 +1654,7 @@ pub unsafe fn sdhci_read_block(block: u32, buf: *mut u8) -> bool {
 
         if int_status & INT_XFER_COMPLETE != 0 {
             sdhci_write32(SDHCI_INT_STATUS, INT_XFER_COMPLETE);
+            cache::invalidate_dcache_range(buf as usize, SD_BLOCK_BYTES);
             return true;
         }
 
@@ -1662,6 +1694,7 @@ pub unsafe fn sdhci_write_block(block: u32, buf: *const u8) -> bool {
     // Set up DMA address
     let buf_phys = virt_to_phys(VirtAddr::new(buf as u64));
     sdhci_write32(SDHCI_DMA_ADDR, buf_phys.0 as u32);
+    cache::clean_dcache_range(buf as usize, SD_BLOCK_BYTES);
 
     // Set block size and count
     sdhci_write16(SDHCI_BLK_SIZE, 512);

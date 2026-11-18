@@ -39,6 +39,7 @@ pub mod lobster_share;
 pub mod lobster_storage;
 #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
 pub mod lobster_sys;
+pub mod mmio;
 
 #[cfg(target_arch = "aarch64")]
 pub mod lobster_net;
