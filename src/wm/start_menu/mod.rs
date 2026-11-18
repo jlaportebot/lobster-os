@@ -1,20 +1,30 @@
-//! Start Menu — the panel launcher's app menu
+//! Start menu: search, pinned grid, All apps list and power options.
 //!
-//! A polished start-menu surface: grid of application tiles with icons,
-//! opens on launcher click, closes on outside click or Esc, launches the
-//! selected app's window (focusing an existing instance if one is open).
+//! The menu is a modal overlay: while it is open every key and every left
+//! press belongs to it, and a press outside closes it without reaching
+//! whatever is underneath. Geometry lives in [`layout`], searching and the
+//! keyboard state machine in [`model`], drawing in [`render`]; this file
+//! owns the open/closed state and turns input into launches.
+
+mod layout;
+mod model;
+mod render;
+
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use crate::display::fb::get_info;
-use crate::display::graphics::{draw_rect, draw_rect_outline, draw_text, fill_rounded_rect};
-use crate::display::icons;
-use crate::wm::theme;
+use crate::wm::hit_region::{HitKind, HitRegion, HitRegistry};
+use crate::wm::launcher::{self, InstalledApp};
 use crate::wm::window;
+use layout::Layout;
+use model::{Item, Key, Mode, Nav, NavCtx, Outcome, PowerAction, Source, View};
+
+pub use render::draw;
 
 /// One launchable application entry
 pub struct AppEntry {
     pub name: &'static str,
-    /// Tile accent color (ARGB)
-    pub color: u32,
     /// Launch behavior
     pub launch: fn(),
 }
@@ -23,7 +33,6 @@ pub struct AppEntry {
 pub static APPS: &[AppEntry] = &[
     AppEntry {
         name: "Terminal",
-        color: 0xFF2E3440,
         launch: || {
             focus_or_create("Terminal", 720, 500, || {
                 let _ = crate::apps::terminal::open_terminal_window(100, 80, 720, 500);
@@ -32,7 +41,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Files",
-        color: 0xFFD08770,
         launch: || {
             focus_or_create("File Manager", 500, 400, || {
                 let _ = window::create(120, 100, 500, 400, "File Manager");
@@ -41,7 +49,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Editor",
-        color: 0xFFEBCB8B,
         launch: || {
             focus_or_create("Editor", 520, 400, || {
                 let _ = window::create(140, 120, 520, 400, "Editor");
@@ -50,7 +57,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Calculator",
-        color: 0xFF88C0D0,
         launch: || {
             focus_or_create("Calculator", 300, 400, || {
                 let _ = window::create(160, 140, 300, 400, "Calculator");
@@ -59,14 +65,12 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Task Manager",
-        color: 0xFFA3BE8C,
         launch: || {
             crate::apps::task_manager::open();
         },
     },
     AppEntry {
         name: "Settings",
-        color: 0xFF81A1C1,
         launch: || {
             focus_or_create("Settings", 400, 300, || {
                 let _ = window::create(220, 200, 400, 300, "Settings");
@@ -75,7 +79,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Network",
-        color: 0xFF8FBCBB,
         launch: || {
             focus_or_create("Network", 420, 300, || {
                 let _ = window::create(240, 220, 420, 300, "Network");
@@ -84,7 +87,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "App Store",
-        color: 0xFFBF616A,
         launch: || {
             focus_or_create("App Store", 460, 320, || {
                 let _ = window::create(260, 240, 460, 320, "App Store");
@@ -93,7 +95,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Images",
-        color: 0xFFD8DEE9,
         launch: || {
             focus_or_create("Image Viewer", 460, 340, || {
                 let _ = window::create(280, 260, 460, 340, "Image Viewer");
@@ -102,7 +103,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Browser",
-        color: 0xFF5E81AC,
         launch: || {
             focus_or_create("Browser", 900, 620, || {
                 crate::apps::browser::open("http://example.com");
@@ -111,7 +111,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Notes",
-        color: 0xFFEBCB8B,
         launch: || {
             focus_or_create("Notes", 700, 480, || {
                 crate::apps::notes::init();
@@ -121,7 +120,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "About",
-        color: 0xFFFF6B6B,
         launch: || {
             focus_or_create("About", 360, 260, || {
                 let _ = window::create(300, 280, 360, 260, "About");
@@ -130,290 +128,410 @@ pub static APPS: &[AppEntry] = &[
     },
 ];
 
-// ─── Menu state ───────────────────────────────────────────────────────
+/// Search keywords per built-in app, so "console" finds the Terminal.
+const KEYWORDS: &[(&str, &str)] = &[
+    ("Terminal", "shell console command line"),
+    ("Files", "file manager explorer folders"),
+    ("Editor", "text code write"),
+    ("Calculator", "math calc numbers"),
+    ("Task Manager", "processes monitor kill"),
+    ("Settings", "preferences control options"),
+    ("Network", "wifi ethernet internet"),
+    ("App Store", "packages install software"),
+    ("Images", "image viewer pictures photos"),
+    ("Browser", "web internet"),
+    ("Notes", "memo text"),
+    ("About", "system info version"),
+];
 
-const MENU_WIDTH: u32 = 360;
-const MENU_HEIGHT: u32 = 420;
-const TILE_H: u32 = 56;
-const TILE_MARGIN: u32 = 8;
-const MENU_TOP_PAD: u32 = 12;
-/// Number of rows visible without scrolling
-const VISIBLE_ROWS: usize = 7;
-/// App icon size in the menu rows (an icon-set size, so no scaling).
-const MENU_ICON_SIZE: u32 = 32;
-
-static mut OPEN: bool = false;
-static mut HOVER_ROW: i32 = -1;
-static mut SCROLL: usize = 0;
-
-pub fn is_open() -> bool {
-    unsafe { OPEN }
+/// Action behind a hit region, packed into the region's `tag`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Target {
+    /// Entry at this position of the visible list.
+    Item(usize),
+    /// The Pinned / All apps switch button.
+    ViewSwitch,
+    /// The search field.
+    Search,
+    /// The power button.
+    PowerButton,
+    /// Power popup entry.
+    PowerEntry(usize),
+    /// Scrollbar thumb.
+    Thumb,
+    /// Scrollbar track outside the thumb.
+    Track,
 }
 
-pub fn toggle() {
-    unsafe {
-        OPEN = !OPEN;
-        if OPEN {
-            HOVER_ROW = -1;
-            SCROLL = 0;
+/// Bits of a tag that hold the payload; the rest hold the target kind.
+const TAG_PAYLOAD_BITS: u32 = 16;
+const TAG_PAYLOAD_MASK: u32 = (1 << TAG_PAYLOAD_BITS) - 1;
+
+impl Target {
+    pub(super) fn to_tag(self) -> u32 {
+        let (kind, payload) = match self {
+            Target::Item(pos) => (1, pos as u32),
+            Target::ViewSwitch => (2, 0),
+            Target::Search => (3, 0),
+            Target::PowerButton => (4, 0),
+            Target::PowerEntry(i) => (5, i as u32),
+            Target::Thumb => (6, 0),
+            Target::Track => (7, 0),
+        };
+        (kind << TAG_PAYLOAD_BITS) | (payload & TAG_PAYLOAD_MASK)
+    }
+
+    fn from_tag(tag: u32) -> Option<Target> {
+        let payload = (tag & TAG_PAYLOAD_MASK) as usize;
+        match tag >> TAG_PAYLOAD_BITS {
+            1 => Some(Target::Item(payload)),
+            2 => Some(Target::ViewSwitch),
+            3 => Some(Target::Search),
+            4 => Some(Target::PowerButton),
+            5 => Some(Target::PowerEntry(payload)),
+            6 => Some(Target::Thumb),
+            7 => Some(Target::Track),
+            _ => None,
         }
+    }
+}
+
+/// Everything the menu remembers between frames.
+pub(super) struct State {
+    pub(super) open: bool,
+    pub(super) nav: Nav,
+    pub(super) items: Vec<Item>,
+    installed: Vec<InstalledApp>,
+    hits: HitRegistry,
+    /// Hovered power popup entry.
+    pub(super) power_hover: Option<usize>,
+    /// While dragging the scrollbar: pointer offset inside the thumb.
+    drag_grab: Option<u32>,
+}
+
+static mut STATE: State = State {
+    open: false,
+    nav: Nav::new(),
+    items: Vec::new(),
+    installed: Vec::new(),
+    hits: HitRegistry::new(),
+    power_hover: None,
+    drag_grab: None,
+};
+
+/// The menu state.
+pub(super) fn state() -> &'static mut State {
+    // SAFETY: the WM input handlers and the compositor draw run on the one
+    // kernel render thread, so there is never a second live reference.
+    unsafe { &mut *core::ptr::addr_of_mut!(STATE) }
+}
+
+impl State {
+    /// Forget the regions of the previous frame; drawing re-registers them.
+    pub(super) fn clear_hits(&mut self) {
+        self.hits.clear();
+    }
+
+    /// Register a clickable rectangle for `target`.
+    pub(super) fn add_hit(&mut self, rect: layout::Rect, target: Target) {
+        let kind = match target {
+            Target::Search => HitKind::TextInput,
+            Target::Thumb | Target::Track => HitKind::ScrollBar,
+            Target::Item(_) | Target::PowerEntry(_) => HitKind::MenuItem,
+            Target::ViewSwitch | Target::PowerButton => HitKind::Button,
+        };
+        let region = HitRegion::new(rect.x, rect.y, rect.w, rect.h, target.to_tag(), kind);
+        // The registry holds more regions than any layout can show.
+        let _ = self.hits.add(region);
+    }
+
+    fn target_at(&self, x: u32, y: u32) -> Option<Target> {
+        self.hits
+            .hit_test(x, y)
+            .and_then(|region| Target::from_tag(region.tag))
+    }
+}
+
+/// Layout for the current screen above the taskbar.
+pub(super) fn screen_layout() -> Layout {
+    let fb = get_info();
+    layout::compute(fb.width, fb.height, crate::wm::panel::panel_height())
+}
+
+/// Entries the menu lists: the built-in registry, then installed apps.
+fn build_items(installed: &[InstalledApp]) -> Vec<Item> {
+    let builtin = APPS.iter().enumerate().map(|(i, app)| Item {
+        name: String::from(app.name),
+        keywords: String::from(
+            KEYWORDS
+                .iter()
+                .find(|(name, _)| *name == app.name)
+                .map_or("", |(_, words)| words),
+        ),
+        source: Source::Builtin(i),
+    });
+    let extra = installed.iter().enumerate().map(|(i, app)| Item {
+        name: app.name.clone(),
+        keywords: app.keywords.clone(),
+        source: Source::Installed(i),
+    });
+    builtin.chain(extra).collect()
+}
+
+/// Whether the menu is showing.
+pub fn is_open() -> bool {
+    state().open
+}
+
+fn open() {
+    let st = state();
+    st.installed = launcher::scan_installed_apps();
+    st.items = build_items(&st.installed);
+    st.nav = Nav::new();
+    st.power_hover = None;
+    st.drag_grab = None;
+    st.open = true;
+}
+
+/// Open the menu when closed, close it when open.
+pub fn toggle() {
+    if is_open() {
+        close();
+    } else {
+        open();
     }
     // Force a full recomposition so the menu appears/disappears immediately.
     crate::wm::compositor::mark_full_redraw();
-    let state = if is_open() { "open" } else { "closed" };
-    crate::println!("[wm] Start menu {}", state);
+    let label = if is_open() { "open" } else { "closed" };
+    crate::println!("[wm] Start menu {}", label);
 }
 
+/// Close the menu and drop everything it holds.
 pub fn close() {
-    unsafe {
-        if OPEN {
-            OPEN = false;
-        }
+    let st = state();
+    if !st.open {
+        return;
+    }
+    st.open = false;
+    st.nav = Nav::new();
+    st.drag_grab = None;
+    st.hits.clear();
+    crate::wm::compositor::mark_full_redraw();
+}
+
+/// Entries of the list the keyboard and hit regions index into.
+fn visible_list(layout: &Layout) -> Vec<usize> {
+    let st = state();
+    model::visible(&st.items, &st.nav, layout.grid_capacity())
+}
+
+fn nav_ctx(layout: &Layout, count: usize) -> NavCtx {
+    let in_grid = state().nav.mode() == Mode::Pinned;
+    NavCtx {
+        count,
+        cols: if in_grid {
+            layout::GRID_COLUMNS as usize
+        } else {
+            1
+        },
+        page: layout.list_page(),
     }
 }
 
-/// Mouse wheel/arrow scroll within the menu
+/// Scroll the list by whole rows (positive moves down).
 pub fn scroll(delta: i32) {
-    unsafe {
-        if !OPEN {
-            return;
-        }
-        let max_scroll = APPS.len().saturating_sub(VISIBLE_ROWS);
-        if delta > 0 && SCROLL < max_scroll {
-            SCROLL += 1;
-        } else if delta < 0 && SCROLL > 0 {
-            SCROLL -= 1;
+    let st = state();
+    if !st.open || st.nav.mode() == Mode::Pinned {
+        return;
+    }
+    let layout = screen_layout();
+    let max_scroll = visible_list(&layout)
+        .len()
+        .saturating_sub(layout.list_page());
+    let moved = (st.nav.scroll as i64 + i64::from(delta)).clamp(0, max_scroll as i64);
+    st.nav.scroll = moved as usize;
+}
+
+fn launch_item(item: &Item) {
+    match item.source {
+        Source::Builtin(i) => (APPS[i].launch)(),
+        Source::Installed(i) => {
+            let app = state().installed[i].clone();
+            if let Err(reason) = launcher::launch_installed(&app) {
+                crate::println!("[wm] Start menu: cannot launch {}: {}", app.name, reason);
+            }
         }
     }
 }
 
-/// Handle a click inside the menu region. Returns true if the click was
-/// consumed (so the WM does not also dispatch it to windows).
-pub fn handle_click(px: u32, py: u32) -> bool {
+/// Launch the entry at `pos` of the visible list and close the menu.
+fn activate(pos: usize) {
+    let layout = screen_layout();
+    let Some(&index) = visible_list(&layout).get(pos) else {
+        return;
+    };
+    let item = state().items[index].clone();
+    close();
+    launch_item(&item);
+}
+
+fn perform_power(action: PowerAction) {
+    close();
+    crate::println!("[wm] Start menu power: {}", action.label());
+    #[cfg(target_arch = "aarch64")]
+    match action {
+        PowerAction::Restart => crate::drivers::power::reset(),
+        PowerAction::ShutDown => crate::drivers::power::shutdown(),
+        PowerAction::Lock | PowerAction::LogOut => {}
+    }
+}
+
+/// Scancodes as the input device delivers them (set 1; the same codes the
+/// dialog and Task Manager key handlers use).
+const SC_ESC: u8 = 0x01;
+const SC_BACKSPACE: u8 = 0x0E;
+const SC_ENTER: u8 = 0x1C;
+const SC_UP: u8 = 0x48;
+const SC_PAGE_UP: u8 = 0x49;
+const SC_LEFT: u8 = 0x4B;
+const SC_RIGHT: u8 = 0x4D;
+const SC_DOWN: u8 = 0x50;
+const SC_PAGE_DOWN: u8 = 0x51;
+
+fn key_from_scancode(scancode: u8, ch: Option<char>) -> Option<Key> {
+    match scancode {
+        SC_ESC => Some(Key::Esc),
+        SC_ENTER => Some(Key::Enter),
+        SC_BACKSPACE => Some(Key::Backspace),
+        SC_UP => Some(Key::Up),
+        SC_DOWN => Some(Key::Down),
+        SC_LEFT => Some(Key::Left),
+        SC_RIGHT => Some(Key::Right),
+        SC_PAGE_UP => Some(Key::PageUp),
+        SC_PAGE_DOWN => Some(Key::PageDown),
+        _ => ch.filter(|c| (' '..='~').contains(c)).map(Key::Char),
+    }
+}
+
+/// Handle a key press while the menu is open. Returns true when the menu
+/// consumed it; chords with Ctrl, Alt or Super stay with the WM shortcuts.
+pub fn handle_key(scancode: u8, ch: Option<char>) -> bool {
     if !is_open() {
         return false;
     }
-    let (x0, y0) = menu_origin();
-    let w = MENU_WIDTH;
-    let h = MENU_HEIGHT;
-
-    // Outside → close, swallow nothing (let the click act on the desktop)
-    if px < x0 || px >= x0 + w || py < y0 || py >= y0 + h {
-        close();
+    let chord =
+        crate::usb::hid::alt_held() || crate::usb::hid::ctrl_held() || crate::usb::hid::gui_held();
+    let Some(key) = key_from_scancode(scancode, ch).filter(|_| !chord) else {
         return false;
-    }
-
-    // Header area → close
-    if py < y0 + MENU_TOP_PAD + 28 {
-        close();
-        return true;
-    }
-
-    // Tile row?
-    let inner_y = py - (y0 + MENU_TOP_PAD + 28);
-    if inner_y < VISIBLE_ROWS as u32 * (TILE_H + TILE_MARGIN) {
-        let row = (inner_y / (TILE_H + TILE_MARGIN)) as usize;
-        let idx = unsafe { SCROLL } + row;
-        if idx < APPS.len() {
+    };
+    let layout = screen_layout();
+    let count = visible_list(&layout).len();
+    let ctx = nav_ctx(&layout, count);
+    match state().nav.on_key(key, ctx) {
+        Outcome::Handled => {}
+        Outcome::Launch(pos) => activate(pos),
+        Outcome::Close => {
             close();
-            (APPS[idx].launch)();
         }
-        return true;
     }
     true
 }
 
-/// Track hover for highlight + keyboard selection
-pub fn handle_move(px: u32, py: u32) {
-    if !is_open() {
+fn press_scrollbar(layout: &Layout, target: Target, y: u32) {
+    let count = visible_list(layout).len();
+    let st = state();
+    let thumb = layout.scroll_thumb(count, st.nav.scroll);
+    if target == Target::Thumb {
+        st.drag_grab = Some(y.saturating_sub(thumb.y));
         return;
     }
-    let (x0, y0) = menu_origin();
-    if px < x0 || px >= x0 + MENU_WIDTH || py < y0 || py >= y0 + MENU_HEIGHT {
-        unsafe {
-            HOVER_ROW = -1;
-        }
-        return;
-    }
-    let inner_y = py.saturating_sub(y0 + MENU_TOP_PAD + 28);
-    if inner_y < VISIBLE_ROWS as u32 * (TILE_H + TILE_MARGIN) {
-        unsafe {
-            HOVER_ROW = (inner_y / (TILE_H + TILE_MARGIN)) as i32;
-        }
+    let page = layout.list_page();
+    let max_scroll = count.saturating_sub(page);
+    st.nav.scroll = if y < thumb.y {
+        st.nav.scroll.saturating_sub(page)
     } else {
-        unsafe {
-            HOVER_ROW = -1;
-        }
+        (st.nav.scroll + page).min(max_scroll)
+    };
+}
+
+fn switch_view() {
+    let nav = &mut state().nav;
+    match nav.view {
+        View::Pinned => nav.show(View::AllApps),
+        View::AllApps => nav.show(View::Pinned),
     }
 }
 
-/// Activate the hovered row (Enter key)
-pub fn activate_hovered() {
-    let row = unsafe { HOVER_ROW };
-    if row >= 0 {
-        let idx = unsafe { SCROLL } + row as usize;
-        if idx < APPS.len() {
-            close();
-            (APPS[idx].launch)();
+fn press_target(layout: &Layout, target: Target, y: u32) {
+    match target {
+        Target::Item(pos) => activate(pos),
+        Target::ViewSwitch => switch_view(),
+        Target::Search => {}
+        Target::PowerButton => state().nav.power_open = true,
+        Target::PowerEntry(i) => {
+            if let Some(action) = PowerAction::ALL.get(i).filter(|a| a.is_enabled()) {
+                perform_power(*action);
+            }
         }
+        Target::Thumb | Target::Track => press_scrollbar(layout, target, y),
     }
 }
 
-/// Handle a key while the menu is open (Esc closes, arrows move, Enter opens)
-pub fn handle_key(scancode: u8) -> bool {
+/// Handle a left press. Returns true when the menu consumed it, which is
+/// always the case while it is open: a press outside only closes it.
+pub fn handle_click(px: u32, py: u32) -> bool {
     if !is_open() {
         return false;
     }
-    match scancode {
-        0x29 if !crate::usb::hid::alt_held() => {
-            // Esc — close the menu
-            close();
-            true
-        }
-        0x50 | 0x52 => {
-            // Left/Up arrows — move hover up, scrolling as needed
-            unsafe {
-                if HOVER_ROW <= 0 && SCROLL > 0 {
-                    SCROLL -= 1;
-                }
-                if HOVER_ROW > 0 {
-                    HOVER_ROW -= 1;
-                } else {
-                    HOVER_ROW = 0;
-                }
+    let layout = screen_layout();
+    let st = state();
+    if st.nav.power_open {
+        if layout.power_menu.contains(px, py) {
+            if let Some(entry @ Target::PowerEntry(_)) = st.target_at(px, py) {
+                press_target(&layout, entry, py);
             }
-            true
+        } else {
+            st.nav.power_open = false;
         }
-        0x4F | 0x51 => {
-            // Right/Down arrows — move hover down, scrolling as needed
-            unsafe {
-                if HOVER_ROW < 0 {
-                    HOVER_ROW = 0;
-                } else if (HOVER_ROW as usize) < VISIBLE_ROWS - 1 {
-                    HOVER_ROW += 1;
-                } else if SCROLL + VISIBLE_ROWS < APPS.len() {
-                    SCROLL += 1;
-                }
-            }
-            true
-        }
-        0x28 => {
-            // Enter — launch hovered
-            activate_hovered();
-            true
-        }
-        _ => false,
+        return true;
     }
+    if !layout.menu.contains(px, py) {
+        close();
+        return true;
+    }
+    if let Some(target) = st.target_at(px, py) {
+        press_target(&layout, target, py);
+    }
+    true
 }
 
-fn menu_origin() -> (u32, u32) {
-    let fb = get_info();
-    // Anchor bottom-left, above the panel
-    let panel_h = crate::wm::panel::panel_height();
-    let x0 = 4;
-    let y0 = fb.height.saturating_sub(panel_h + MENU_HEIGHT + 4);
-    (x0, y0)
+fn drag_scrollbar(layout: &Layout, y: u32) {
+    let st = state();
+    let Some(grab) = st.drag_grab else { return };
+    let count = visible_list(layout).len();
+    st.nav.scroll = layout.scroll_for_thumb(count, y.saturating_sub(grab));
 }
 
-// ─── Rendering ────────────────────────────────────────────────────────
-
-pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
-    if !is_open() {
+/// Track the pointer: hover highlight and scrollbar dragging.
+pub fn handle_move(px: u32, py: u32) {
+    let st = state();
+    if !st.open {
         return;
     }
-    let theme = theme::current();
-    let (x0, y0) = menu_origin();
-
-    // Shadow (simple offset dark rect)
-    draw_rect(fb, x0 + 6, y0 + 8, MENU_WIDTH, MENU_HEIGHT, 0x66000000);
-
-    // Menu background + border
-    fill_rounded_rect(fb, x0, y0, MENU_WIDTH, MENU_HEIGHT, 10, theme.menu_bg);
-    draw_rect_outline(fb, x0, y0, MENU_WIDTH, MENU_HEIGHT, theme.menu_border);
-
-    // Header: brand
-    let header_h = 28u32;
-    draw_text(
-        fb,
-        x0 + 14,
-        y0 + MENU_TOP_PAD + (header_h - theme.font_size) / 2,
-        "LobsterOS",
-        theme.label_text,
-        theme.menu_bg,
-    );
-    // Divider
-    draw_rect(
-        fb,
-        x0 + 10,
-        y0 + MENU_TOP_PAD + header_h + 4,
-        MENU_WIDTH - 20,
-        1,
-        theme.menu_border,
-    );
-
-    // Tiles
-    let inner_x = x0 + 10;
-    let tiles_top = y0 + MENU_TOP_PAD + header_y_offset();
-    let tile_w = MENU_WIDTH - 20;
-    let scroll = unsafe { SCROLL };
-    let hover = unsafe { HOVER_ROW };
-
-    for row in 0..VISIBLE_ROWS {
-        let idx = scroll + row;
-        if idx >= APPS.len() {
-            break;
-        }
-        let app = &APPS[idx];
-        let ty = tiles_top + row as u32 * (TILE_H + TILE_MARGIN);
-
-        // Hover/selection highlight
-        let tile_bg = if hover == row as i32 {
-            theme.menu_item_hover
+    if st.drag_grab.is_some() {
+        if crate::wm::input::mouse_buttons().0 {
+            drag_scrollbar(&screen_layout(), py);
         } else {
-            blend(theme.menu_bg, app.color, 28)
-        };
-        fill_rounded_rect(fb, inner_x, ty, tile_w, TILE_H, 8, tile_bg);
-
-        // App tile icon, centred in the icon slot
-        let icon_sz = TILE_H - 16;
-        let inset = (icon_sz - MENU_ICON_SIZE) / 2;
-        icons::draw(
-            fb,
-            icons::for_app(app.name),
-            MENU_ICON_SIZE,
-            inner_x + 8 + inset,
-            ty + 8 + inset,
-        );
-
-        // App name
-        draw_text(
-            fb,
-            inner_x + icon_sz + 24,
-            ty + (TILE_H - theme.font_size) / 2,
-            app.name,
-            theme.label_text,
-            tile_bg,
-        );
+            st.drag_grab = None;
+        }
+        return;
     }
-
-    // Scroll indicator
-    if APPS.len() > VISIBLE_ROWS {
-        let bar_h = 4;
-        let track_y = tiles_top + VISIBLE_ROWS as u32 * (TILE_H + TILE_MARGIN) + 6;
-        draw_rect(fb, inner_x, track_y, tile_w, bar_h, theme.menu_border);
-        let thumb_w = (tile_w * VISIBLE_ROWS as u32 / APPS.len() as u32).max(40);
-        let thumb_x = inner_x
-            + (tile_w - thumb_w) * scroll as u32 / (APPS.len() - VISIBLE_ROWS).max(1) as u32;
-        draw_rect(fb, thumb_x, track_y, thumb_w, bar_h, theme.label_text_dim);
+    st.power_hover = None;
+    match st.target_at(px, py) {
+        Some(Target::Item(pos)) => st.nav.selected = Some(pos),
+        Some(Target::PowerEntry(i)) => st.power_hover = Some(i),
+        _ => {}
     }
-}
-
-fn header_y_offset() -> u32 {
-    28 + 4 + 4
-}
-
-fn blend(bg: u32, accent: u32, alpha: u32) -> u32 {
-    theme::blend_colors(accent, bg, alpha)
 }
 
 /// Launch an app by name (used by the shell `app <name>` command and the
@@ -428,8 +546,6 @@ pub fn launch_by_name(name: &str) -> bool {
     false
 }
 
-// ─── Launch helpers ───────────────────────────────────────────────────
-
 /// Focus an existing window with this exact title, else run `create`.
 fn focus_or_create(title: &str, _w: u32, _h: u32, create: impl FnOnce()) {
     for id in 1..=window::max_id() {
@@ -439,4 +555,48 @@ fn focus_or_create(title: &str, _w: u32, _h: u32, create: impl FnOnce()) {
         }
     }
     create();
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn control_scancodes_map_to_menu_keys() {
+        assert_eq!(key_from_scancode(SC_ESC, Some('\u{1b}')), Some(Key::Esc));
+        assert_eq!(key_from_scancode(SC_ENTER, Some('\n')), Some(Key::Enter));
+        assert_eq!(key_from_scancode(SC_BACKSPACE, None), Some(Key::Backspace));
+        assert_eq!(key_from_scancode(SC_DOWN, None), Some(Key::Down));
+    }
+
+    #[test]
+    fn printable_characters_become_search_input() {
+        assert_eq!(key_from_scancode(0x2E, Some('c')), Some(Key::Char('c')));
+        assert_eq!(key_from_scancode(0x39, Some(' ')), Some(Key::Char(' ')));
+        assert_eq!(key_from_scancode(0x3B, None), None);
+    }
+
+    #[test]
+    fn hit_tags_round_trip_every_target() {
+        let targets = [
+            Target::Item(37),
+            Target::ViewSwitch,
+            Target::Search,
+            Target::PowerButton,
+            Target::PowerEntry(3),
+            Target::Thumb,
+            Target::Track,
+        ];
+        for target in targets {
+            assert_eq!(Target::from_tag(target.to_tag()), Some(target));
+        }
+    }
+
+    #[test]
+    fn builtin_items_carry_search_keywords() {
+        let items = build_items(&[]);
+        let terminal = items.iter().find(|item| item.name == "Terminal");
+        assert!(terminal.is_some_and(|item| item.keywords.contains("console")));
+        assert_eq!(items.len(), APPS.len());
+    }
 }
