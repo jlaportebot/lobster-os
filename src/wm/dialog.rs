@@ -514,12 +514,9 @@ pub fn handle_click(px: u32, py: u32) -> bool {
         }
     }
 
-    // Click on dialog background (but not on controls) - consume but do nothing
-    if px >= dx && px < dx + DIALOG_W && py >= dy && py < dy + get_dialog_height(&dialog.kind) {
-        return true;
-    }
-
-    false
+    // A click on the dialog background (not on a control) is consumed so it
+    // cannot reach the window underneath the modal.
+    px >= dx && px < dx + DIALOG_W && py >= dy && py < dy + get_dialog_height(&dialog.kind)
 }
 
 /// Get dialog height for a kind
