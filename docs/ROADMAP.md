@@ -268,9 +268,14 @@ and tested by CI; nothing is hand-assembled.
       dispatch 731, …) — split when touched.
 
 ### O6. Storage and filesystems
-- [~] **O6.1 ext2 hardening**: fsck-clean after every harness run (`e2fsck -fn` on the host
+- [x] **O6.1 ext2 hardening**: fsck-clean after every harness run (`e2fsck -fn` on the host
       as a test), indirect blocks, large files, free-space accounting, timestamps from O1.2.
-      *2026-11-17:* every write path fsck-clean, host test bed with an e2fsck oracle (b36c0f0). Open: timestamps (always 0), VFS caps (128 nodes, 16 entries/dir, 32-byte names) hide on-disk files.
+      *2026-11-17:* every write path fsck-clean, host test bed with an e2fsck oracle (b36c0f0).
+      *2026-11-18:* VFS shows exactly what is on disk: growable node arena (no 128-node / 16-entry /
+      32-byte-name caps; 4096-entry dirs, 255-byte names), directories expanded on every read path,
+      real size/mode/owner/mtime before open, wall-clock inode timestamps, files at the /sd root
+      persist, tolerant of old images' zero-tailed dir blocks (f3223e6; repro vs debugfs identical,
+      gate 407 tests, harness 12/12). Remaining caps: 512 KiB per file in the VFS, 8 mounts.
 - [ ] **O6.2 FAT32** read/write (boot partition, USB sticks).
 - [ ] **O6.3 Page cache + write-back**, `sync` on shutdown.
 - [ ] **O6.4 Larger disks**: resize the system image, partition table support.
@@ -337,3 +342,4 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-18 | D- and I-caches on (SCTLR C/I) with DMA/code cache maintenance; the kernel now boots under KVM | gate 363 tests + harness 12/12 (TCG) + KVM boot to desktop-ready |
 | 2026-11-18 | O3.4 desktop icons (all but rubber-band); Welcome window visible again; dialogs dim instead of black; `dmesg` from a bounded kernel-log ring; Terminal runs shell commands and shows their output | gate 391 tests + harness 12/12 + screenshots |
 | 2026-11-18 | QEMU input modifiers translated to the HID layout (Shift/Ctrl were swapped); `lobstervm --accel kvm`; `/bin/spin` test programs on the base image; QEMU fork builds portably (E3.1, `qemu-nightly`) | gate 396 tests + harness (Shift path, Esc now asserted) + CI 4/4 platforms |
+| 2026-11-18 | O6.1 done: VFS directory fidelity (no node/entry/name caps, metadata on listing, timestamps); heap expansion no longer allocates while full | gate 407 tests + harness 12/12 + guest-vs-debugfs repro |
