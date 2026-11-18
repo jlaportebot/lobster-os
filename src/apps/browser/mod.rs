@@ -12,6 +12,10 @@ use crate::wm::window;
 
 use super::browser_text::{validate_url, History, Page, MAX_LINES};
 
+pub mod history;
+pub mod html;
+pub mod url;
+
 /// Visible rows in the page area
 const VISIBLE_ROWS: usize = 28;
 
