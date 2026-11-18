@@ -1099,6 +1099,17 @@ fn vfs_lists_a_never_traversed_directory_after_remount() {
 }
 
 #[test]
+fn vfs_file_created_at_the_mount_root_survives_a_remount() {
+    with_volume(FIXTURE_4K, |vol| {
+        boot_vfs();
+        vfs::write_file("/sd/proof.txt", b"x\n").expect("write at the mount root");
+        boot_vfs();
+        assert_eq!(vfs::read_file("/sd/proof.txt").expect("read back"), b"x\n");
+        assert_clean(vol);
+    });
+}
+
+#[test]
 fn vfs_stat_reports_real_metadata_before_any_open() {
     with_volume(FIXTURE_4K, |_vol| {
         let _clock = ClockGuard::set(WALL_CLOCK_SECS);
