@@ -507,16 +507,13 @@ fn check_link_counts(fs: &mut Ext2FileSystem) -> FsckResult {
         }
 
         // Read directory entries
-        let dir_entries = match fs.read_dir(inode_num) {
+        let dir_entries = match fs.list_entries(inode_num) {
             Ok(e) => e,
             Err(_) => continue,
         };
 
         for entry in &dir_entries {
-            if entry.inode_id == 0 {
-                continue;
-            }
-            let target = entry.inode_id as usize;
+            let target = entry.1 as usize;
             if target < link_counts.len() {
                 link_counts[target] = link_counts[target].saturating_add(1);
             }
@@ -596,7 +593,7 @@ fn check_directory_structure(fs: &mut Ext2FileSystem) -> FsckResult {
             continue; // Not a directory
         }
 
-        let dir_entries = match fs.read_dir(inode_num) {
+        let dir_entries = match fs.list_entries(inode_num) {
             Ok(e) => e,
             Err(_) => {
                 println!("[fsck] ERROR: Cannot read directory inode {}", inode_num);
@@ -609,21 +606,18 @@ fn check_directory_structure(fs: &mut Ext2FileSystem) -> FsckResult {
         let mut has_dot = false;
         let mut has_dotdot = false;
         for entry in &dir_entries {
-            if entry.inode_id == 0 {
-                continue;
-            }
-            if entry.name_len == 1 && entry.name[0] == b'.' {
+            if entry.0 == "." {
                 has_dot = true;
                 // . should point to self
-                if entry.inode_id != inode_num as u64 {
+                if entry.1 != inode_num {
                     println!(
                         "[fsck] ERROR: Directory inode {} '.' points to {} instead of self",
-                        inode_num, entry.inode_id
+                        inode_num, entry.1
                     );
                     errors = true;
                 }
             }
-            if entry.name_len == 2 && entry.name[0] == b'.' && entry.name[1] == b'.' {
+            if entry.0 == ".." {
                 has_dotdot = true;
             }
         }

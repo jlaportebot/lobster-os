@@ -297,9 +297,8 @@ impl Fat32FileSystem {
     }
 
     /// Read directory entries from a cluster
-    pub fn read_dir(&self, cluster: u32) -> Result<[DirEntry; MAX_DIR_ENTRIES], VfsError> {
-        let mut entries = [DirEntry::empty(); MAX_DIR_ENTRIES];
-        let mut entry_count = 0usize;
+    pub fn read_dir(&self, cluster: u32) -> Result<alloc::vec::Vec<DirEntry>, VfsError> {
+        let mut entries = alloc::vec::Vec::new();
         let mut current_cluster = cluster;
         let _cluster_size =
             self.bpb.sectors_per_cluster as usize * self.bpb.bytes_per_sector as usize;
@@ -307,10 +306,7 @@ impl Fat32FileSystem {
         let mut _lfn_len = 0usize;
 
         loop {
-            if Self::is_eoc(current_cluster)
-                || current_cluster == 0
-                || entry_count >= MAX_DIR_ENTRIES
-            {
+            if Self::is_eoc(current_cluster) || current_cluster == 0 {
                 break;
             }
 
@@ -321,10 +317,6 @@ impl Fat32FileSystem {
                 read_block_device(self.device_index, sector + s as u64, &mut sector_buf)?;
 
                 for entry_idx in 0..(512 / 32) {
-                    if entry_count >= MAX_DIR_ENTRIES {
-                        break;
-                    }
-
                     let offset = entry_idx * 32;
                     let raw = &sector_buf[offset..offset + 32];
 
@@ -388,15 +380,16 @@ impl Fat32FileSystem {
                     let first_cluster = ((dir_entry.first_cluster_high as u32) << 16)
                         | dir_entry.first_cluster_low as u32;
 
-                    entries[entry_count].name[..name_len].copy_from_slice(&name_buf[..name_len]);
-                    entries[entry_count].name_len = name_len;
-                    entries[entry_count].file_type = if is_dir {
+                    let mut entry = DirEntry::empty();
+                    entry.set_name(core::str::from_utf8(&name_buf[..name_len]).unwrap_or("?"));
+                    entry.file_type = if is_dir {
                         FileType::Directory
                     } else {
                         FileType::RegularFile
                     };
-                    entries[entry_count].inode_id = first_cluster as u64;
-                    entry_count += 1;
+                    entry.inode_id = first_cluster as u64;
+                    entries.try_reserve(1).map_err(|_| VfsError::OutOfMemory)?;
+                    entries.push(entry);
                 }
             }
 
@@ -452,10 +445,7 @@ pub fn mount(device_index: usize, partition_start: u64, mount_path: &str) -> Res
     // Create mount point in VFS
     let mount_inode = alloc_node(mount_path.trim_start_matches('/'), FileType::Directory, 0)?;
 
-    for entry in &root_entries[..] {
-        if entry.name_len == 0 {
-            break;
-        }
+    for entry in &root_entries {
         let _ = alloc_node(entry.name_str(), entry.file_type, mount_inode);
     }
 

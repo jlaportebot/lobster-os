@@ -233,6 +233,10 @@ const EXT2_S_IFMT: u16 = 0xF000;
 const EXT2_S_IFREG: u16 = 0x8000;
 const EXT2_S_IFDIR: u16 = 0x4000;
 const EXT2_S_IFLNK: u16 = 0xA000;
+const EXT2_S_IFCHR: u16 = 0x2000;
+const EXT2_S_IFBLK: u16 = 0x6000;
+/// Permission, setuid/setgid and sticky bits of `i_mode`.
+const EXT2_PERMISSION_MASK: u16 = 0o7777;
 const EXT2_S_IRUSR: u16 = 0x0100;
 const EXT2_S_IWUSR: u16 = 0x0080;
 const EXT2_S_IXUSR: u16 = 0x0040;
@@ -327,13 +331,14 @@ struct RawDirEntry {
 impl Ext2Inode {
     /// A fresh inode: every field zero except mode and link count.
     fn new(mode: u16, links: u16) -> Self {
+        let now = now_secs().to_le();
         Ext2Inode {
             i_mode: mode.to_le(),
             i_uid: 0,
             i_size: 0,
-            i_atime: 0,
-            i_ctime: 0,
-            i_mtime: 0,
+            i_atime: now,
+            i_ctime: now,
+            i_mtime: now,
             i_dtime: 0,
             i_gid: 0,
             i_links_count: links.to_le(),
@@ -452,35 +457,68 @@ fn deletion_time() -> u32 {
     }
 }
 
+/// Record a content change: mtime and ctime become "now". Without a wall
+/// clock the stamps are left as they were rather than set to a wrong time.
+fn stamp_modified(inode: &mut Ext2Inode) {
+    let now = now_secs();
+    if now != 0 {
+        inode.i_mtime = now.to_le();
+        inode.i_ctime = now.to_le();
+    }
+}
+
 static mut EXT2_INSTANCE: Option<Ext2FileSystem> = None;
 
-/// Expand an ext2-backed directory: read its entries and materialize VFS
-/// child nodes (once per directory per boot). Called lazily by the VFS on
-/// first traversal into a backing-store directory.
-pub fn expand_dir(ino: u32, parent_node_id: u64, fs_id: u32) -> Result<(), VfsError> {
-    unsafe {
-        let fs = EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)?;
-        let entries = fs.read_dir(ino)?;
-        for entry in &entries {
-            if entry.name_len == 0 {
-                break;
-            }
-            let name = entry.name_str();
-            if name == "." || name == ".." {
-                continue;
-            }
-            // Skip if the child already exists in the VFS.
-            if let Some(parent) = crate::fs::vfs::get_node(parent_node_id) {
-                if parent.find_child(name).is_some() {
-                    continue;
-                }
-            }
-            if let Ok(node_id) = crate::fs::vfs::alloc_node(name, entry.file_type, parent_node_id) {
-                crate::fs::vfs::set_node_backing(node_id, fs_id, entry.inode_id as u32);
-            }
+/// One directory entry of the backing store, with its inode's metadata.
+pub struct BackedChild {
+    pub name: String,
+    pub ino: u32,
+    pub metadata: Metadata,
+}
+
+/// Read every entry of directory inode `ino` (without `.` and `..`) together
+/// with the size, type, mode, owner and mtime of the inode it names, so the
+/// VFS can list the directory without opening any file.
+pub fn read_backing_dir(ino: u32) -> Result<alloc::vec::Vec<BackedChild>, VfsError> {
+    // SAFETY: the single mounted instance is only used from kernel task context.
+    let fs = unsafe { EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)? };
+    let names = fs.list_entries(ino)?;
+    let mut children = alloc::vec::Vec::new();
+    children
+        .try_reserve_exact(names.len())
+        .map_err(|_| VfsError::OutOfMemory)?;
+    for (name, child_ino) in names {
+        if name == "." || name == ".." {
+            continue;
         }
+        let metadata = inode_metadata(&fs.read_inode(child_ino)?);
+        children.push(BackedChild {
+            name,
+            ino: child_ino,
+            metadata,
+        });
     }
-    Ok(())
+    Ok(children)
+}
+
+/// VFS metadata for an on-disk inode (the VFS assigns `inode_id` itself).
+fn inode_metadata(inode: &Ext2Inode) -> Metadata {
+    let mode = u16::from_le(inode.i_mode);
+    let file_type = match mode & EXT2_S_IFMT {
+        EXT2_S_IFDIR => FileType::Directory,
+        EXT2_S_IFLNK => FileType::Symlink,
+        EXT2_S_IFCHR | EXT2_S_IFBLK => FileType::Device,
+        _ => FileType::RegularFile,
+    };
+    Metadata {
+        size: u64::from(u32::from_le(inode.i_size)),
+        file_type,
+        permissions: u32::from(mode & EXT2_PERMISSION_MASK),
+        modified_time: u64::from(u32::from_le(inode.i_mtime)),
+        inode_id: 0,
+        uid: u32::from(u16::from_le(inode.i_uid)),
+        gid: u32::from(u16::from_le(inode.i_gid)),
+    }
 }
 
 /// Whether a VFS node's backing directory has been expanded already.
@@ -1199,107 +1237,21 @@ impl Ext2FileSystem {
 
     // ─── Directory operations ───────────────────────────────────────
 
-    /// Read directory entries from an inode. Returns up to MAX_DIR_ENTRIES entries.
-    pub fn read_dir(
-        &mut self,
-        dir_inode_num: u32,
-    ) -> Result<[DirEntry; MAX_DIR_ENTRIES], VfsError> {
-        let inode = self.read_inode(dir_inode_num)?;
-
-        // Verify it's a directory
-        let mode = u16::from_le(inode.i_mode);
-        if mode & EXT2_S_IFMT != EXT2_S_IFDIR {
-            return Err(VfsError::NotADirectory);
-        }
-
-        let mut entries = [DirEntry::empty(); MAX_DIR_ENTRIES];
-        let dir_size = u32::from_le(inode.i_size) as usize;
-        let mut entry_count = 0usize;
-        let mut offset = 0usize;
-
-        // Read directory data blocks (supports indirect blocks)
-        let total_blocks = (dir_size + self.block_size as usize - 1) / self.block_size as usize;
-        for block_idx in 0..total_blocks {
-            if entry_count >= MAX_DIR_ENTRIES {
-                break;
+    /// Every live entry of a directory as `(name, inode)`, including `.` and
+    /// `..`. There is no entry cap; memory exhaustion is an error.
+    pub fn list_entries(&mut self, dir_ino: u32) -> Result<Vec<(String, u32)>, VfsError> {
+        let mut entries = Vec::new();
+        let mut failure = None;
+        self.scan_dir(dir_ino, &mut |loc, name| {
+            let item = String::from_utf8_lossy(name).into_owned();
+            if entries.try_reserve(1).is_err() {
+                failure = Some(VfsError::OutOfMemory);
+                return true;
             }
-            let block_num = match self.resolve_block(&inode, block_idx as u64) {
-                Ok(bn) => bn,
-                Err(_) => break,
-            };
-            if block_num == 0 {
-                // Sparse block — skip
-                offset += self.block_size as usize;
-                continue;
-            }
-
-            let mut block_buf = [0u8; 4096];
-            let block_buf_slice = &mut block_buf[..self.block_size as usize];
-            read_block(self, block_num, block_buf_slice)?;
-
-            let mut pos = 0usize;
-            while pos < self.block_size as usize - 12
-                && offset + pos < dir_size
-                && entry_count < MAX_DIR_ENTRIES
-            {
-                let raw = &block_buf_slice[pos..];
-                if raw.len() < 12 {
-                    break;
-                }
-
-                let dentry = unsafe { &*(raw.as_ptr() as *const Ext2DirEntry) };
-                let d_inode = u32::from_le(dentry.inode);
-                let d_rec_len = u16::from_le(dentry.rec_len) as usize;
-                let d_name_len = dentry.name_len as usize;
-                let d_file_type = dentry.file_type;
-
-                if d_rec_len == 0 {
-                    break; // Prevent infinite loop
-                }
-
-                if d_inode != 0 && d_name_len > 0 && d_rec_len >= 12 {
-                    // ext2 dir entry: 8-byte header (inode:4 + rec_len:2 + name_len:1 + file_type:1)
-                    let name_start_actual = pos + 8;
-                    let name_end = name_start_actual + d_name_len;
-
-                    if name_end <= block_buf_slice.len() {
-                        let name_bytes = &block_buf_slice[name_start_actual..name_end];
-                        let name_str = core::str::from_utf8(name_bytes).unwrap_or("?");
-
-                        let ft = match d_file_type {
-                            EXT2_FT_REG_FILE => FileType::RegularFile,
-                            EXT2_FT_DIR => FileType::Directory,
-                            EXT2_FT_SYMLINK => FileType::Symlink,
-                            EXT2_FT_CHRDEV | EXT2_FT_BLKDEV => FileType::Device,
-                            _ => FileType::RegularFile,
-                        };
-
-                        entries[entry_count].set_name(name_str);
-                        entries[entry_count].file_type = ft;
-                        entries[entry_count].inode_id = d_inode as u64;
-
-                        // Try to get size from the child inode
-                        if let Ok(child_inode) = self.read_inode(d_inode) {
-                            entries[entry_count].size = u32::from_le(child_inode.i_size) as u64;
-                            entries[entry_count].uid = u16::from_le(child_inode.i_uid) as u32;
-                            entries[entry_count].gid = u16::from_le(child_inode.i_gid) as u32;
-                        }
-                        entries[entry_count].is_dir = ft == FileType::Directory;
-
-                        entry_count += 1;
-                    }
-                }
-
-                pos += d_rec_len;
-                if d_rec_len < 12 {
-                    break; // Corrupted entry
-                }
-            }
-
-            offset += self.block_size as usize;
-        }
-
-        Ok(entries)
+            entries.push((item, loc.ino));
+            false
+        })?;
+        failure.map_or(Ok(entries), Err)
     }
 
     /// Lookup a name in a directory inode. Returns the child inode number.
@@ -1385,7 +1337,7 @@ impl Ext2FileSystem {
         for index in 0..blocks {
             let block_no = self.resolve_block(&parent, index as u64)?;
             if block_no != 0 && self.insert_into_block(block_no, &new_entry)? {
-                return self.clear_dir_index_flag(parent_inode_num, &mut parent);
+                return self.commit_dir_edit(parent_inode_num, &mut parent);
             }
         }
         self.append_dir_block(parent_inode_num, &mut parent, blocks as u64, &new_entry)
@@ -1440,13 +1392,15 @@ impl Ext2FileSystem {
         put_dirent(&mut buf, 0, bs, entry);
         write_block(self, block_no, &buf[..bs])?;
         dir.i_size = (((index + 1) * bs as u64) as u32).to_le();
-        self.clear_dir_index_flag(dir_ino, dir)
+        self.commit_dir_edit(dir_ino, dir)
     }
 
-    /// Entries are edited without maintaining an htree, so the index flag
-    /// has to go or e2fsck would validate a stale hash tree.
-    fn clear_dir_index_flag(&mut self, dir_ino: u32, dir: &mut Ext2Inode) -> Result<(), VfsError> {
+    /// Finish an edit of a directory's entries. They are edited without
+    /// maintaining an htree, so the index flag has to go or e2fsck would
+    /// validate a stale hash tree; mtime/ctime record the change.
+    fn commit_dir_edit(&mut self, dir_ino: u32, dir: &mut Ext2Inode) -> Result<(), VfsError> {
         dir.i_flags = (u32::from_le(dir.i_flags) & !EXT2_INDEX_FL).to_le();
+        stamp_modified(dir);
         self.write_inode(dir_ino, dir)
     }
 
@@ -1468,7 +1422,7 @@ impl Ext2FileSystem {
         }
         write_block(self, loc.block_no, &buf[..bs])?;
         let mut dir = self.read_inode(dir_ino)?;
-        self.clear_dir_index_flag(dir_ino, &mut dir)?;
+        self.commit_dir_edit(dir_ino, &mut dir)?;
         Ok(loc)
     }
 
@@ -1933,6 +1887,7 @@ impl Ext2FileSystem {
             self.truncate_blocks(&mut inode, keep)?;
         }
         inode.i_size = (new_size as u32).to_le();
+        stamp_modified(&mut inode);
         self.write_inode(inode_num, &inode)?;
 
         match failure {
@@ -2041,11 +1996,6 @@ impl Ext2FileSystem {
             return Ok(()); // Nothing to commit
         }
 
-        println!(
-            "[ext2] Journal commit: seq={}, entries pending",
-            self.journal_seq
-        );
-
         // In this simplified journal, writes already went to disk.
         // A full journal would: (1) write all data to journal area,
         // (2) write commit record, (3) write to final locations,
@@ -2114,26 +2064,10 @@ impl Ext2FileSystem {
 
     // ─── VFS integration ────────────────────────────────────────────
 
-    /// Populate the VFS with entries from the ext2 root directory.
+    /// Tag the mount node as the ext2 root; its children are materialized on
+    /// first use by the VFS (`ensure_expanded`), not eagerly here.
     fn populate_vfs(&mut self, parent_id: u64, fs_id: u32) -> Result<(), VfsError> {
-        let root_entries = self.read_dir(EXT2_ROOT_INO)?;
-
-        for entry in &root_entries {
-            if entry.name_len == 0 {
-                break;
-            }
-            let name = entry.name_str();
-            if name == "." || name == ".." {
-                continue; // Skip self/parent references
-            }
-            if let Ok(node_id) = alloc_node(name, entry.file_type, parent_id) {
-                // Tag the node with the ext2 filesystem id + record the ext2
-                // inode so reads/writes can route through the backing store.
-                let ext2_ino = entry.inode_id as u32;
-                crate::fs::vfs::set_node_backing(node_id, fs_id, ext2_ino);
-            }
-        }
-
+        crate::fs::vfs::set_node_backing(parent_id, fs_id, EXT2_ROOT_INO);
         Ok(())
     }
 
@@ -2212,30 +2146,13 @@ impl FileSystem for Ext2FileSystem {
     }
 
     fn get_metadata(&self, inode_id: u64) -> Result<Metadata, VfsError> {
-        unsafe {
-            if let Some(ref mut fs) = EXT2_INSTANCE {
-                let inode = fs.read_inode(inode_id as u32)?;
-                let mode = u16::from_le(inode.i_mode);
-                let ft = if mode & EXT2_S_IFDIR != 0 {
-                    FileType::Directory
-                } else if mode & EXT2_S_IFLNK != 0 {
-                    FileType::Symlink
-                } else {
-                    FileType::RegularFile
-                };
-                Ok(Metadata {
-                    size: u32::from_le(inode.i_size) as u64,
-                    file_type: ft,
-                    permissions: (mode & 0o7777) as u32,
-                    modified_time: u32::from_le(inode.i_mtime) as u64,
-                    inode_id,
-                    uid: u16::from_le(inode.i_uid) as u32,
-                    gid: u16::from_le(inode.i_gid) as u32,
-                })
-            } else {
-                Err(VfsError::IOError)
-            }
-        }
+        // SAFETY: the single mounted instance is only used from kernel task context.
+        let fs = unsafe { EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)? };
+        let metadata = inode_metadata(&fs.read_inode(inode_id as u32)?);
+        Ok(Metadata {
+            inode_id,
+            ..metadata
+        })
     }
 }
 
