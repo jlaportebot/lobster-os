@@ -29,7 +29,7 @@ Gate every push on `tools/gui_test.py` in the emulator repo.
 
 ## 0. Where things stand
 
-**2026-11-17:** items above the line in the execution order are done except O2.3/O2.4/O3.2/O3.3 (in progress); the emulator writes guest disks safely (QEMU fix), host tests are deterministic (crate-wide test lock), and KVM acceleration (E1.13) is being evaluated. The list below is the original 2026-11-09 baseline, kept for reference.
+**2026-11-18:** execution-order steps 1–2 are done (desktop core incl. fonts, icons, taskbar, start menu); in flight: desktop icons O3.4, cache enable for KVM/real hardware, VFS directory caps, portable QEMU builds E3.1; next: installers E3.3, Settings O4.1, Files O4.2. The list below is the original 2026-11-09 baseline, kept for reference.
 
 ### Baseline (verified 2026-11-09)
 
@@ -119,7 +119,8 @@ What is wrong, in order of how much it hurts a desktop user (all seen live this 
       *Verified 2026-11-16:* `lobstervm disk info/export/import/resize`; `tools/mkbase.py` builds an fsck-clean base image from a tracked tree.
 - [x] **E2.8 Unit tests** for `lobstervm` (config validation, command line, HMP parsing) in CI.
       *Verified:* 158 unit tests + ruff in emulator CI.
-- [ ] **E2.9 Docs**: README rewritten around `lobstervm`; STATUS.md regenerated from facts.
+- [x] **E2.9 Docs**: README rewritten around `lobstervm`; STATUS.md regenerated from facts.
+      *Verified 2026-11-17:* emulator f3b2716.
 
 ### E3. One-click installers (Windows, macOS, Linux) — requested 2026-11-17, re-confirmed 2026-11-18
 Goal: a user downloads one file for their OS, double-clicks it, and gets LobsterVM with the
@@ -130,9 +131,10 @@ and tested by CI; nothing is hand-assembled.
       `qemu-system-aarch64` for linux-x86_64, linux-arm64, macos-arm64, windows-x86_64, boots the
       LobsterOS kernel headless to `desktop-ready` on each, checks the bundle is self-contained, and
       publishes a rolling `qemu-nightly` release.
-- [ ] **E3.2 Portable `lobstervm`**: no Unix-socket/FIFO/`/tmp` assumptions (TCP or named-pipe
+- [x] **E3.2 Portable `lobstervm`**: no Unix-socket/FIFO/`/tmp` assumptions (TCP or named-pipe
       channels on Windows), per-OS data dirs, display backend auto-pick (gtk/cocoa/sdl), finds a
       bundled QEMU next to itself; PyInstaller spec; unit tests + harness on all three OSes in CI.
+      *Verified 2026-11-18:* Unix-socket/TCP channels, portable process control, per-OS dirs, display auto, bundle discovery, PyInstaller spec + bundle assembler + smoke test; CI unit tests + PyInstaller green on ubuntu/macos/windows; harness 12/12 on both transports; local bundle smoke passed (emulator 51af4d2). Live Windows/macOS runs arrive with E3.3's smoke matrix.
 - [ ] **E3.3 Release pipeline** (emulator repo): on tag / nightly, gather `kernel-nightly`
       (kernel8.img), `qemu-nightly` (per OS), base disk from `tools/mkbase.py`, frozen `lobstervm`
       → Windows Inno Setup `.exe` (Start-menu + desktop shortcut), macOS `.dmg` (drag-to-Applications
@@ -170,10 +172,12 @@ and tested by CI; nothing is hand-assembled.
 - [x] **O2.2 Hit regions**: apps register clickable rectangles while drawing; one router
       stage dispatches presses to the topmost window's region. Replaces per-app router stages.
       *Verified 2026-11-16:* hit-region registry + single click router (ed69507, 7ba9f51 EL0/tab-strip fix).
-- [ ] **O2.3 Font engine** (audit Q24): anti-aliased proportional UI font and a monospace
+- [x] **O2.3 Font engine** (audit Q24): anti-aliased proportional UI font and a monospace
       font, several sizes, generated at build time into alpha atlases; `text::draw/width`.
-- [ ] **O2.4 Icon set**: real 48/24 px icons for apps, files, folders, tray, generated at
+      *Verified 2026-11-17:* Inter (UI) + DejaVu Sans Mono atlases, `src/display/text.rs` (`draw`, `width`, `draw_fitted`); used by taskbar, start menu, dialogs.
+- [x] **O2.4 Icon set**: real 48/24 px icons for apps, files, folders, tray, generated at
       build time; used by desktop, start menu, panel, Files.
+      *Verified 2026-11-17:* app/file icons at 48/32/24/16 + tinted symbolic glyphs (`src/display/icons.rs`); desktop, taskbar, start menu use them (Files moves over in O4.2).
 - [ ] **O2.5 Effects**: soft shadows, clean rounded corners (no black artefacts), open/close/
       minimise animations, snap preview (audit Q17).
 - [ ] **O2.6 Image decoders**: PNG (inflate) and JPEG baseline, for wallpapers, the image
@@ -190,8 +194,9 @@ and tested by CI; nothing is hand-assembled.
       *Verified 2026-11-16:* no app windows at boot, kernel log off the Terminal, Welcome once (marker on /sd).
 - [x] **O3.2 Taskbar**: start button, pinned + running apps with titles, click to
       focus/minimise, tray (network, volume, clock with date), show-desktop corner.
-- [ ] **O3.3 Start menu**: real icons, search box, All apps incl. installed packages, user
+- [x] **O3.3 Start menu**: real icons, search box, All apps incl. installed packages, user
       row, power row (lock, log out, restart, shut down).
+      *Verified 2026-11-18:* live search + keyboard, pinned grid, All apps with `pkg install`ed apps, power menu (Restart/Shut down work; Lock/Log out disabled until O3.8), Super/Esc/outside click close; above the panel at 1920×1080…800×600 (bd672c9, gate 354 tests, harness 12/12).
 - [ ] **O3.4 Desktop icons**: grid layout, drag to arrange (persisted), rubber-band select,
       double-click to open, files in `~/Desktop` appear as icons, right-click menu
       (new folder/file, change wallpaper, display settings).
@@ -255,8 +260,9 @@ and tested by CI; nothing is hand-assembled.
       dispatch 731, …) — split when touched.
 
 ### O6. Storage and filesystems
-- [ ] **O6.1 ext2 hardening**: fsck-clean after every harness run (`e2fsck -fn` on the host
+- [~] **O6.1 ext2 hardening**: fsck-clean after every harness run (`e2fsck -fn` on the host
       as a test), indirect blocks, large files, free-space accounting, timestamps from O1.2.
+      *2026-11-17:* every write path fsck-clean, host test bed with an e2fsck oracle (b36c0f0). Open: timestamps (always 0), VFS caps (128 nodes, 16 entries/dir, 32-byte names) hide on-disk files.
 - [ ] **O6.2 FAT32** read/write (boot partition, USB sticks).
 - [ ] **O6.3 Page cache + write-back**, `sync` on shutdown.
 - [ ] **O6.4 Larger disks**: resize the system image, partition table support.
@@ -319,3 +325,4 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-17 | QEMU: `-drive` backend gets write permission (guest writes no longer abort); host tests serialized on shared globals; E2.4/E2.6 verified | `lobstervm` write/snapshot/restart; 15× host test runs |
 | 2026-11-18 | O3.2 taskbar (pinned apps, running windows, tray, calendar); E1.13 KVM accel in QEMU (needs kernel cache enable); E3 one-click installers added to plan | gate 301 tests + harness 12/12 |
 | 2026-11-18 | O5.2 timer preemption of EL0 slices, foreground `run` sliced; O5.3 Ctrl+C + `kill` with resource reclaim | gate 319 tests + harness 12/12 + live spinner check |
+| 2026-11-18 | O3.3 start menu; E3.2 portable `lobstervm`; O2.3/O2.4/E2.9 ticked (landed 11-17) | gate 354 tests + harness 12/12 (both transports) + bundle smoke |

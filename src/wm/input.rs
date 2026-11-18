@@ -276,6 +276,11 @@ pub fn mouse_buttons() -> (bool, bool, bool) {
 
 // ─── Keyboard Dispatch ─────────────────────────────────────────────
 
+/// Scancode of the left Super (Windows) key.
+const SC_LEFT_GUI: u8 = 0x5B;
+/// Scancode of the right Super (Windows) key.
+const SC_RIGHT_GUI: u8 = 0x5C;
+
 /// Handle a key press event
 fn handle_key_press(scancode: u8, _extended: bool) {
     // Get ASCII character from scancode (respecting shift state)
@@ -305,8 +310,14 @@ fn handle_key_press(scancode: u8, _extended: bool) {
         crate::wm::alt_tab::close(true);
     }
 
-    // Start menu keyboard handling (Esc closes, arrows navigate, Enter opens)
-    if crate::wm::start_menu::handle_key(scancode) {
+    // Super (Windows) key: toggle the start menu
+    if scancode == SC_LEFT_GUI || scancode == SC_RIGHT_GUI {
+        crate::wm::start_menu::toggle();
+        return;
+    }
+
+    // Start menu keyboard handling (typing searches, arrows navigate, Enter launches)
+    if crate::wm::start_menu::handle_key(scancode, ch) {
         return;
     }
 
