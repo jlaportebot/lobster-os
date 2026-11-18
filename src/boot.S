@@ -518,9 +518,60 @@ exception_vector_table:
     RESTORE_CONTEXT
     eret
 
+// IRQ from EL0: the kernel is built with NEON, so ordinary Rust IRQ code
+// would clobber the interrupted task's q0-q31/FPCR/FPSR. Snapshot them
+// into a 528-byte area (== sched::FpSnapshot) BEFORE any Rust runs, and
+// reload them afterwards. When the handler ends the slice it copies the
+// snapshot into the task's FpContext (the reload then only feeds the
+// kernel main loop, which never relies on vector registers across the
+// call). x0-x4 hold the SAVE_CONTEXT arguments; the snapshot pointer
+// goes in x5.
 .Lirq_el0_64:
     SAVE_CONTEXT
-    bl      handle_irq
+    sub     sp, sp, #528
+    stp     q0, q1, [sp, #0]
+    stp     q2, q3, [sp, #32]
+    stp     q4, q5, [sp, #64]
+    stp     q6, q7, [sp, #96]
+    stp     q8, q9, [sp, #128]
+    stp     q10, q11, [sp, #160]
+    stp     q12, q13, [sp, #192]
+    stp     q14, q15, [sp, #224]
+    stp     q16, q17, [sp, #256]
+    stp     q18, q19, [sp, #288]
+    stp     q20, q21, [sp, #320]
+    stp     q22, q23, [sp, #352]
+    stp     q24, q25, [sp, #384]
+    stp     q26, q27, [sp, #416]
+    stp     q28, q29, [sp, #448]
+    stp     q30, q31, [sp, #480]
+    mrs     x9, FPCR
+    mrs     x10, FPSR
+    add     x11, sp, #512
+    stp     x9, x10, [x11]
+    mov     x5, sp
+    bl      handle_irq_el0
+    add     x11, sp, #512
+    ldp     x9, x10, [x11]
+    msr     FPCR, x9
+    msr     FPSR, x10
+    ldp     q0, q1, [sp, #0]
+    ldp     q2, q3, [sp, #32]
+    ldp     q4, q5, [sp, #64]
+    ldp     q6, q7, [sp, #96]
+    ldp     q8, q9, [sp, #128]
+    ldp     q10, q11, [sp, #160]
+    ldp     q12, q13, [sp, #192]
+    ldp     q14, q15, [sp, #224]
+    ldp     q16, q17, [sp, #256]
+    ldp     q18, q19, [sp, #288]
+    ldp     q20, q21, [sp, #320]
+    ldp     q22, q23, [sp, #352]
+    ldp     q24, q25, [sp, #384]
+    ldp     q26, q27, [sp, #416]
+    ldp     q28, q29, [sp, #448]
+    ldp     q30, q31, [sp, #480]
+    add     sp, sp, #528
     RESTORE_CONTEXT
     eret
 

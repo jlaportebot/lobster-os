@@ -142,6 +142,14 @@ pub fn history_count() -> usize {
     unsafe { HISTORY_COUNT.min(MAX_HISTORY) }
 }
 
+/// Notifications posted since boot or the last history clear (unlike
+/// [`history_count`] this keeps growing past the ring size, so callers can
+/// compute an unread count).
+pub fn total_posted() -> usize {
+    // SAFETY: notification state is only touched from the single UI thread.
+    unsafe { HISTORY_COUNT }
+}
+
 /// Get a history entry (most recent first)
 pub fn history(i: usize) -> Option<&'static Notification> {
     unsafe {

@@ -496,6 +496,10 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
         stack_base, USER_STACK_TOP
     );
 
+    // The dual-mapping above overwrote whichever task's pages were in the
+    // kernel TTBR0; the next resume must re-install its own.
+    invalidate_installed_mappings();
+
     // Align brk_base to page boundary
     let brk_base = (highest_addr + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
 
@@ -666,78 +670,152 @@ pub fn build_hello_elf_into(buf: &mut [u8]) -> usize {
     total
 }
 
-/// Mirror user page mappings into the kernel's TTBR0.
-///
-/// Walks the user page table (3 levels: L0→L1→L2) and copies leaf entries
-/// (L2 block or L3 page mappings) into the kernel's TTBR0 at the same VAs.
-/// This allows eret into EL0 to access user code/stack without switching TTBR0.
-pub fn mirror_user_mappings(kernel_ttbr0: u64, user_ttbr0: u64) {
-    crate::drivers::uart::Uart10::puts("[elf] mirror: start\r\n");
-    let phys_map = crate::memory::PHYS_MAP_OFFSET;
-    let _pte_user_ro = PTE_USER_RO;
-    let _pte_user_code = PTE_USER_CODE;
-    let _pte_user_data = PTE_USER_DATA;
+/// Bytes covered by one L2 entry (one L3 table of 512 pages).
+const L2_SPAN: u64 = 2 * 1024 * 1024;
 
-    // Walk L0 (512 entries)
-    let l0_user = unsafe { &*((phys_map + user_ttbr0) as *const [u64; 512]) };
-    for i in 0..512 {
-        let l0e = l0_user[i];
-        if l0e & crate::memory::vmem::PTE_VALID == 0 {
+/// Mask selecting the output address of a table/page descriptor.
+const PTE_ADDR_MASK: u64 = 0x0000_FFFF_FFFF_F000;
+
+/// Entries per translation table.
+const PTE_PER_TABLE: usize = 512;
+
+/// Pid whose user mappings currently sit in the kernel TTBR0 (0 = unknown).
+///
+/// EL0 runs on the kernel's own TTBR0 (every ELF load dual-maps its pages
+/// there at fixed VAs), so two programs alive at once would otherwise see
+/// whichever one loaded last. Preemptive slicing makes that real: each
+/// slice switch re-points the user VA range at the incoming task's frames.
+static INSTALLED_USER_PID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Forget which task's pages are installed (a load just overwrote them).
+pub fn invalidate_installed_mappings() {
+    INSTALLED_USER_PID.store(0, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Table at physical address `phys`, through the direct physical map.
+///
+/// # Safety
+/// `phys` must be the address of a live 512-entry translation table.
+unsafe fn table_at(phys: u64) -> *mut [u64; PTE_PER_TABLE] {
+    (crate::memory::PHYS_MAP_OFFSET + phys) as *mut [u64; PTE_PER_TABLE]
+}
+
+/// The L2 descriptor covering `va` in the tree rooted at `root_phys`, or 0
+/// if an upper level is missing (or is a block, which has no L3 below it).
+///
+/// # Safety
+/// `root_phys` must be the root of a live page-table tree.
+unsafe fn l2_descriptor_ptr(root_phys: u64, va: u64) -> Option<*mut u64> {
+    let mut table = table_at(root_phys);
+    for shift in [39u32, 30] {
+        let entry = (*table)[((va >> shift) & 0x1FF) as usize];
+        let is_table = entry & crate::memory::vmem::PTE_VALID != 0 && entry & 0x2 != 0;
+        if !is_table {
+            return None;
+        }
+        table = table_at(entry & PTE_ADDR_MASK);
+    }
+    Some(core::ptr::addr_of_mut!(
+        (*table)[((va >> 21) & 0x1FF) as usize]
+    ))
+}
+
+/// The L3 table under the L2 descriptor at `l2`, if it points to one.
+///
+/// # Safety
+/// `l2` must point at a live L2 descriptor.
+unsafe fn l3_under(l2: *const u64) -> Option<*mut [u64; PTE_PER_TABLE]> {
+    let entry = *l2;
+    let is_table = entry & crate::memory::vmem::PTE_VALID != 0 && entry & 0x2 != 0;
+    is_table.then(|| table_at(entry & PTE_ADDR_MASK))
+}
+
+/// Unmap every user page from the kernel TTBR0 user VA range.
+///
+/// # Safety
+/// `kernel_ttbr0` must be the live kernel TTBR0 root.
+unsafe fn clear_user_pages(kernel_ttbr0: u64) {
+    let mut va = USER_CODE_START;
+    while va < USER_ADDR_LIMIT {
+        if let Some(l3) = l2_descriptor_ptr(kernel_ttbr0, va).and_then(|l2| l3_under(l2)) {
+            (*l3).fill(0);
+        }
+        va += L2_SPAN;
+    }
+}
+
+/// Copy the user table's leaf pages into the kernel TTBR0 (nG cleared: the
+/// kernel runs with ASID 0 and would not see ASID-tagged entries).
+///
+/// # Safety
+/// Both arguments must be roots of live page-table trees.
+unsafe fn copy_user_pages(kernel_ttbr0: u64, user_ttbr0: u64) {
+    let mut va = USER_CODE_START;
+    while va < USER_ADDR_LIMIT {
+        if let Some(l3) = l2_descriptor_ptr(user_ttbr0, va).and_then(|l2| l3_under(l2)) {
+            copy_l3_pages(kernel_ttbr0, va, &*l3);
+        }
+        va += L2_SPAN;
+    }
+}
+
+/// Map every valid entry of one user L3 table into the kernel TTBR0.
+///
+/// # Safety
+/// `kernel_ttbr0` must be the live kernel root; `l3` covers the 2 MiB
+/// starting at `base_va`.
+unsafe fn copy_l3_pages(kernel_ttbr0: u64, base_va: u64, l3: &[u64; PTE_PER_TABLE]) {
+    for (i, &pte) in l3.iter().enumerate() {
+        if pte & crate::memory::vmem::PTE_VALID == 0 {
             continue;
         }
-        // L0 entry points to L1 table
-        let l1_phys = l0e & !0xFFF;
-        let l1_user = unsafe { &*((phys_map + l1_phys) as *const [u64; 512]) };
-        for j in 0..512 {
-            let l1e = l1_user[j];
-            if l1e & crate::memory::vmem::PTE_VALID == 0 {
-                continue;
-            }
-            // Check if L1 is a block (1GB block)
-            if l1e & 0x2 != 0 {
-                // L1 block — copy directly (unlikely for user pages)
-                unsafe {
-                    map_user_page(
-                        kernel_ttbr0,
-                        (i as u64) << 39 | (j as u64) << 30,
-                        l1e & !0xFFF,
-                        l1e & 0x3FF,
-                    );
-                }
-                continue;
-            }
-            // L1 entry points to L2 table
-            let l2_phys = l1e & !0xFFF;
-            let l2_user = unsafe { &*((phys_map + l2_phys) as *const [u64; 512]) };
-            for k in 0..512 {
-                let l2e = l2_user[k];
-                if l2e & crate::memory::vmem::PTE_VALID == 0 {
-                    continue;
-                }
-                let va = (i as u64) << 39 | (j as u64) << 30 | (k as u64) << 21;
-                if l2e & 0x2 != 0 {
-                    // L2 block (2MB) — copy as block
-                    let flags = l2e & 0x3FF;
-                    unsafe {
-                        map_user_page(kernel_ttbr0, va, l2e & !0xFFF, flags);
-                    }
-                } else {
-                    // L2 entry points to L3 table — walk L3
-                    let l3_phys = l2e & !0xFFF;
-                    let l3_user = unsafe { &*((phys_map + l3_phys) as *const [u64; 512]) };
-                    for m in 0..512 {
-                        let l3e = l3_user[m];
-                        if l3e & crate::memory::vmem::PTE_VALID == 0 {
-                            continue;
-                        }
-                        let page_va = va | (m as u64) << 12;
-                        let page_flags = l3e & 0x3FF;
-                        unsafe {
-                            map_user_page(kernel_ttbr0, page_va, l3e & !0xFFF, page_flags);
-                        }
-                    }
-                }
-            }
-        }
+        let flags = (pte & !PTE_ADDR_MASK) & !crate::memory::vmem::PTE_NG;
+        let va = base_va + (i as u64) * PAGE_SIZE;
+        map_user_page(kernel_ttbr0, va, pte & PTE_ADDR_MASK, flags);
     }
+}
+
+/// Remove `pid`'s pages from the kernel TTBR0 if they are the installed
+/// ones (called when the task is reaped and its frames are freed).
+pub fn release_user_mappings(pid: u64) {
+    use core::sync::atomic::Ordering;
+    if INSTALLED_USER_PID.load(Ordering::Relaxed) != pid {
+        return;
+    }
+    let kernel_ttbr0: u64;
+    // SAFETY: reading TTBR0_EL1 has no side effects.
+    unsafe { core::arch::asm!("mrs {}, TTBR0_EL1", out(reg) kernel_ttbr0) };
+    // SAFETY: live kernel root; main-loop context, no EL0 code running.
+    unsafe {
+        clear_user_pages(kernel_ttbr0 & PTE_ADDR_MASK);
+        core::arch::asm!("tlbi vmalle1is");
+    }
+    crate::arch::cpu::dsb();
+    crate::arch::cpu::isb();
+    INSTALLED_USER_PID.store(0, Ordering::Relaxed);
+}
+
+/// Make the kernel TTBR0 show exactly `pid`'s user pages (stack, code,
+/// windows, heap) before it is resumed at EL0. A no-op if they are already
+/// installed.
+pub fn activate_user_mappings(pid: u64, user_ttbr0: u64) {
+    use core::sync::atomic::Ordering;
+    if INSTALLED_USER_PID.load(Ordering::Relaxed) == pid {
+        return;
+    }
+    let kernel_ttbr0: u64;
+    // SAFETY: reading TTBR0_EL1 has no side effects.
+    unsafe { core::arch::asm!("mrs {}, TTBR0_EL1", out(reg) kernel_ttbr0) };
+    let kernel_root = kernel_ttbr0 & PTE_ADDR_MASK;
+    // SAFETY: `kernel_root` is the live kernel root and `user_ttbr0` is the
+    // task's own tree (kept alive until the task is reaped); the main loop
+    // is the only caller and no EL0 code runs during the rewrite.
+    unsafe {
+        clear_user_pages(kernel_root);
+        copy_user_pages(kernel_root, user_ttbr0);
+        core::arch::asm!("tlbi vmalle1is");
+    }
+    crate::arch::cpu::dsb();
+    crate::arch::cpu::isb();
+    INSTALLED_USER_PID.store(pid, Ordering::Relaxed);
 }

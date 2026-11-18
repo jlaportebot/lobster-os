@@ -534,6 +534,7 @@ pub fn close_all_for_pid(pid: u64) {
             slot.wm_id = None;
             match slot.backing {
                 Backing::Frames => {
+                    unmap_from_owner(pid, slot.user_va, slot.npages);
                     for i in 0..slot.npages {
                         if slot.frames[i] != 0 {
                             crate::memory::frame_alloc::deallocate_frame(crate::memory::PhysAddr(
@@ -555,6 +556,28 @@ pub fn close_all_for_pid(pid: u64) {
             }
         }
         crate::wm::dirty::mark();
+    }
+}
+
+/// Drop a window's pages from its owner's page table so the reap path does
+/// not free the same frames again as ordinary task memory.
+fn unmap_from_owner(pid: u64, user_va: u64, npages: usize) {
+    if user_va == 0 {
+        return;
+    }
+    let Some(idx) = crate::sched::find_task_index(pid) else {
+        return;
+    };
+    // SAFETY: single core; the entry is only read.
+    let ttbr0 = unsafe { crate::sched::TASK_TABLE[idx].as_ref().map(|t| t.ttbr0_phys) };
+    let Some(ttbr0) = ttbr0.filter(|&t| t != 0) else {
+        return;
+    };
+    for i in 0..npages {
+        // SAFETY: `ttbr0` is the live tree of the (not yet reaped) owner.
+        unsafe {
+            crate::memory::process_vmem::unmap_user_page(ttbr0, user_va + (i * PAGE) as u64);
+        }
     }
 }
 
