@@ -212,7 +212,7 @@ fn is_inode_in_bitmap(fs: &mut Ext2FileSystem, group: usize, inode_num: u32) -> 
     let byte_idx = (inode_offset as usize) / 8;
     let bit_idx = (inode_offset as usize) % 8;
 
-    if byte_idx >= 512 {
+    if byte_idx >= fs.inode_bitmaps[group].len() {
         return false;
     }
 
@@ -325,14 +325,16 @@ fn check_block_allocation(fs: &mut Ext2FileSystem) -> FsckResult {
     // Compare with bitmap
     let mut bitmap_errors = 0u32;
     let blocks_per_group = u32::from_le(fs.superblock.s_blocks_per_group);
+    let first_data_block = u32::from_le(fs.superblock.s_first_data_block) as u64;
     for g in 0..fs.num_groups as usize {
         let _ = fs.load_block_bitmap(g as u32);
 
         let bitmap = &fs.block_bitmaps[g];
-        for byte_idx in 0..512 {
+        for byte_idx in 0..bitmap.len() {
             for bit in 0..8 {
                 let block_offset = (byte_idx * 8 + bit) as u64;
-                let global_block = g as u64 * blocks_per_group as u64 + block_offset;
+                let global_block =
+                    first_data_block + g as u64 * blocks_per_group as u64 + block_offset;
 
                 if global_block >= blocks_count as u64 {
                     continue;
@@ -388,7 +390,7 @@ fn check_inode_allocation(fs: &mut Ext2FileSystem) -> FsckResult {
         let _ = fs.load_inode_bitmap(g as u32);
 
         // Copy bitmap to avoid holding an immutable borrow while calling fs.read_inode()
-        let bitmap = fs.inode_bitmaps[g];
+        let bitmap = fs.inode_bitmaps[g].clone();
 
         for i in 0..fs.inodes_per_group {
             let inode_num = g as u32 * fs.inodes_per_group + i + 1;
@@ -403,7 +405,7 @@ fn check_inode_allocation(fs: &mut Ext2FileSystem) -> FsckResult {
             let byte_idx = (i as usize) / 8;
             let bit_idx = (i as usize) % 8;
 
-            if byte_idx >= 512 {
+            if byte_idx >= bitmap.len() {
                 continue;
             }
 
@@ -657,6 +659,7 @@ fn repair_bitmaps(fs: &mut Ext2FileSystem) -> FsckResult {
     let blocks_count = u32::from_le(fs.superblock.s_blocks_count);
     let inodes_count = u32::from_le(fs.superblock.s_inodes_count);
     let blocks_per_group = u32::from_le(fs.superblock.s_blocks_per_group);
+    let first_data_block = u32::from_le(fs.superblock.s_first_data_block) as u64;
 
     // Rebuild block bitmaps from inode block references
     for g in 0..fs.num_groups as usize {
@@ -701,12 +704,13 @@ fn repair_bitmaps(fs: &mut Ext2FileSystem) -> FsckResult {
     // Fix block bitmaps: mark used blocks, clear unused
     for g in 0..fs.num_groups as usize {
         let _ = fs.load_block_bitmap(g as u32);
-        let mut bitmap = fs.block_bitmaps[g];
+        let mut bitmap = fs.block_bitmaps[g].clone();
 
-        for byte_idx in 0..512 {
+        for byte_idx in 0..bitmap.len() {
             for bit in 0..8 {
                 let block_offset = (byte_idx * 8 + bit) as u64;
-                let global_block = g as u64 * blocks_per_group as u64 + block_offset;
+                let global_block =
+                    first_data_block + g as u64 * blocks_per_group as u64 + block_offset;
                 if global_block >= blocks_count as u64 || global_block as usize >= used_blocks.len()
                 {
                     continue;
@@ -725,24 +729,18 @@ fn repair_bitmaps(fs: &mut Ext2FileSystem) -> FsckResult {
         }
 
         // Write back corrected bitmap
-        fs.block_bitmaps[g] = bitmap;
         // Write the bitmap to disk
         let gdesc = &fs.group_descs[g];
         let bitmap_block = u32::from_le(gdesc.bg_block_bitmap);
         let bitmap_offset = bitmap_block as u64 * fs.block_size as u64;
         let bitmap_size = fs.block_size as usize;
-        let write_len = bitmap_size.min(512);
-        // Use dev_write through the fs methods
-        // We need to reconstruct the full block for writing
-        let mut block_buf = [0u8; 4096];
-        block_buf[..write_len].copy_from_slice(&bitmap[..write_len]);
-        // Direct device write
         let _ = crate::fs::ext2::dev_write(
             fs.device_index,
             fs.partition_start,
             bitmap_offset,
-            &block_buf[..bitmap_size],
+            &bitmap[..bitmap_size],
         );
+        fs.block_bitmaps[g] = bitmap;
     }
 
     // Recalculate free block count
@@ -757,7 +755,7 @@ fn repair_bitmaps(fs: &mut Ext2FileSystem) -> FsckResult {
         for b in 0..group_blocks {
             let byte_idx = (b / 8) as usize;
             let bit_idx = (b % 8) as usize;
-            if byte_idx < 512 && (bitmap[byte_idx] & (1 << bit_idx)) == 0 {
+            if byte_idx < bitmap.len() && (bitmap[byte_idx] & (1 << bit_idx)) == 0 {
                 total_free += 1;
             }
         }
