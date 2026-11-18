@@ -220,12 +220,18 @@ unsafe fn map_range_blocks(
     }
 }
 
-/// Set up MAIR_EL1 (Memory Attribute Indirection Register)
+/// MAIR attribute byte: Normal memory, Inner/Outer Write-Back, Read+Write-Allocate.
+const MAIR_NORMAL_WB: u64 = 0xFF;
+/// MAIR attribute byte: Device-nGnRnE (strongly ordered MMIO).
+const MAIR_DEVICE_NGNRNE: u64 = 0x04;
+/// MAIR attribute byte: Normal, Inner/Outer Non-Cacheable.
+const MAIR_NORMAL_NC: u64 = 0x44;
+
+/// Set up MAIR_EL1 (Memory Attribute Indirection Register).
+///
+/// Index order must match `MT_NORMAL`, `MT_DEVICE` and `MT_NORMAL_NC`.
 unsafe fn setup_mair() {
-    // Attr0: Normal, Write-Back, Read/Write Allocate
-    let mair = 0xFF    // Attr0: Normal WB RW-Alloc
-             | (0x04 << 8)    // Attr1: Device-nGnRnE
-             | (0x44 << 16); // Attr2: Normal Non-Cacheable
+    let mair = MAIR_NORMAL_WB | (MAIR_DEVICE_NGNRNE << 8) | (MAIR_NORMAL_NC << 16);
     core::arch::asm!("msr MAIR_EL1, {0:x}", in(reg) mair);
 }
 
@@ -237,10 +243,10 @@ unsafe fn setup_tcr() {
             | (0b00u64 << 14)     // TG0 = 4KB granule for TTBR0
             | (3u64 << 28)        // SH1 = Inner Shareable
             | (3u64 << 12)        // SH0 = Inner Shareable
-            | (1u64 << 26)        // ORGN1 = Write-Back Cacheable
-            | (1u64 << 10)        // ORGN0 = Write-Back Cacheable
-            | (1u64 << 24)        // IRGN1 = Write-Back Cacheable
-            | (1u64 << 8)         // IRGN0 = Write-Back Cacheable
+            | (1u64 << 26)        // ORGN1 = WB WA cacheable (walks coherent with Attr0)
+            | (1u64 << 10)        // ORGN0 = WB WA cacheable
+            | (1u64 << 24)        // IRGN1 = WB WA cacheable
+            | (1u64 << 8)         // IRGN0 = WB WA cacheable
             // EPD1 (bit 23) = 0 → ENABLE TTBR1 walks
             // EPD0 (bit 7)  = 0 → ENABLE TTBR0 walks
             // IPS (bits 34:32) = 2 → 40-bit PA (1TB), covers SoC peripherals at 0x10_xxxx_xxxx
@@ -248,50 +254,51 @@ unsafe fn setup_tcr() {
     core::arch::asm!("msr TCR_EL1, {0}", in(reg) tcr);
 }
 
-/// Set up SCTLR_EL1 (System Control Register) — enable MMU + caches
+/// SCTLR_EL1.M: stage-1 MMU enable.
+const SCTLR_M: u64 = 1 << 0;
+/// SCTLR_EL1.C: data and unified cache enable. With C=0 every Normal mapping
+/// is treated as Non-cacheable, and exclusive load/store pairs (every
+/// spinlock and atomic) never succeed on real cores or under KVM.
+const SCTLR_C: u64 = 1 << 2;
+/// SCTLR_EL1.I: instruction cache enable.
+const SCTLR_I: u64 = 1 << 12;
+/// SCTLR_EL1.WXN: writable memory is never executable. Cleared: the kernel
+/// maps freshly loaded EL0 code writable before it runs.
+const SCTLR_WXN: u64 = 1 << 19;
+/// SCTLR_EL1.SPAN: when set, exceptions to EL1 leave PSTATE.PAN clear so the
+/// kernel can touch EL0-accessible pages (QEMU models ARMv8.1 PAN).
+const SCTLR_SPAN: u64 = 1 << 23;
+/// SCTLR_EL1.NTI: no trapping of the Normal-to-Device transition hint; cleared.
+const SCTLR_NTI: u64 = 1 << 28;
+
+/// Compute the SCTLR_EL1 value that turns on the MMU and both caches.
+fn sctlr_with_mmu_and_caches(current: u64) -> u64 {
+    (current | SCTLR_M | SCTLR_C | SCTLR_I | SCTLR_SPAN) & !(SCTLR_WXN | SCTLR_NTI)
+}
+
+/// Install the translation tables, then switch on the MMU, D-cache and I-cache.
 unsafe fn enable_mmu_and_caches(ttbr0: u64, ttbr1: u64) {
-    // Set TTBRs
     core::arch::asm!("msr TTBR0_EL1, {0}", in(reg) ttbr0);
     core::arch::asm!("msr TTBR1_EL1, {0}", in(reg) ttbr1);
 
-    // Ensure all table writes are visible
+    // Table writes must be visible to the walker before translation starts.
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
 
-    // Invalidate all TLB entries
     #[cfg(target_arch = "aarch64")]
     core::arch::asm!("tlbi vmalle1is");
+    // Drop any instruction lines fetched while the I-cache was disabled so
+    // the first cached fetch cannot hit stale contents.
+    crate::memory::cache::invalidate_icache_all();
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
 
-    // Read SCTLR, set ONLY M (MMU enable). No caches, no features.
-    // This is the minimal safest MMU enable for debugging.
     let mut sctlr: u64;
     core::arch::asm!("mrs {0}, SCTLR_EL1", out(reg) sctlr);
-
-    // Debug: dump TCR value
-    let mut tcr_val: u64;
-    core::arch::asm!("mrs {0}, TCR_EL1", out(reg) tcr_val);
-    crate::println!("[mmu] TCR_EL1 = {:#018x}", tcr_val);
-    crate::println!("[mmu] SCTLR before = {:#018x}", sctlr);
-
-    sctlr |= 1 << 0; // M: MMU enable ONLY
-
-    // SET SCTLR_EL1.SPAN (bit 23) to DISABLE PAN entirely.
-    // SPAN=1 → PAN is always off, EL1 can freely access EL0 pages.
-    // SPAN=0 → PSTATE.PAN defaults to 1, blocking EL1 from reading
-    // EL0-accessible pages (AP=01), causing Permission fault (DFSC=0x0F).
-    // Even though cortex-a72 is ARMv8.0, QEMU's model implements ARMv8.1 PAN.
-    sctlr |= 1 << 23; // SPAN=1: force PAN off
-
-    // Clear WXN (write implies XN) and other restrictive bits
-    sctlr &= !((1 << 19)  // WXN
-             | (1 << 28)); // NTI
-
-    crate::println!("[mmu] SCTLR after  = {:#018x}", sctlr);
-
-    core::arch::asm!("msr SCTLR_EL1, {0}", in(reg) sctlr);
+    let enabled = sctlr_with_mmu_and_caches(sctlr);
+    core::arch::asm!("msr SCTLR_EL1, {0}", in(reg) enabled);
     crate::arch::cpu::isb();
+    println!("[mmu] SCTLR_EL1 {:#x} -> {:#x}", sctlr, enabled);
 }
 
 /// Initialize the MMU — set up page tables and enable virtual memory
@@ -352,15 +359,6 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
         println!("[mmu] GIC identity map done, next_pt={}", unsafe {
             NEXT_PT_INDEX
         });
-
-        // Debug: verify L1[65] was created by reading from the L1 table
-        let l0_entry0 = (*ttbr0_root)[0];
-        let l1_table_phys = (l0_entry0 & !(PAGE_SIZE - 1)) as *const [u64; PT_ENTRIES];
-        let l1_65 = unsafe { (*l1_table_phys)[65] };
-        println!(
-            "[mmu] Debug: L0[0]={:#018x} L1[65]={:#018x}",
-            l0_entry0, l1_65
-        );
     }
 
     // Map kernel image at high VA (identity map only needed during boot transition, not in final page tables)
@@ -455,8 +453,6 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
         );
     }
 
-    println!("[mmu] After cfg blocks, before TTBR phys");
-
     let ttbr0_phys = pt_phys(ttbr0_root);
     let ttbr1_phys = pt_phys(ttbr1_root);
 
@@ -475,33 +471,10 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
     );
     println!("[mmu] Device map: {:#018x}", DEVICE_MAP_START);
 
-    println!("[mmu] About to enable MMU...");
-
-    // Debug: dump first few page table entries for TTBR0
-    let ttbr0_entries = PAGE_TABLE_STORAGE.0[0];
-    println!(
-        "[mmu] TTBR0 L0[0]: {:#018x} (expect valid=1, table=1)",
-        ttbr0_entries[0]
-    );
-    if ttbr0_entries[0] & 1 != 0 {
-        let l1_ptr = (ttbr0_entries[0] & !0xFFF) as *const [u64; PT_ENTRIES];
-        println!("[mmu] L1[0]: {:#018x} (expect valid=1, table=1)", unsafe {
-            (*l1_ptr)[0]
-        });
-        if unsafe { (*l1_ptr)[0] } & 1 != 0 {
-            let l2_ptr = (unsafe { (*l1_ptr)[0] } & !0xFFF) as *const [u64; PT_ENTRIES];
-            println!(
-                "[mmu] L2[0]: {:#018x} (expect valid=1, block, AF=1)",
-                unsafe { (*l2_ptr)[0] }
-            );
-        }
-    }
-
     // Enable MMU + caches
     enable_mmu_and_caches(ttbr0_phys, ttbr1_phys);
 
-    println!("[mmu] MMU enabled! Virtual memory active.");
-    println!("[mmu] L1 D-cache + L1 I-cache enabled.");
+    println!("[mmu] MMU, D-cache and I-cache enabled.");
 }
 
 /// Map a page using virtual addresses for page table access (after MMU is on)
@@ -562,6 +535,7 @@ unsafe fn map_page_via_virt(root_virt: *mut [u64; PT_ENTRIES], va: u64, pa: u64,
             // after this replacement will find valid mappings.
             (*table)[idx] = next_phys | PTE_VALID | PTE_TABLE;
             let block_va = va & !((1u64 << current_shift) - 1);
+            crate::arch::cpu::dsb();
             #[cfg(target_arch = "aarch64")]
             core::arch::asm!("tlbi vaae1is, {0}", in(reg) block_va >> 12);
             crate::arch::cpu::dsb();
@@ -582,10 +556,38 @@ pub unsafe fn map_page_virt(va: u64, pa: u64, flags: u64) {
     let root = ttbr1_root_virt as *mut [u64; PT_ENTRIES];
     map_page_via_virt(root, va, pa, flags);
     // Flush TLB for this page
+    crate::arch::cpu::dsb();
     #[cfg(target_arch = "aarch64")]
     core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
     crate::arch::cpu::dsb();
     crate::arch::cpu::isb();
+}
+
+/// Page attributes for RAM the CPU and a device both touch with no cache
+/// maintenance: Normal Non-cacheable, outer shareable.
+const PTE_KERNEL_NONCACHEABLE: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_OSH | MT_NORMAL_NC;
+
+/// Remap `[pa, pa + size)` of the direct map as Normal Non-cacheable.
+///
+/// Used for the scan-out framebuffer, which the display engine reads from
+/// RAM continuously: cached CPU stores would never reach it. Existing cached
+/// lines are flushed first so no dirty line is written back over new pixels.
+///
+/// # Safety
+/// The MMU must be on and the range must be direct-mapped RAM no one else
+/// relies on being cacheable.
+pub unsafe fn remap_non_cacheable(pa: u64, size: u64) {
+    let start = pa & !(PAGE_SIZE - 1);
+    let end = (pa + size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    crate::memory::cache::clean_invalidate_dcache_range(
+        (start + PHYS_MAP_OFFSET) as usize,
+        (end - start) as usize,
+    );
+    let mut page = start;
+    while page < end {
+        map_page_virt(page + PHYS_MAP_OFFSET, page, PTE_KERNEL_NONCACHEABLE);
+        page += PAGE_SIZE;
+    }
 }
 
 /// Unmap a page after MMU is enabled
@@ -606,6 +608,7 @@ pub unsafe fn unmap_page_virt(va: u64) {
 
     let idx = pt_index(va, 3);
     (*table)[idx] = 0; // Invalidate
+    crate::arch::cpu::dsb();
     #[cfg(target_arch = "aarch64")]
     core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
     crate::arch::cpu::dsb();
@@ -634,6 +637,7 @@ pub unsafe fn protect_page_virt(va: u64, flags: u64) {
         let pa = old & !(PAGE_SIZE - 1);
         (*table)[idx] = pa | flags;
     }
+    crate::arch::cpu::dsb();
     #[cfg(target_arch = "aarch64")]
     core::arch::asm!("tlbi vaae1is, {0}", in(reg) va >> 12);
     crate::arch::cpu::dsb();
