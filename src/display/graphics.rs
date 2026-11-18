@@ -11,8 +11,7 @@
 //! BCM2835-style framebuffer scans out; surfaces store converted pixels so
 //! compositing is a plain copy.
 
-use super::console::FONT;
-use super::console::{CHAR_HEIGHT, CHAR_WIDTH};
+use super::console::CHAR_WIDTH;
 use super::fb::FramebufferInfo;
 
 const FULL_ALPHA: u32 = 255;
@@ -295,6 +294,24 @@ pub fn blit_stored(fb: &FramebufferInfo, x: u32, y: u32, src: &[u32], src_w: u32
     }
 }
 
+/// Draw one row of 8-bit coverage in `color`, blending over the target.
+pub fn draw_alpha_row(fb: &FramebufferInfo, x: u32, y: u32, coverage: &[u8], color: u32) {
+    let Some(mut run) = span(fb, x, y, coverage.len() as u32) else {
+        return;
+    };
+    let Some(line) = coverage.get(run.skipped..run.skipped + run.len) else {
+        return;
+    };
+    let pixel = fx(color);
+    for (dst, &alpha) in run.pixels().iter_mut().zip(line) {
+        match alpha {
+            0 => {}
+            255 => *dst = pixel,
+            partial => *dst = blend(*dst, pixel, u32::from(partial)),
+        }
+    }
+}
+
 /// Draw an 8-bit coverage mask in `color`, blending over the target.
 /// Used for anti-aliased glyphs and icons.
 pub fn draw_alpha_mask(
@@ -306,54 +323,22 @@ pub fn draw_alpha_mask(
     mask_h: u32,
     color: u32,
 ) {
-    let pixel = fx(color);
     for row in 0..mask_h {
-        let Some(mut run) = span(fb, x, y + row, mask_w) else {
-            continue;
-        };
-        let start = (row * mask_w) as usize + run.skipped;
-        let Some(line) = mask.get(start..start + run.len) else {
+        let start = (row * mask_w) as usize;
+        let Some(line) = mask.get(start..start + mask_w as usize) else {
             return;
         };
-        for (dst, &coverage) in run.pixels().iter_mut().zip(line) {
-            match coverage {
-                0 => {}
-                255 => *dst = pixel,
-                partial => *dst = blend(*dst, pixel, u32::from(partial)),
-            }
-        }
+        draw_alpha_row(fb, x, y + row, line, color);
     }
 }
 
-/// Draw one 8x16 bitmap-font glyph row-by-row.
-fn draw_glyph(fb: &FramebufferInfo, x: u32, y: u32, glyph: &[u8], fg: u32, bg: Option<u32>) {
-    for row in 0..CHAR_HEIGHT {
-        let Some(mut run) = span(fb, x, y + row, CHAR_WIDTH) else {
-            continue;
-        };
-        let bits = glyph[row as usize];
-        let first_col = run.skipped as u32;
-        for (index, dst) in run.pixels().iter_mut().enumerate() {
-            let col = first_col + index as u32;
-            if (bits >> (7 - col)) & 1 != 0 {
-                *dst = fg;
-            } else if let Some(background) = bg {
-                *dst = background;
-            }
-        }
-    }
-}
-
-/// Draw text with the built-in 8x16 monospace bitmap font.
-/// A `bg` of 0 means transparent background.
+/// Draw text in the anti-aliased mono face on the legacy fixed 8x16 cell
+/// grid. A `bg` of 0 means transparent background.
 pub fn draw_text(fb: &FramebufferInfo, x: u32, y: u32, text: &str, fg: u32, bg: u32) {
-    let fg_px = fx(fg);
-    let bg_px = (bg != 0).then(|| fx(bg));
+    let background = (bg != 0).then_some(bg);
     let mut cx = x;
     for c in text.chars() {
-        if let Some(glyph) = FONT.get(c as usize) {
-            draw_glyph(fb, cx, y, glyph, fg_px, bg_px);
-        }
+        super::text::draw_cell(fb, cx, y, c, fg, background);
         cx = cx.saturating_add(CHAR_WIDTH);
     }
 }
@@ -384,5 +369,96 @@ pub fn blit_stored_keyed(fb: &FramebufferInfo, x: u32, y: u32, src: &[u32]) {
         if pixel != 0 {
             *dst = pixel;
         }
+    }
+}
+
+/// Blend premultiplied RGBA bytes (R, G, B, A in memory order, which is the
+/// stored pixel layout when read as a little-endian `u32`) over the target.
+///
+/// Fully transparent pixels leave the target untouched and fully opaque ones
+/// are copied, so only edge pixels pay for the blend.
+pub fn draw_premul_bytes(fb: &FramebufferInfo, x: u32, y: u32, data: &[u8], w: u32, h: u32) {
+    for row in 0..h {
+        let Some(mut run) = span(fb, x, y + row, w) else {
+            continue;
+        };
+        let start = ((row * w) as usize + run.skipped) * 4;
+        let Some(line) = data.get(start..start + run.len * 4) else {
+            return;
+        };
+        for (dst, px) in run.pixels().iter_mut().zip(line.chunks_exact(4)) {
+            *dst = over_premul(*dst, px);
+        }
+    }
+}
+
+/// Premultiplied `px` (`[r, g, b, a]`) over stored-format `dst`.
+#[inline]
+fn over_premul(dst: u32, px: &[u8]) -> u32 {
+    match px[3] {
+        0 => dst,
+        255 => u32::from_le_bytes([px[0], px[1], px[2], 255]),
+        alpha => {
+            let inverse = FULL_ALPHA - u32::from(alpha);
+            let mix = |shift: u32, src: u8| {
+                let d = (dst >> shift) & 0xFF;
+                (u32::from(src) + (d * inverse + 127) / FULL_ALPHA).min(FULL_ALPHA) << shift
+            };
+            OPAQUE | mix(16, px[2]) | mix(8, px[1]) | mix(0, px[0])
+        }
+    }
+}
+
+/// Rounded rectangle blended over the target with coverage `alpha`.
+pub fn blend_rounded_rect(
+    fb: &FramebufferInfo,
+    rect: (u32, u32, u32, u32),
+    radius: u32,
+    color: u32,
+    alpha: u8,
+) {
+    let (x, y, w, h) = rect;
+    if w == 0 || h == 0 {
+        return;
+    }
+    let r = radius.min(w / 2).min(h / 2);
+    blend_rect(fb, x, y + r, w, h - 2 * r, color, alpha);
+    for dy in 0..r {
+        let inset = corner_inset(r, dy);
+        blend_rect(fb, x + inset, y + dy, w - 2 * inset, 1, color, alpha);
+        blend_rect(
+            fb,
+            x + inset,
+            y + h - 1 - dy,
+            w - 2 * inset,
+            1,
+            color,
+            alpha,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BG: u32 = 0xFF204060;
+    const MARK: u32 = 0xFF00FF00;
+    const FG: u32 = 0xFFFFFFFF;
+
+    #[test]
+    fn legacy_draw_text_advances_exactly_eight_pixels_per_char() {
+        let (w, h) = (48u32, 20u32);
+        let mut pixels = vec![fx(MARK); (w * h) as usize];
+        let screen = FramebufferInfo::empty();
+        // SAFETY: `pixels` holds w*h entries and outlives `target`.
+        let target = unsafe { screen.surface(pixels.as_mut_ptr(), 0, 0, w, h) };
+        draw_text(&target, 0, 2, "   ", FG, BG);
+        let row = |y: u32, x: u32| pixels[(y * w + x) as usize];
+        assert_eq!(row(2, 0), fx(BG));
+        assert_eq!(row(2, 23), fx(BG));
+        assert_eq!(row(2, 24), fx(MARK));
+        assert_eq!(row(17, 23), fx(BG));
+        assert_eq!(row(18, 23), fx(MARK));
     }
 }

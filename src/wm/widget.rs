@@ -14,6 +14,7 @@
 
 use crate::display::fb::FramebufferInfo;
 use crate::display::graphics;
+use crate::display::text::{self, Face, TextStyle};
 use crate::sync::spinlock::Spinlock;
 use crate::wm::theme;
 
@@ -27,6 +28,16 @@ const MAX_WIDGETS: usize = 64;
 
 /// Maximum text length for labels and buttons
 const MAX_TEXT: usize = 128;
+/// Widget text size at the Medium font setting.
+const WIDGET_TEXT_PX: u32 = 13;
+/// Height of the row a label or checkbox caption is centred in.
+const TEXT_ROW_H: u32 = 16;
+/// Left padding of text inside inputs and panels.
+const TEXT_PAD_X: u32 = 4;
+/// Height of a panel's title strip.
+const PANEL_TITLE_H: u32 = 20;
+/// Gap between a checkbox and its caption.
+const CHECKBOX_GAP: u32 = 6;
 
 /// Widget state flags
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,6 +62,11 @@ pub struct Button {
     pub text_len: usize,
     pub state: WidgetState,
     pub clicked: bool,
+}
+
+/// Style for widget text that must fit a line box of `max_line_h` px.
+fn widget_text(face: Face, color: u32, max_line_h: u32) -> TextStyle {
+    theme::chrome_text(face, WIDGET_TEXT_PX, color, max_line_h)
 }
 
 impl Button {
@@ -96,11 +112,12 @@ impl Button {
         // Text (centered)
         if self.text_len > 0 {
             let text = self.text_str();
-            let char_w = 8u32; // 8px per character in our font
-            let text_w = text.chars().count() as u32 * char_w;
-            let text_x = px + (self.w.saturating_sub(text_w)) / 2;
-            let text_y = py + (self.h.saturating_sub(theme.font_size)) / 2;
-            graphics::draw_text(fb, text_x, text_y, text, theme.btn_text, bg);
+            let style = widget_text(Face::UiBold, theme.btn_text, self.h);
+            let text_y = theme::centered_line_y(py, self.h, &style);
+            let room = self.w.saturating_sub(2 * TEXT_PAD_X);
+            let shown = text::width(text, &style).min(room);
+            let text_x = px + self.w.saturating_sub(shown) / 2;
+            text::draw_fitted(fb, text_x, text_y, room, text, &style);
         }
     }
 
@@ -139,7 +156,7 @@ impl Label {
         self.text_len = len;
     }
 
-    pub fn draw(&self, fb: &FramebufferInfo, offset_x: u32, offset_y: u32, bg_color: u32) {
+    pub fn draw(&self, fb: &FramebufferInfo, offset_x: u32, offset_y: u32, _bg_color: u32) {
         let theme = theme::current();
         let color = if self.dim {
             theme.label_text_dim
@@ -149,7 +166,14 @@ impl Label {
         let px = offset_x + self.x;
         let py = offset_y + self.y;
         if self.text_len > 0 {
-            graphics::draw_text(fb, px, py, self.text_str(), color, bg_color);
+            let style = widget_text(Face::Ui, color, TEXT_ROW_H);
+            text::draw(
+                fb,
+                px,
+                theme::centered_line_y(py, TEXT_ROW_H, &style),
+                self.text_str(),
+                &style,
+            );
         }
     }
 }
@@ -237,19 +261,23 @@ impl TextInput {
         if self.text_len > 0 {
             let visible = &self.text[self.scroll_offset as usize..self.text_len];
             let visible_str = core::str::from_utf8(visible).unwrap_or("");
-            graphics::draw_text(
-                fb,
-                px + 4,
-                py + 4,
-                visible_str,
-                theme.input_text,
-                theme.input_bg,
+            let style = widget_text(Face::Ui, theme.input_text, self.h);
+            let inner = fb.clipped(
+                px + TEXT_PAD_X / 2,
+                py,
+                px + self.w - TEXT_PAD_X / 2,
+                py + self.h,
             );
+            let text_y = theme::centered_line_y(py, self.h, &style);
+            text::draw(&inner, px + TEXT_PAD_X, text_y, visible_str, &style);
         }
 
         // Cursor (blinking would need timer, so just draw a static line)
         if self.state == WidgetState::Focused {
-            let cursor_px = px + 4 + (self.cursor_pos as u32 - self.scroll_offset) * 8;
+            let style = widget_text(Face::Ui, theme.input_text, self.h);
+            let before = &self.text[self.scroll_offset as usize..self.cursor_pos];
+            let before = core::str::from_utf8(before).unwrap_or("");
+            let cursor_px = px + TEXT_PAD_X + text::width(before, &style);
             // Draw 2px wide cursor line
             for dy in 2..(self.h - 2) {
                 graphics::draw_pixel(fb, cursor_px, py + dy, theme.input_cursor);
@@ -288,7 +316,7 @@ impl Checkbox {
         core::str::from_utf8(&self.label[..self.label_len]).unwrap_or("")
     }
 
-    pub fn draw(&self, fb: &FramebufferInfo, offset_x: u32, offset_y: u32, bg_color: u32) {
+    pub fn draw(&self, fb: &FramebufferInfo, offset_x: u32, offset_y: u32, _bg_color: u32) {
         let theme = theme::current();
         let px = offset_x + self.x;
         let py = offset_y + self.y;
@@ -316,13 +344,14 @@ impl Checkbox {
 
         // Label text to the right
         if self.label_len > 0 {
-            graphics::draw_text(
+            let style = widget_text(Face::Ui, theme.label_text, self.size);
+            let text_y = theme::centered_line_y(py, self.size, &style);
+            text::draw(
                 fb,
-                px + self.size + 6,
-                py,
+                px + self.size + CHECKBOX_GAP,
+                text_y,
                 self.label_str(),
-                theme.label_text,
-                bg_color,
+                &style,
             );
         }
     }
@@ -465,13 +494,15 @@ impl Panel {
 
         // Title
         if self.title_len > 0 {
-            graphics::draw_text(
+            let style = widget_text(Face::UiBold, theme.label_text, PANEL_TITLE_H);
+            let text_y = theme::centered_line_y(py, PANEL_TITLE_H, &style);
+            text::draw_fitted(
                 fb,
                 px + 6,
-                py + 4,
+                text_y,
+                self.w.saturating_sub(12),
                 self.title_str(),
-                theme.label_text,
-                theme.panel_bg,
+                &style,
             );
             // Separator line below title
             fill_rect(fb, px + 4, py + 20, self.w - 8, 1, theme.panel_border);

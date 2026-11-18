@@ -1319,14 +1319,20 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                 for id in 1..=crate::wm::window::max_id() {
                     if crate::wm::window::exists(id) {
                         if let Some((x, y, w, h)) = crate::wm::window::get_info(id) {
+                            let state = if crate::wm::window::is_minimized(id) {
+                                " [minimized]"
+                            } else {
+                                ""
+                            };
                             out.puts(&alloc::format!(
-                                "wins: id={} '{}' at ({},{}) {}x{}\r\n",
+                                "wins: id={} '{}' at ({},{}) {}x{}{}\r\n",
                                 id,
                                 crate::wm::window::get_title(id),
                                 x,
                                 y,
                                 w,
-                                h
+                                h,
+                                state
                             ));
                         }
                     }
@@ -1599,6 +1605,11 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
         }
         "dialog" => {
             cmd_dialog(&args, argc);
+            0
+        }
+        "taskbar" => {
+            #[cfg(target_arch = "aarch64")]
+            crate::wm::panel::describe();
             0
         }
         "calc" => {

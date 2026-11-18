@@ -6,14 +6,13 @@
 
 use crate::display::fb::get_info;
 use crate::display::graphics::{draw_rect, draw_rect_outline, draw_text, fill_rounded_rect};
+use crate::display::icons;
 use crate::wm::theme;
 use crate::wm::window;
 
 /// One launchable application entry
 pub struct AppEntry {
     pub name: &'static str,
-    /// Emoji/box-drawing icon glyph drawn on the tile
-    pub icon: &'static str,
     /// Tile accent color (ARGB)
     pub color: u32,
     /// Launch behavior
@@ -24,7 +23,6 @@ pub struct AppEntry {
 pub static APPS: &[AppEntry] = &[
     AppEntry {
         name: "Terminal",
-        icon: ">_",
         color: 0xFF2E3440,
         launch: || {
             focus_or_create("Terminal", 720, 500, || {
@@ -34,7 +32,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Files",
-        icon: "\u{1F4C1}",
         color: 0xFFD08770,
         launch: || {
             focus_or_create("File Manager", 500, 400, || {
@@ -44,7 +41,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Editor",
-        icon: "\u{1F4DD}",
         color: 0xFFEBCB8B,
         launch: || {
             focus_or_create("Editor", 520, 400, || {
@@ -54,7 +50,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Calculator",
-        icon: "\u{1F5A9}",
         color: 0xFF88C0D0,
         launch: || {
             focus_or_create("Calculator", 300, 400, || {
@@ -64,7 +59,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Task Manager",
-        icon: "\u{1F4CA}",
         color: 0xFFA3BE8C,
         launch: || {
             crate::apps::task_manager::open();
@@ -72,7 +66,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Settings",
-        icon: "\u{2699}",
         color: 0xFF81A1C1,
         launch: || {
             focus_or_create("Settings", 400, 300, || {
@@ -82,7 +75,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Network",
-        icon: "\u{1F310}",
         color: 0xFF8FBCBB,
         launch: || {
             focus_or_create("Network", 420, 300, || {
@@ -92,7 +84,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "App Store",
-        icon: "\u{1F381}",
         color: 0xFFBF616A,
         launch: || {
             focus_or_create("App Store", 460, 320, || {
@@ -102,7 +93,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Images",
-        icon: "\u{1F5BC}",
         color: 0xFFD8DEE9,
         launch: || {
             focus_or_create("Image Viewer", 460, 340, || {
@@ -112,7 +102,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Browser",
-        icon: "\u{1F310}",
         color: 0xFF5E81AC,
         launch: || {
             focus_or_create("Browser", 900, 620, || {
@@ -122,7 +111,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "Notes",
-        icon: "\u{1F4AC}",
         color: 0xFFEBCB8B,
         launch: || {
             focus_or_create("Notes", 700, 480, || {
@@ -133,7 +121,6 @@ pub static APPS: &[AppEntry] = &[
     },
     AppEntry {
         name: "About",
-        icon: "\u{1F99E}",
         color: 0xFFFF6B6B,
         launch: || {
             focus_or_create("About", 360, 260, || {
@@ -152,6 +139,8 @@ const TILE_MARGIN: u32 = 8;
 const MENU_TOP_PAD: u32 = 12;
 /// Number of rows visible without scrolling
 const VISIBLE_ROWS: usize = 7;
+/// App icon size in the menu rows (an icon-set size, so no scaling).
+const MENU_ICON_SIZE: u32 = 32;
 
 static mut OPEN: bool = false;
 static mut HOVER_ROW: i32 = -1;
@@ -348,7 +337,7 @@ pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
         fb,
         x0 + 14,
         y0 + MENU_TOP_PAD + (header_h - theme.font_size) / 2,
-        "\u{1F99E} LobsterOS",
+        "LobsterOS",
         theme.label_text,
         theme.menu_bg,
     );
@@ -385,16 +374,15 @@ pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
         };
         fill_rounded_rect(fb, inner_x, ty, tile_w, TILE_H, 8, tile_bg);
 
-        // Icon square
+        // App tile icon, centred in the icon slot
         let icon_sz = TILE_H - 16;
-        fill_rounded_rect(fb, inner_x + 8, ty + 8, icon_sz, icon_sz, 8, app.color);
-        draw_text(
+        let inset = (icon_sz - MENU_ICON_SIZE) / 2;
+        icons::draw(
             fb,
-            inner_x + 8 + (icon_sz - 24) / 2,
-            ty + 8 + (icon_sz - theme.font_size) / 2,
-            app.icon,
-            0xFFFFFFFF,
-            app.color,
+            icons::for_app(app.name),
+            MENU_ICON_SIZE,
+            inner_x + 8 + inset,
+            ty + 8 + inset,
         );
 
         // App name

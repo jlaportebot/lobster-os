@@ -613,8 +613,8 @@ pub fn handle_click(cx: u32, cy: u32) -> bool {
     false
 }
 
-/// Draw one glyph scaled `scale`x (integer) from the baked-in 8x16 font,
-/// merging horizontal runs of set pixels into rects. Transparent background.
+/// Draw one glyph on the scaled cell grid (`scale` 2 selects the 16x32
+/// atlas) with a transparent background.
 #[cfg(feature = "qemu_raspi5b")]
 fn draw_glyph_scaled(
     fb: &crate::display::fb::FramebufferInfo,
@@ -624,33 +624,14 @@ fn draw_glyph_scaled(
     fg: u32,
     scale: u32,
 ) {
-    let code = ch as usize;
-    if code >= 128 {
-        return;
-    }
-    let glyph = &crate::display::console::FONT[code];
-    for row in 0..16u32 {
-        let bits = glyph[row as usize];
-        let mut col = 0u32;
-        while col < 8 {
-            if (bits >> (7 - col)) & 1 == 0 {
-                col += 1;
-                continue;
-            }
-            let start = col;
-            while col < 8 && (bits >> (7 - col)) & 1 != 0 {
-                col += 1;
-            }
-            crate::wm::widget::fill_rect(
-                fb,
-                x + start * scale,
-                y + row * scale,
-                (col - start) * scale,
-                scale,
-                fg,
-            );
-        }
-    }
+    use crate::display::text::{self, Face, TextStyle};
+    let style = TextStyle {
+        face: Face::Mono,
+        size: text::mono_cell_style(fg).size * scale,
+        color: fg,
+    };
+    let mut buf = [0u8; 4];
+    text::draw(fb, x, y, ch.encode_utf8(&mut buf), &style);
 }
 
 /// Render terminal screen buffer directly to the framebuffer in each terminal window.

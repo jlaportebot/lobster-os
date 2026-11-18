@@ -613,3 +613,62 @@ pub fn set_font_size(s: FontSize) {
 pub fn effective_font_size() -> u32 {
     font_size().as_u32()
 }
+
+/// Pixel size of the Medium font setting; chrome text sizes are expressed
+/// relative to it.
+const MEDIUM_FONT_PX: u32 = 16;
+/// Smallest chrome text size; below this the atlases are unreadable.
+const MIN_CHROME_PX: u32 = 11;
+
+/// Style for shell-chrome text: `base_px` is the size at the Medium setting
+/// and is scaled by the active large-text mode. The size is lowered, if
+/// needed, until its line box fits in `max_line_h` pixels so text never
+/// spills out of a fixed-height bar.
+#[must_use]
+pub fn chrome_text(
+    face: crate::display::text::Face,
+    base_px: u32,
+    color: u32,
+    max_line_h: u32,
+) -> crate::display::text::TextStyle {
+    use crate::display::text;
+    let scaled = (base_px * font_size().as_u32() + MEDIUM_FONT_PX / 2) / MEDIUM_FONT_PX;
+    let mut style = text::TextStyle {
+        face,
+        size: scaled.max(MIN_CHROME_PX),
+        color,
+    };
+    while text::line_height(&style) > max_line_h && style.size > MIN_CHROME_PX {
+        style.size -= 1;
+    }
+    style
+}
+
+/// Top of a line box of `style` vertically centred in a box of `height`
+/// starting at `top`.
+#[must_use]
+pub fn centered_line_y(top: u32, height: u32, style: &crate::display::text::TextStyle) -> u32 {
+    top + height.saturating_sub(crate::display::text::line_height(style)) / 2
+}
+
+#[cfg(all(test, feature = "std"))]
+mod chrome_text_tests {
+    use super::*;
+    use crate::display::text::{self, Face};
+
+    #[test]
+    fn chrome_text_respects_the_line_box_limit() {
+        for max_h in [14, 18, 24, 40] {
+            let style = chrome_text(Face::Ui, 24, 0xFFFFFFFF, max_h);
+            assert!(text::line_height(&style) <= max_h || style.size == MIN_CHROME_PX);
+        }
+    }
+
+    #[test]
+    fn centered_line_never_leaves_its_box() {
+        let style = chrome_text(Face::UiBold, 13, 0xFFFFFFFF, 24);
+        let y = centered_line_y(100, 24, &style);
+        assert!(y >= 100 && y + text::line_height(&style) <= 124);
+        assert_eq!(centered_line_y(100, 2, &style), 100);
+    }
+}

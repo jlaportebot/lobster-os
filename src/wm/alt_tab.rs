@@ -5,12 +5,25 @@
 //! Releasing Alt focuses the selected window and closes the overlay.
 //! Tab also steps BACKWARD when Shift is held.
 
-use crate::display::graphics::{draw_rect, draw_rect_outline, draw_text, fill_rounded_rect};
+use crate::display::graphics::{draw_rect, draw_rect_outline, fill_rounded_rect};
+use crate::display::text::{self, Face};
 use crate::wm::theme;
 use crate::wm::window;
 
 const TILE_W: u32 = 150;
 const TILE_H: u32 = 170;
+/// Header text size at the Medium font setting.
+const HEADER_PX: u32 = 13;
+/// Tile caption size at the Medium font setting.
+const CAPTION_PX: u32 = 13;
+/// Size of the initial shown on a tile thumbnail.
+const INITIAL_PX: u32 = 24;
+/// Height available to the header text line.
+const HEADER_LINE_H: u32 = 20;
+/// Height available to a tile caption line.
+const CAPTION_LINE_H: u32 = 20;
+/// Horizontal padding inside a tile caption.
+const CAPTION_PAD: u32 = 8;
 const MAX_TILES: usize = 8;
 
 static mut VISIBLE: bool = false;
@@ -122,13 +135,14 @@ pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
     draw_rect_outline(fb, x0, y0, card_w, card_h, theme.menu_border);
 
     // Header
-    draw_text(
+    let header = theme::chrome_text(Face::Ui, HEADER_PX, theme.label_text_dim, HEADER_LINE_H);
+    text::draw_fitted(
         fb,
         x0 + 14,
         y0 + 12,
+        card_w.saturating_sub(28),
         "Switch Window  (hold Alt, Tab to cycle)",
-        theme.label_text_dim,
-        theme.menu_bg,
+        &header,
     );
 
     // Tiles
@@ -165,35 +179,29 @@ pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
         draw_rect(fb, thumb_x, thumb_y, thumb_w, thumb_h, theme.win_bg);
         draw_rect(fb, thumb_x, thumb_y, thumb_w, 14, theme.title_bar);
 
-        // Icon glyph by app
-        let glyph = title_glyph(title);
-        draw_text(
+        let initial_style = theme::chrome_text(Face::UiBold, INITIAL_PX, theme.label_text, thumb_h);
+        text::draw_centered(
             fb,
-            tx + (TILE_W - 10) / 2 - 8,
-            ty + 60,
-            glyph,
-            theme.label_text,
-            theme.win_bg,
+            tx + (TILE_W - 10) / 2,
+            thumb_y + theme::centered_line_y(14, thumb_h - 14, &initial_style),
+            title_initial(title),
+            &initial_style,
         );
 
-        // Title
-        let display: alloc::string::String = title.chars().take(17).collect();
-        let label = if is_sel {
-            alloc::format!("> {}", display)
+        let caption_color = if is_sel {
+            theme.label_text
         } else {
-            display
+            theme.label_text_dim
         };
-        draw_text(
+        let face = if is_sel { Face::UiBold } else { Face::Ui };
+        let caption = theme::chrome_text(face, CAPTION_PX, caption_color, CAPTION_LINE_H);
+        text::draw_fitted(
             fb,
-            tx + 8,
-            ty + TILE_H - 22,
-            &label,
-            if is_sel {
-                theme.label_text
-            } else {
-                theme.label_text_dim
-            },
-            tile_bg,
+            tx + CAPTION_PAD,
+            ty + TILE_H - 26,
+            TILE_W - 10 - 2 * CAPTION_PAD,
+            title,
+            &caption,
         );
 
         tx += TILE_W;
@@ -201,18 +209,7 @@ pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
     }
 }
 
-fn title_glyph(title: &str) -> &'static str {
-    match title {
-        "Terminal" => ">_",
-        "File Manager" => "\u{1F4C1}",
-        "Editor" => "\u{1F4DD}",
-        "Calculator" => "\u{1F5A9}",
-        "System Monitor" => "\u{1F4CA}",
-        "Process Manager" => "\u{1F9E0}",
-        "Settings" => "\u{2699}",
-        "Browser" => "\u{1F310}",
-        "Network" => "\u{1F4F6}",
-        "App Store" => "\u{1F381}",
-        _ => "\u{25A6}",
-    }
+/// First character of the title, shown as the tile's icon stand-in.
+fn title_initial(title: &str) -> &str {
+    title.chars().next().map_or("", |c| &title[..c.len_utf8()])
 }
