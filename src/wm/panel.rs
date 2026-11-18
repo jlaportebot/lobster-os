@@ -99,7 +99,7 @@ pub fn init(fb: &FramebufferInfo) {
         launcher.y = panel_y + 4;
         launcher.w = LAUNCHER_WIDTH;
         launcher.h = PANEL_HEIGHT - 8;
-        launcher.set_text("🏠");
+        launcher.set_text("☰");
         launcher.state = crate::wm::widget::WidgetState::Normal;
         PANEL_STATE.launcher_btn = launcher;
 
