@@ -20,6 +20,8 @@ use super::vfs::*;
 use crate::arch::timer::Timer;
 #[allow(dead_code, unused_imports)]
 use crate::println;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 // ═══════════════════════════════════════════════════════════════
 // Constants
@@ -479,11 +481,11 @@ pub struct BackedChild {
 /// Read every entry of directory inode `ino` (without `.` and `..`) together
 /// with the size, type, mode, owner and mtime of the inode it names, so the
 /// VFS can list the directory without opening any file.
-pub fn read_backing_dir(ino: u32) -> Result<alloc::vec::Vec<BackedChild>, VfsError> {
+pub fn read_backing_dir(ino: u32) -> Result<Vec<BackedChild>, VfsError> {
     // SAFETY: the single mounted instance is only used from kernel task context.
     let fs = unsafe { EXT2_INSTANCE.as_mut().ok_or(VfsError::IOError)? };
     let names = fs.list_entries(ino)?;
-    let mut children = alloc::vec::Vec::new();
+    let mut children = Vec::new();
     children
         .try_reserve_exact(names.len())
         .map_err(|_| VfsError::OutOfMemory)?;
@@ -534,7 +536,7 @@ pub fn read_backing_file(ino: u32) -> Result<alloc::vec::Vec<u8>, VfsError> {
         let size = u32::from_le(inode.i_size) as usize;
         // resize() zero-fills: set_len on a reserved buffer would expose
         // uninitialized memory to read_file's fill loop (clippy: uninit).
-        let mut buf = alloc::vec::Vec::new();
+        let mut buf = Vec::new();
         buf.resize(size, 0);
         if size > 0 {
             fs.read_file(ino, 0, &mut buf)?;
@@ -854,12 +856,8 @@ impl Ext2FileSystem {
                 valid: false,
             }; INODE_CACHE_SIZE],
             inode_cache_idx: 0,
-            block_bitmaps: (0..num_groups_usize)
-                .map(|_| alloc::vec::Vec::new())
-                .collect(),
-            inode_bitmaps: (0..num_groups_usize)
-                .map(|_| alloc::vec::Vec::new())
-                .collect(),
+            block_bitmaps: (0..num_groups_usize).map(|_| Vec::new()).collect(),
+            inode_bitmaps: (0..num_groups_usize).map(|_| Vec::new()).collect(),
             bitmap_loaded: [false; MAX_BLOCK_GROUPS],
             inode_bitmap_loaded: [false; MAX_BLOCK_GROUPS],
             journal_entries: [JournalEntry {

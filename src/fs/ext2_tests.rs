@@ -1010,13 +1010,21 @@ fn vfs_directory_with_40_files_lists_and_reads_all_after_remount() {
             let path = format!("/sd/home/many/f{:02}.txt", i);
             vfs::write_file(&path, &file_body(i)).expect("write");
         }
-        assert_eq!(vfs::list_dir("/sd/home/many").expect("list").len(), MANY_FILES);
+        assert_eq!(
+            vfs::list_dir("/sd/home/many").expect("list").len(),
+            MANY_FILES
+        );
         boot_vfs();
         let entries = vfs::list_dir("/sd/home/many").expect("list after remount");
         assert_eq!(entries.len(), MANY_FILES, "every file listed");
         for entry in &entries {
             let index: usize = entry.name_str()[1..3].parse().expect("index");
-            assert_eq!(entry.size, file_body(index).len() as u64, "{}", entry.name_str());
+            assert_eq!(
+                entry.size,
+                file_body(index).len() as u64,
+                "{}",
+                entry.name_str()
+            );
         }
         let last = vfs::read_file("/sd/home/many/f39.txt").expect("read 40th");
         assert_eq!(last, file_body(MANY_FILES - 1));
@@ -1041,7 +1049,8 @@ fn build_huge_dir(dir: u32) -> Vec<Vec<u8>> {
         bodies.push(file_body(i.min(REAL_FILES - 1)));
     }
     let extra_links = (HUGE_DIR_ENTRIES - REAL_FILES) as i32;
-    fs().adjust_links(last_ino, extra_links).expect("link count");
+    fs().adjust_links(last_ino, extra_links)
+        .expect("link count");
     bodies
 }
 
@@ -1125,7 +1134,11 @@ fn vfs_created_inodes_carry_wall_clock_timestamps() {
         crate::clock::set_boot_time(WALL_CLOCK_SECS + 100, 0, 0);
         vfs::write_file("/sd/home/d/f", b"two!").expect("rewrite");
         let (atime, ctime, mtime) = stamp(file_ino);
-        assert_eq!((atime, ctime, mtime), (now, now + 100, now + 100), "rewrite");
+        assert_eq!(
+            (atime, ctime, mtime),
+            (now, now + 100, now + 100),
+            "rewrite"
+        );
         drop(clock);
     });
 }
@@ -1168,7 +1181,11 @@ fn vfs_node_table_grows_past_the_old_128_node_limit() {
             let names = listed_names(&format!("/sd/home/d{:02}", d));
             assert_eq!(names.len(), GROWTH_FILES_PER_DIR, "dir d{:02}", d);
         }
-        let last = format!("/sd/home/d{:02}/f{:02}", GROWTH_DIRS - 1, GROWTH_FILES_PER_DIR - 1);
+        let last = format!(
+            "/sd/home/d{:02}/f{:02}",
+            GROWTH_DIRS - 1,
+            GROWTH_FILES_PER_DIR - 1
+        );
         assert_eq!(vfs::read_file(&last).expect("read"), file_body(2919));
         assert_clean(vol);
     });
@@ -1184,9 +1201,15 @@ fn vfs_errors_are_reported_not_swallowed() {
             Err(vfs::VfsError::NotFound)
         );
         let too_long = format!("{}/{}", HOME_DIR, "n".repeat(TOO_LONG_NAME_LEN));
-        assert_eq!(vfs::write_file(&too_long, b"x"), Err(vfs::VfsError::InvalidPath));
+        assert_eq!(
+            vfs::write_file(&too_long, b"x"),
+            Err(vfs::VfsError::InvalidPath)
+        );
         vfs::mkdir("/sd/home/once").expect("first mkdir");
-        assert_eq!(vfs::mkdir("/sd/home/once"), Err(vfs::VfsError::AlreadyExists));
+        assert_eq!(
+            vfs::mkdir("/sd/home/once"),
+            Err(vfs::VfsError::AlreadyExists)
+        );
         assert_eq!(listed_names(HOME_DIR), ["once"]);
         assert_clean(vol);
     });
