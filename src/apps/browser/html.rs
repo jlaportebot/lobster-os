@@ -138,7 +138,11 @@ pub fn decode_entities(text: &str) -> String {
     while let Some(amp) = rest.find('&') {
         out.push_str(&rest[..amp]);
         rest = &rest[amp..];
-        let window = &rest[1..rest.len().min(MAX_ENTITY_LEN + 2)];
+        let mut end = rest.len().min(MAX_ENTITY_LEN + 2);
+        while !rest.is_char_boundary(end) {
+            end -= 1;
+        }
+        let window = &rest[1..end];
         let decoded = window
             .find(';')
             .and_then(|semi| entity_char(&window[..semi]).map(|c| (c, semi + 2)));
@@ -545,6 +549,14 @@ mod tests {
         let t = tokenize("<a href=\"?a=1&amp;b=2\">x &lt; y</a>");
         assert_eq!(t[0], start("a", &[("href", "?a=1&b=2")], false));
         assert_eq!(t[1], text("x < y"));
+    }
+
+    #[test]
+    fn entity_window_respects_char_boundaries() {
+        assert_eq!(
+            decode_entities("&\u{fffd}\u{fffd}\u{fffd}\u{fffd}x"),
+            "&\u{fffd}\u{fffd}\u{fffd}\u{fffd}x"
+        );
     }
 
     #[test]
