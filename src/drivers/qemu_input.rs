@@ -39,10 +39,10 @@ const EV_KEY_PRESS: u8 = 3;
 const EV_KEY_RELEASE: u8 = 4;
 
 /// Modifier flag bits
-const MOD_SHIFT: u8 = 0x01;
-const MOD_CTRL: u8 = 0x02;
-const MOD_ALT: u8 = 0x04;
-const MOD_GUI: u8 = 0x08;
+pub(crate) const MOD_SHIFT: u8 = 0x01;
+pub(crate) const MOD_CTRL: u8 = 0x02;
+pub(crate) const MOD_ALT: u8 = 0x04;
+pub(crate) const MOD_GUI: u8 = 0x08;
 
 /// Track whether we've verified the device is present
 static mut DEVICE_PRESENT: bool = false;
