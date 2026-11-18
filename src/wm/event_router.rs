@@ -135,6 +135,10 @@ pub fn route_right_press(x: u32, y: u32) {
     if dialog::is_open() {
         return;
     }
+    if start_menu::is_open() {
+        start_menu::close();
+        return;
+    }
     // If context menu is already visible, hide it
     if context_menu::is_visible() {
         context_menu::hide();
