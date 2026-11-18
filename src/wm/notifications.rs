@@ -12,7 +12,8 @@
 //!   - tick() — called from wm tick to advance animations/expire
 //!   - draw(fb) — draw toasts
 
-use crate::display::graphics::{draw_rect, draw_rect_outline, draw_text, fill_rounded_rect};
+use crate::display::graphics::{draw_rect, draw_rect_outline, fill_rounded_rect};
+use crate::display::text::{self, Face};
 use crate::wm::theme;
 
 /// Maximum live toasts
@@ -213,6 +214,20 @@ pub fn dismiss_top() {
 
 const TOAST_W: u32 = 300;
 const TOAST_H: u32 = 64;
+/// Title and glyph size at the Medium font setting.
+const TOAST_TITLE_PX: u32 = 14;
+/// Body size at the Medium font setting.
+const TOAST_BODY_PX: u32 = 13;
+/// Tallest line box a toast text row may use.
+const TOAST_LINE_H: u32 = 22;
+/// Top of the title row inside a toast.
+const TOAST_TITLE_Y: u32 = 9;
+/// Top of the body row inside a toast.
+const TOAST_BODY_Y: u32 = 33;
+/// Left edge of the title text (after the level glyph).
+const TOAST_TEXT_X: u32 = 36;
+/// Right padding inside a toast.
+const TOAST_PAD_RIGHT: u32 = 12;
 const TOAST_MARGIN: u32 = 12;
 const TOAST_GAP: u32 = 8;
 
@@ -230,7 +245,7 @@ fn level_glyph(level: Level) -> &'static str {
         Level::Info => "i",
         Level::Success => "\u{2713}",
         Level::Warning => "!",
-        Level::Error => "\u{2717}",
+        Level::Error => "\u{2715}",
     }
 }
 
@@ -256,32 +271,36 @@ pub fn draw(fb: &crate::display::fb::FramebufferInfo) {
             draw_rect_outline(fb, x, ty, TOAST_W, TOAST_H, theme.menu_border);
             // Accent bar (left edge)
             fill_rounded_rect(fb, x, ty, 6, TOAST_H, 3, level_color(toast.notif.level));
-            // Level glyph
-            draw_text(
+            let accent = level_color(toast.notif.level);
+            let glyph = theme::chrome_text(Face::UiBold, TOAST_TITLE_PX, accent, TOAST_LINE_H);
+            text::draw(
                 fb,
                 x + 16,
-                ty + 10,
+                ty + TOAST_TITLE_Y,
                 level_glyph(toast.notif.level),
-                level_color(toast.notif.level),
-                theme.menu_bg,
+                &glyph,
             );
-            // Title
-            draw_text(
+            let title =
+                theme::chrome_text(Face::UiBold, TOAST_TITLE_PX, theme.label_text, TOAST_LINE_H);
+            let text_w = TOAST_W - TOAST_TEXT_X - TOAST_PAD_RIGHT;
+            text::draw_fitted(
                 fb,
-                x + 34,
-                ty + 10,
+                x + TOAST_TEXT_X,
+                ty + TOAST_TITLE_Y,
+                text_w,
                 toast.notif.title_str(),
-                theme.label_text,
-                theme.menu_bg,
+                &title,
             );
-            // Body (single line, clipped by construction: 96 bytes max)
-            draw_text(
+            let body =
+                theme::chrome_text(Face::Ui, TOAST_BODY_PX, theme.label_text_dim, TOAST_LINE_H);
+            let body_w = TOAST_W - 16 - TOAST_PAD_RIGHT;
+            text::draw_fitted(
                 fb,
                 x + 16,
-                ty + 34,
+                ty + TOAST_BODY_Y,
+                body_w,
                 toast.notif.body_str(),
-                theme.label_text_dim,
-                theme.menu_bg,
+                &body,
             );
 
             y += TOAST_H + TOAST_GAP;

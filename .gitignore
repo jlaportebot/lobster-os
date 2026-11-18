@@ -19,3 +19,5 @@ Thumbs.db
 
 # Icon generator build output
 tools/icongen/target/
+# Font generator download cache
+assets/fonts/.cache/

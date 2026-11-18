@@ -5,10 +5,19 @@
 //! frame (title bar, gradient accent, buttons, border) instead of per-app
 //! ad-hoc chrome. `tick_animations` drives open/close/minimize effects.
 
-use crate::display::graphics::{draw_rect, draw_rect_outline, draw_text, fill_rounded_rect};
+use crate::display::graphics::{draw_rect, draw_rect_outline, fill_rounded_rect};
+use crate::display::text::{self, Face};
 use crate::wm::theme;
 
 pub const TITLE_H: u32 = 24;
+/// Title text size at the Medium font setting.
+const TITLE_TEXT_PX: u32 = 13;
+/// Close-button glyph size at the Medium font setting.
+const CLOSE_GLYPH_PX: u32 = 12;
+/// Gap between the window edge and the title text.
+const TITLE_PAD_X: u32 = 10;
+/// Minimum gap between the title text and the close button.
+const TITLE_BTN_GAP: u32 = 6;
 pub const BORDER_W: u32 = 2;
 pub const CLOSE_BTN_W: u32 = 36;
 
@@ -164,27 +173,30 @@ pub fn draw_frame(
     } else {
         theme.title_text_unfocused
     };
-    draw_text(
-        fb,
-        sx + 10,
-        sy + BORDER_W + (TITLE_H - theme.font_size) / 2,
-        title,
-        tt_color,
-        tb_color,
-    );
+    let title_style = theme::chrome_text(Face::UiBold, TITLE_TEXT_PX, tt_color, TITLE_H);
+    let title_y = sy + BORDER_W + theme::centered_line_y(0, TITLE_H, &title_style);
 
     // Close button (top-right)
     let btn_x = sx + sw.saturating_sub(CLOSE_BTN_W + BORDER_W + 4);
     let btn_y = sy + BORDER_W + 4;
     let btn_h = TITLE_H.saturating_sub(8);
-    fill_rounded_rect(fb, btn_x, btn_y, CLOSE_BTN_W, btn_h, 6, theme.close_btn);
-    draw_text(
+    let title_room = btn_x.saturating_sub(sx + TITLE_PAD_X + TITLE_BTN_GAP);
+    text::draw_fitted(
         fb,
-        btn_x + (CLOSE_BTN_W - 8) / 2,
-        btn_y + (btn_h - theme.font_size) / 2,
-        "x",
-        0xFFFFFFFF,
-        theme.close_btn,
+        sx + TITLE_PAD_X,
+        title_y,
+        title_room,
+        title,
+        &title_style,
+    );
+    fill_rounded_rect(fb, btn_x, btn_y, CLOSE_BTN_W, btn_h, 6, theme.close_btn);
+    let glyph_style = theme::chrome_text(Face::UiBold, CLOSE_GLYPH_PX, 0xFFFFFFFF, btn_h);
+    text::draw_centered(
+        fb,
+        btn_x + CLOSE_BTN_W / 2,
+        theme::centered_line_y(btn_y, btn_h, &glyph_style),
+        "\u{2715}",
+        &glyph_style,
     );
 
     // Client area
