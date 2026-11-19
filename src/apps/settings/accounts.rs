@@ -37,7 +37,6 @@ pub fn add_user(name: &str) -> Result<(), String> {
     ));
     passwd::write_passwd_file(&entries)
         .map_err(|e| alloc::format!("Could not write passwd: {e:?}"))?;
-    passwd::persist();
     store_shadow_and_group(name, uid);
     make_home(name);
     Ok(())
@@ -52,12 +51,11 @@ fn store_shadow_and_group(name: &str, gid: u32) {
     let _ = group::write_group_file(&groups);
 }
 
+/// Create `/home/<name>`; the persistent prefix map puts it on the disk.
 fn make_home(name: &str) {
     use crate::fs::vfs::create_dir;
-    for dir in ["/home", "/sd/home"] {
-        let _ = create_dir(dir);
-        let _ = create_dir(&alloc::format!("{dir}/{name}"));
-    }
+    let _ = create_dir("/home");
+    let _ = create_dir(&alloc::format!("/home/{name}"));
 }
 
 /// Remove account `name` (its home directory is kept, like `userdel`).
@@ -68,7 +66,6 @@ pub fn remove_user(name: &str) -> Result<(), String> {
     entries.retain(|e| e.username != name);
     passwd::write_passwd_file(&entries)
         .map_err(|e| alloc::format!("Could not write passwd: {e:?}"))?;
-    passwd::persist();
     let mut shadows = shadow::read_shadow_file().unwrap_or_default();
     shadows.retain(|s| s.username != name);
     let _ = shadow::write_shadow_file(&shadows);
