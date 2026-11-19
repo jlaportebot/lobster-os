@@ -50,7 +50,7 @@ pub fn draw(ui: &mut Ui, flow: &mut Flow, st: &mut State) {
         ui,
         flow,
         "Change password",
-        "Protects the lock screen and login; leave the new password empty to remove it",
+        "Leave the new password empty to remove it",
         ADD_W,
     );
     ui.button(

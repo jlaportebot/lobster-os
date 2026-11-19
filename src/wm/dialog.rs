@@ -1089,16 +1089,14 @@ pub fn draw(fb: &FramebufferInfo) {
                 &inner,
                 input_x + INPUT_PAD_X,
                 text_y,
-                input.text_str(),
+                &input.shown_text(),
                 &input_style,
             );
         }
 
         if input.state == WidgetState::Focused {
-            let before =
-                core::str::from_utf8(&input.text[input.scroll_offset as usize..input.cursor_pos])
-                    .unwrap_or("");
-            let cursor_px = input_x + INPUT_PAD_X + text::width(before, &input_style);
+            let before = input.shown_before_cursor();
+            let cursor_px = input_x + INPUT_PAD_X + text::width(&before, &input_style);
             for dy in 2..(input.h - 2) {
                 graphics::draw_pixel(fb, cursor_px, input_y + dy, theme.input_cursor);
                 graphics::draw_pixel(fb, cursor_px + 1, input_y + dy, theme.input_cursor);

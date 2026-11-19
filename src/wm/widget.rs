@@ -291,6 +291,16 @@ impl TextInput {
         }
     }
 
+    /// The visible text as drawn (asterisks when masked).
+    pub fn shown_text(&self) -> alloc::string::String {
+        self.displayed(&self.text[self.scroll_offset as usize..self.text_len])
+    }
+
+    /// The visible text left of the cursor as drawn, for cursor placement.
+    pub fn shown_before_cursor(&self) -> alloc::string::String {
+        self.displayed(&self.text[self.scroll_offset as usize..self.cursor_pos])
+    }
+
     /// The text as drawn: the bytes themselves, or one `*` per byte when masked.
     fn displayed(&self, bytes: &[u8]) -> alloc::string::String {
         if self.masked {
@@ -866,4 +876,26 @@ pub fn register_hit_region(
 /// Call at the start of each frame or when the window is destroyed.
 pub fn clear_hit_regions(win_id: u32) {
     crate::wm::hit_region::clear(win_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn masked_input_shows_one_asterisk_per_byte() {
+        let mut input = TextInput::ZERO;
+        input.set_text("abcd");
+        input.masked = true;
+        assert_eq!(input.shown_text(), "****");
+        assert_eq!(input.shown_before_cursor(), "****");
+        assert_eq!(input.text_str(), "abcd");
+    }
+
+    #[test]
+    fn unmasked_input_shows_the_text() {
+        let mut input = TextInput::ZERO;
+        input.set_text("abcd");
+        assert_eq!(input.shown_text(), "abcd");
+    }
 }
