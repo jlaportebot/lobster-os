@@ -660,14 +660,20 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         // Embed a libc test source file
         let libc_test_c = include_str!("../tools/libc/test_full.c");
         match crate::fs::vfs::write_file_if_changed("/bin/libc_test.c", libc_test_c.as_bytes()) {
-            Ok(_) => crate::println!("[fs] Embedded /bin/libc_test.c ({} bytes)", libc_test_c.len()),
+            Ok(_) => crate::println!(
+                "[fs] Embedded /bin/libc_test.c ({} bytes)",
+                libc_test_c.len()
+            ),
             Err(e) => crate::println!("[fs] Failed to embed /bin/libc_test.c: {:?}", e),
         }
 
         // Embed MicroPython interpreter binary
         let micropython_bin = include_bytes!("../tools/micropython_min.bin");
         match crate::fs::vfs::write_file_if_changed("/bin/python", micropython_bin) {
-            Ok(_) => crate::println!("[fs] Embedded /bin/python ({} bytes)", micropython_bin.len()),
+            Ok(_) => crate::println!(
+                "[fs] Embedded /bin/python ({} bytes)",
+                micropython_bin.len()
+            ),
             Err(e) => crate::println!("[fs] Failed to embed /bin/python: {:?}", e),
         }
     }

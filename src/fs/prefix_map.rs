@@ -54,7 +54,12 @@ pub fn enable() -> usize {
         let backing = alloc::format!("{BACKING_ROOT}{prefix}");
         if vfs::resolve_path(&backing).is_err() {
             if let Err(e) = vfs::create_dir(&backing) {
-                crate::println!("[vfs] {} stays in RAM: mkdir {} failed: {:?}", prefix, backing, e);
+                crate::println!(
+                    "[vfs] {} stays in RAM: mkdir {} failed: {:?}",
+                    prefix,
+                    backing,
+                    e
+                );
                 continue;
             }
         }
@@ -138,7 +143,16 @@ mod tests {
     fn volatile_and_virtual_paths_are_never_mapped() {
         let _guard = crate::test_support::serial_guard();
         enable_all();
-        for path in ["/", "/tmp", "/tmp/x", "/dev/null", "/proc/uptime", "/sys/kernel", "/sd/etc/x", "/share/a"] {
+        for path in [
+            "/",
+            "/tmp",
+            "/tmp/x",
+            "/dev/null",
+            "/proc/uptime",
+            "/sys/kernel",
+            "/sd/etc/x",
+            "/share/a",
+        ] {
             assert_eq!(rewrite(path), path);
         }
         deactivate_all();

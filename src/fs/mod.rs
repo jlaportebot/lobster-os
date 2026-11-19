@@ -11,5 +11,5 @@ pub mod initrd;
 pub mod prefix_map;
 pub mod procfs;
 pub mod sysfs;
-pub mod virtual_fs;
 pub mod vfs;
+pub mod virtual_fs;

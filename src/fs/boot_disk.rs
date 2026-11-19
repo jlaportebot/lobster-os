@@ -41,6 +41,9 @@ pub fn mount() -> bool {
         return false;
     }
     let active = prefix_map::enable();
-    println!("[ext2] persistent /sd mounted from lobster-vd0 ({} prefixes on disk)", active);
+    println!(
+        "[ext2] persistent /sd mounted from lobster-vd0 ({} prefixes on disk)",
+        active
+    );
     true
 }
