@@ -927,7 +927,7 @@ fn expand_pre_segment(seg: &str) -> String {
     for c in seg.chars() {
         if c == '\t' {
             let pad = TAB_WIDTH - out.chars().count() % TAB_WIDTH;
-            out.extend(core::iter::repeat(' ').take(pad));
+            out.extend(core::iter::repeat_n(' ', pad));
         } else if let Some(d) = display_char(c) {
             out.push(d);
         }
