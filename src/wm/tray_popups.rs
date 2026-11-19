@@ -172,8 +172,17 @@ pub fn handle_release(_px: u32, _py: u32) -> bool {
         BRIGHTNESS_SLIDER.dragging = false;
         VOLUME_SLIDER.dragging = false;
     }
+    crate::apps::settings::sound::volume_changed();
     crate::wm::compositor::mark_full_redraw();
     true
+}
+
+/// Set the quick-settings volume (0..=100); Settings drives the same slider.
+pub fn set_volume_level(level: u32) {
+    // SAFETY: popup state is only touched from the single UI thread.
+    unsafe {
+        VOLUME_SLIDER.value = level.min(100);
+    }
 }
 
 /// Anchor above the panel, right-aligned to the tray column.

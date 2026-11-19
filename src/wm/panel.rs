@@ -386,7 +386,7 @@ fn draw_bell(fb: &FramebufferInfo, th: &Theme, item: &Item, state: Interaction) 
 /// Time and date strings; uptime stands in until a wall clock is set.
 fn clock_lines(uptime_ms: u64) -> (String, String) {
     if let Some(now) = crate::clock::local_at(uptime_ms) {
-        let time = layout::time_text(now.hour, now.minute, layout::USE_24_HOUR);
+        let time = layout::time_text(now.hour, now.minute, crate::clock::use_24_hour());
         let date = layout::date_text(now.weekday_name(), now.day, now.month_name());
         return (time, date);
     }

@@ -72,9 +72,7 @@ pub static APPS: &[AppEntry] = &[
     AppEntry {
         name: "Settings",
         launch: || {
-            focus_or_create("Settings", 400, 300, || {
-                let _ = window::create(220, 200, 400, 300, "Settings");
-            });
+            crate::apps::settings::open_window();
         },
     },
     AppEntry {

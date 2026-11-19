@@ -226,9 +226,14 @@ and tested by CI; nothing is hand-assembled.
       large-text mode.
 
 ### O4. Applications
-- [ ] **O4.1 Settings**: fully clickable; pages Appearance (theme, accent, wallpaper),
+- [x] **O4.1 Settings**: fully clickable; pages Appearance (theme, accent, wallpaper),
       Display (resolution, scale), Sound, Network, Users (add/remove/password), Date & time,
       Storage, Apps, About; every change applies live and persists.
+      *Verified 2026-11-18:* all nine pages on the shared `src/wm/controls/` library; live + persisted
+      (`/sd/etc/settings.conf`, restored after reboot); resolution keep/revert; add user; uninstall;
+      Tab/Shift+Tab focus (30b9b03, gate 480 tests, harness 12/12). Disabled with a reason until their
+      features exist: scale (O2.9), passwords (O3.8). Gaps: no mouse wheel (QEMU input has no wheel
+      events), dropdown popups clip to the window, keyboard focus starts only after a click.
 - [ ] **O4.2 Files**: mouse selection, double-click open-with by type, back/forward/up,
       breadcrumb, new/rename/delete/copy/cut/paste, drag-move, properties, trash, list/icon
       views, sidebar places, shared folder.
@@ -343,3 +348,4 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-18 | O3.4 desktop icons (all but rubber-band); Welcome window visible again; dialogs dim instead of black; `dmesg` from a bounded kernel-log ring; Terminal runs shell commands and shows their output | gate 391 tests + harness 12/12 + screenshots |
 | 2026-11-18 | QEMU input modifiers translated to the HID layout (Shift/Ctrl were swapped); `lobstervm --accel kvm`; `/bin/spin` test programs on the base image; QEMU fork builds portably (E3.1, `qemu-nightly`) | gate 396 tests + harness (Shift path, Esc now asserted) + CI 4/4 platforms |
 | 2026-11-18 | O6.1 done: VFS directory fidelity (no node/entry/name caps, metadata on listing, timestamps); heap expansion no longer allocates while full | gate 407 tests + harness 12/12 + guest-vs-debugfs repro |
+| 2026-11-18 | O4.1 Settings app + shared controls library; pkg database save truncates (uninstall sticks) | gate 480 tests + harness 12/12 + screenshots of every page |

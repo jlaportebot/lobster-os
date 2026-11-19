@@ -625,19 +625,32 @@ fn draw_highlight(fb: &FramebufferInfo, at: (u32, u32), selected: bool, hovered:
     graphics::blend_rounded_rect(fb, rect, HIGHLIGHT_RADIUS, tint, alpha);
 }
 
+/// Label colour: the wallpaper stays dark in the Light theme, so labels do
+/// not follow the theme.
+const LABEL_COLOR: u32 = 0xFFFF_FFFF;
+/// Drop shadow behind labels so they read on every wallpaper preset.
+const LABEL_SHADOW: u32 = 0xB000_0000;
+/// Shadow offset in px.
+const LABEL_SHADOW_OFFSET: u32 = 1;
+
 fn draw_label(fb: &FramebufferInfo, at: (u32, u32), label: &str) {
-    let style = theme::chrome_text(
-        Face::Ui,
-        LABEL_PX,
-        theme::current().title_text,
-        ICON_LABEL_H,
-    );
+    let style = theme::chrome_text(Face::Ui, LABEL_PX, LABEL_COLOR, ICON_LABEL_H);
+    let shadow = text::TextStyle {
+        color: LABEL_SHADOW,
+        ..style
+    };
     let y = theme::centered_line_y(at.1 + ICON_SIZE + LABEL_GAP, ICON_LABEL_H, &style);
-    if text::width(label, &style) > LABEL_MAX_W {
-        let x = at.0 + ICON_SIZE / 2 - LABEL_MAX_W / 2;
-        text::draw_fitted(fb, x, y, LABEL_MAX_W, label, &style);
-    } else {
-        text::draw_centered(fb, at.0 + ICON_SIZE / 2, y, label, &style);
+    let cx = at.0 + ICON_SIZE / 2;
+    let x = cx - LABEL_MAX_W / 2;
+    for (pen, dx, dy) in [
+        (&shadow, LABEL_SHADOW_OFFSET, LABEL_SHADOW_OFFSET),
+        (&style, 0, 0),
+    ] {
+        if text::width(label, pen) > LABEL_MAX_W {
+            text::draw_fitted(fb, x + dx, y + dy, LABEL_MAX_W, label, pen);
+        } else {
+            text::draw_centered(fb, cx + dx, y + dy, label, pen);
+        }
     }
 }
 

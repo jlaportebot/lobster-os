@@ -5,7 +5,7 @@
 //! ([`set_boot_time`]); from then on wall time is that anchor plus monotonic
 //! uptime. Calendar conversion is pure arithmetic and unit-tested on the host.
 
-use core::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 
 const SECS_PER_MINUTE: u64 = 60;
 const SECS_PER_HOUR: u64 = 3_600;
@@ -24,6 +24,19 @@ const MONTH_NAMES: [&str; 12] = [
 static BOOT_EPOCH_SECS: AtomicU64 = AtomicU64::new(0);
 static BOOT_UPTIME_MS: AtomicU64 = AtomicU64::new(0);
 static UTC_OFFSET_SECS: AtomicI32 = AtomicI32::new(0);
+/// Whether clocks show 24-hour time (Settings > Date & time).
+static USE_24_HOUR: AtomicBool = AtomicBool::new(true);
+
+/// Whether the taskbar and Settings clocks use 24-hour time.
+#[must_use]
+pub fn use_24_hour() -> bool {
+    USE_24_HOUR.load(Ordering::Relaxed)
+}
+
+/// Choose between 24-hour and 12-hour clocks.
+pub fn set_use_24_hour(on: bool) {
+    USE_24_HOUR.store(on, Ordering::Relaxed);
+}
 
 /// A broken-down calendar date and time of day.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

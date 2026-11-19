@@ -16,6 +16,7 @@ pub mod calendar;
 pub mod compositor;
 pub mod config;
 pub mod context_menu;
+pub mod controls;
 pub mod desktop_files;
 pub mod desktop_icons;
 pub mod desktop_layout;
