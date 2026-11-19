@@ -167,7 +167,10 @@ and tested by CI; nothing is hand-assembled.
       *Verified 2026-11-09:* `LBST_RES` hint honoured at boot.
 - [ ] **O1.4 Memory sizing**: frame allocator and heap sized from the device tree for
       2/4/8/16 GB. *Verify:* `mem` total matches on each machine variant.
-- [ ] **O1.5 Entropy + crypto hygiene**: seeded CSPRNG for ASLR, salts, TLS later.
+- [x] **O1.5 Entropy + crypto hygiene**: seeded CSPRNG for ASLR, salts, TLS later.
+      *Verified 2026-11-19:* HMAC_DRBG (SHA-256) seeded from the lobster-sys host entropy register (QEMU ≥ 1.1),
+      CNTVCT jitter, RTC and platform words, reseeded every 256 requests; `/dev/urandom` + `getrandom` use it;
+      `getrandom` reachable from EL0 and confined to the EL0 window (0a3b886, gate 737 tests).
 
 ### O2. Graphics stack (the keystone for "looks and behaves like a desktop")
 - [x] **O2.1 Surface compositor**: every window owns an off-screen surface; apps draw in
@@ -215,8 +218,11 @@ and tested by CI; nothing is hand-assembled.
       *Verified 2026-11-16:* modal alert/confirm/prompt + file picker; modal blocks clicks underneath.
 - [x] **O3.7 Notifications + quick settings** (volume, brightness, network, theme toggle).
       *Verified 2026-11-16:* notification centre + quick settings popup with working sliders.
-- [ ] **O3.8 Lock screen + login with passwords** (audit Q14): salted hash, lock on demand,
+- [x] **O3.8 Lock screen + login with passwords** (audit Q14): salted hash, lock on demand,
       logout tears the session down.
+      *Verified 2026-11-19:* PBKDF2-SHA256 salted hashes (legacy `$sha256$` upgraded on login), lock screen (Super+L,
+      start menu, `lock`) with input gating and a 5-failure cooldown, log out tears the session down to the greeter,
+      boot greeter when an account has a password, Settings change/remove password (0a3b886, gate 737, harness 12/12).
 - [ ] **O3.9 Clipboard**: system-wide text clipboard, Ctrl+C/V/X in every text field, host
       bridge via E1.6.
 - [ ] **O3.10 Drag and drop** between Files, desktop and apps.
@@ -364,3 +370,4 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-19 | QEMU: HMP `lclick` honours the button mask, so `lobstervm click --right` and the harness can right-click (39e2987) | harness 12/12 + live desktop right-click menu |
 | 2026-11-19 | O4.3 Browser v2: HTML tokenizer + layout engine, status-aware fetch, links/history/bookmarks | gate 563 tests + harness 12/12 + live pages (test page, 404, example.com, info.cern.ch, Wikipedia 512 KiB) |
 | 2026-11-19 | O4.2 Files phase 1 (views, selection, clipboard operations, context menus, open-with) | gate 641 tests + harness 12/12 + live screenshots |
+| 2026-11-19 | O3.8 lock screen + passwords, O1.5 CSPRNG; uaccess confined to the EL0 window (kernel text was writable via getrandom) | gate 737 tests + harness 12/12 + live lock/greeter/getrandom_test |
