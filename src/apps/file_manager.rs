@@ -273,7 +273,7 @@ impl FileManager {
         let _ = create_dir(dest);
 
         for entry in entries {
-            let entry_name = core::str::from_utf8(&entry.name[..entry.name_len]).unwrap_or("");
+            let entry_name = entry.name_str();
             let src_path = if src == "/" {
                 alloc::format!("/{}", entry_name)
             } else {

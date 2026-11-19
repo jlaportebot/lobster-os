@@ -71,76 +71,51 @@ pub unsafe fn init() {
     );
 }
 
-/// Expand the heap by mapping additional frames
-/// Optimized to allocate contiguous chunks for large allocations
+/// Expand the heap by mapping additional frames.
+///
+/// Runs while the heap is full, so it must not allocate: frames are taken
+/// and mapped one at a time (virtual contiguity is all the heap needs).
 unsafe fn expand_heap(min_size: usize) -> bool {
-    let pages_needed = (min_size + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize;
-
-    // For large allocations, try to allocate contiguous frames
-    // This avoids the overhead of mapping pages one by one
-    let chunk_size = pages_needed.min(64); // Allocate up to 64 pages (256KB) at a time
-    let mut pages_done = 0;
-
-    while pages_done < pages_needed {
-        if HEAP_CURRENT_TOP >= HEAP_VIRT_END {
-            println!("[heap] Out of heap virtual address space!");
-            return false;
-        }
-
-        let remaining = pages_needed - pages_done;
-        let this_chunk = chunk_size.min(remaining);
-
-        // Try to allocate multiple contiguous frames
-        let frames_allocated = if this_chunk > 1 {
-            frame_alloc::allocate_contiguous_frames(this_chunk)
-        } else {
-            frame_alloc::allocate_frame().map(|f| alloc::vec::Vec::from([f]))
-        };
-
-        let frames = match frames_allocated {
-            Some(f) => f,
-            None => {
-                println!("[heap] Out of physical frames for heap expansion!");
-                return false;
-            }
-        };
-
-        // Map all frames contiguously
-        for (i, frame) in frames.iter().enumerate() {
-            crate::memory::vmem::map_kernel_page(
-                HEAP_CURRENT_TOP as u64 + (i * PAGE_SIZE as usize) as u64,
-                frame.0,
-                crate::memory::vmem::PTE_KERNEL_DATA,
-            );
-        }
-
-        // Create a single large free block for the contiguous region
-        let total_size = frames.len() * PAGE_SIZE as usize;
-        let new_block = HEAP_CURRENT_TOP as *mut HeapHeader;
-        (*new_block) = HeapHeader {
-            size: total_size,
-            is_free: true,
-            next: core::ptr::null_mut(),
-        };
-
-        // Append to the free list
-        let mut current = HEAP_HEAD;
-        while !(*current).next.is_null() {
-            current = (*current).next;
-        }
-        (*current).next = new_block;
-
-        // Try to coalesce with the previous block if it was free and adjacent
-        if current as usize + (*current).size == new_block as usize && (*current).is_free {
-            (*current).size += (*new_block).size;
-            (*current).next = (*new_block).next;
-        }
-
-        HEAP_CURRENT_TOP += total_size;
-        pages_done += frames.len();
+    let pages_needed = min_size.div_ceil(PAGE_SIZE as usize);
+    if HEAP_CURRENT_TOP + pages_needed * PAGE_SIZE as usize > HEAP_VIRT_END {
+        println!("[heap] Out of heap virtual address space!");
+        return false;
     }
-
+    let block_start = HEAP_CURRENT_TOP;
+    for _ in 0..pages_needed {
+        let Some(frame) = frame_alloc::allocate_frame() else {
+            println!("[heap] Out of physical frames for heap expansion!");
+            return false;
+        };
+        crate::memory::vmem::map_kernel_page(
+            HEAP_CURRENT_TOP as u64,
+            frame.0,
+            crate::memory::vmem::PTE_KERNEL_DATA,
+        );
+        HEAP_CURRENT_TOP += PAGE_SIZE as usize;
+    }
+    append_free_block(block_start, pages_needed * PAGE_SIZE as usize);
     true
+}
+
+/// Add the freshly mapped region `[start, start + size)` to the free list,
+/// merging it into the last block when that one is free and adjacent.
+unsafe fn append_free_block(start: usize, size: usize) {
+    let new_block = start as *mut HeapHeader;
+    (*new_block) = HeapHeader {
+        size,
+        is_free: true,
+        next: core::ptr::null_mut(),
+    };
+    let mut current = HEAP_HEAD;
+    while !(*current).next.is_null() {
+        current = (*current).next;
+    }
+    if current as usize + (*current).size == start && (*current).is_free {
+        (*current).size += size;
+    } else {
+        (*current).next = new_block;
+    }
 }
 
 /// First-fit allocation from the linked list

@@ -1,14 +1,17 @@
 //! Virtual Filesystem Layer — abstract inode-based filesystem interface
+//!
+//! Nodes live in a growable table. Every node is its own leaked heap box, so
+//! the `&'static VfsNode` references handed out by [`get_node`] stay valid
+//! while the table itself grows and reallocates. Directory contents are
+//! lists of `(name, node id)` pairs sized by the heap, not by a fixed cap.
 
 use crate::ipc::{O_CLOEXEC, O_NONBLOCK};
 use crate::println;
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
-/// Maximum path depth for resolution
-const MAX_PATH_DEPTH: usize = 16;
-
-/// Maximum filename length (reduced from 255 to save kernel image size)
-const MAX_NAME_LEN: usize = 32;
+/// Maximum filename length in bytes (the ext2 limit).
+pub const MAX_NAME_LEN: usize = 255;
 
 /// Maximum open files system-wide
 const MAX_OPEN_FILES: usize = 32;
@@ -81,11 +84,10 @@ pub struct Metadata {
     pub gid: u32,
 }
 
-/// Directory entry
-#[derive(Debug, Clone, Copy)]
+/// Directory entry as returned by `list_dir`
+#[derive(Debug, Clone)]
 pub struct DirEntry {
-    pub name: [u8; MAX_NAME_LEN],
-    pub name_len: usize,
+    pub name: String,
     pub file_type: FileType,
     pub inode_id: u64,
     /// Convenience: file size copied from metadata at enumeration time
@@ -101,8 +103,7 @@ pub struct DirEntry {
 impl DirEntry {
     pub const fn empty() -> Self {
         Self {
-            name: [0u8; MAX_NAME_LEN],
-            name_len: 0,
+            name: String::new(),
             file_type: FileType::RegularFile,
             inode_id: 0,
             size: 0,
@@ -113,29 +114,29 @@ impl DirEntry {
     }
 
     pub fn set_name(&mut self, s: &str) {
-        let bytes = s.as_bytes();
-        let len = bytes.len().min(MAX_NAME_LEN);
-        self.name[..len].copy_from_slice(&bytes[..len]);
-        self.name_len = len;
+        self.name.clear();
+        self.name.push_str(s);
     }
 
     pub fn name_str(&self) -> &str {
-        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("?")
+        &self.name
     }
 }
-
-/// Maximum directory entries per node
-pub const MAX_DIR_ENTRIES: usize = 16;
 
 /// Maximum inline file data size (256KB per file — supports libc-linked binaries)
 pub const MAX_FILE_DATA: usize = 524288;
 
+/// A child link inside a directory node: the name it is listed under and the
+/// id of the node it leads to.
+struct Child {
+    name: String,
+    id: u64,
+}
+
 /// VFS Node — represents a file, directory, device, or symlink
-#[derive(Copy, Clone)]
 pub struct VfsNode {
     pub id: u64,
-    pub name: [u8; MAX_NAME_LEN],
-    pub name_len: usize,
+    name: String,
     pub metadata: Metadata,
     pub fs_id: u32, // Which filesystem owns this node
     /// Backing-store routing (ext2): filesystem id + ext2 inode. When
@@ -143,18 +144,20 @@ pub struct VfsNode {
     /// instead of the inline data buffer.
     pub backing_fs: u32,
     pub backing_ino: u32,
-    /// True once the file content has been hydrated from the backing store
+    /// Files: true once the content has been hydrated from the backing store
     /// into the inline buffer (subsequent writes go through + stay cached).
+    /// Directories: true once their backing-store children were materialized.
     pub hydrated: bool,
+    /// True while the inline buffer holds changes the backing store has not
+    /// seen yet; only dirty files are written back (a read must not bump the
+    /// file's mtime).
+    pub dirty: bool,
     pub parent_id: u64,
-    /// For directories: list of child entries
-    pub dir_entries: [DirEntry; MAX_DIR_ENTRIES],
-    pub dir_count: usize,
+    /// For directories: the children, in on-disk / creation order.
+    children: Vec<Child>,
     /// For regular files: heap-backed data storage.
     /// `data_ptr` is null until the file is written; the buffer is lazily
-    /// allocated so directories and empty nodes cost nothing. This replaces
-    /// the old per-node inline `[u8; MAX_FILE_DATA]` array, which inflated
-    /// the kernel .bss by ~512KB per node and hard-capped the node table.
+    /// allocated so directories and empty nodes cost nothing.
     pub data_ptr: *mut u8,
     pub data_cap: usize,
     pub data_len: u64,
@@ -164,8 +167,7 @@ impl VfsNode {
     pub const fn empty(id: u64) -> Self {
         Self {
             id,
-            name: [0u8; MAX_NAME_LEN],
-            name_len: 0,
+            name: String::new(),
             metadata: Metadata {
                 size: 0,
                 file_type: FileType::RegularFile,
@@ -179,9 +181,9 @@ impl VfsNode {
             backing_fs: 0,
             backing_ino: 0,
             hydrated: false,
+            dirty: false,
             parent_id: 0,
-            dir_entries: [DirEntry::empty(); MAX_DIR_ENTRIES],
-            dir_count: 0,
+            children: Vec::new(),
             data_ptr: core::ptr::null_mut(),
             data_cap: 0,
             data_len: 0,
@@ -189,14 +191,17 @@ impl VfsNode {
     }
 
     pub fn set_name(&mut self, s: &str) {
-        let bytes = s.as_bytes();
-        let len = bytes.len().min(MAX_NAME_LEN);
-        self.name[..len].copy_from_slice(&bytes[..len]);
-        self.name_len = len;
+        self.name.clear();
+        self.name.push_str(s);
     }
 
     pub fn name_str(&self) -> &str {
-        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("?")
+        &self.name
+    }
+
+    /// Number of children (0 for anything but a directory).
+    pub fn dir_count(&self) -> usize {
+        self.children.len()
     }
 
     /// Current file contents (length = data_len). Returns empty slice
@@ -205,6 +210,8 @@ impl VfsNode {
         if self.data_ptr.is_null() {
             return &[];
         }
+        // SAFETY: data_ptr/data_len describe the live heap buffer that
+        // ensure_capacity allocated; data_len never exceeds data_cap.
         unsafe { core::slice::from_raw_parts(self.data_ptr, self.data_len as usize) }
     }
 
@@ -219,19 +226,35 @@ impl VfsNode {
         let mut new_box = alloc::vec![0u8; new_cap].into_boxed_slice();
         if !self.data_ptr.is_null() {
             let old_len = (self.data_len as usize).min(new_cap);
+            // SAFETY: data_ptr is the live buffer and old_len <= data_len <= data_cap.
             let old = unsafe { core::slice::from_raw_parts(self.data_ptr, old_len) };
             new_box[..old_len].copy_from_slice(old);
-            // Release the previous buffer.
-            let _ = unsafe {
-                alloc::boxed::Box::<[u8]>::from_raw(core::ptr::slice_from_raw_parts_mut(
-                    self.data_ptr,
-                    old_len,
-                ))
-            };
+            let kept_len = self.data_len;
+            self.release_data();
+            self.data_len = kept_len;
         }
         self.data_ptr = alloc::boxed::Box::into_raw(new_box) as *mut u8;
         self.data_cap = new_cap;
         Ok(())
+    }
+
+    /// Free the data buffer (if any). The recorded length is reset too.
+    fn release_data(&mut self) {
+        if self.data_ptr.is_null() {
+            return;
+        }
+        // SAFETY: data_ptr/data_cap came from Box::<[u8]>::into_raw in
+        // ensure_capacity and have not been freed since (data_ptr is nulled
+        // right below).
+        drop(unsafe {
+            alloc::boxed::Box::<[u8]>::from_raw(core::ptr::slice_from_raw_parts_mut(
+                self.data_ptr,
+                self.data_cap,
+            ))
+        });
+        self.data_ptr = core::ptr::null_mut();
+        self.data_cap = 0;
+        self.data_len = 0;
     }
 
     /// Replace the entire file contents with `src` (used by initrd loader,
@@ -242,6 +265,7 @@ impl VfsNode {
         }
         self.ensure_capacity(src.len())?;
         if !self.data_ptr.is_null() {
+            // SAFETY: ensure_capacity guarantees data_cap >= src.len().
             let dst = unsafe { core::slice::from_raw_parts_mut(self.data_ptr, src.len()) };
             dst.copy_from_slice(src);
         }
@@ -276,43 +300,61 @@ impl VfsNode {
         }
         self.ensure_capacity(offset_usize + to_write)?;
         if !self.data_ptr.is_null() {
+            // SAFETY: ensure_capacity guarantees data_cap >= offset + to_write.
             let dst =
                 unsafe { core::slice::from_raw_parts_mut(self.data_ptr, offset_usize + to_write) };
             dst[offset_usize..offset_usize + to_write].copy_from_slice(&buf[..to_write]);
         }
         self.data_len = self.data_len.max(offset + to_write as u64);
         self.metadata.size = self.data_len;
+        self.dirty = true;
         Ok(to_write)
     }
 
-    pub fn add_dir_entry(&mut self, entry: DirEntry) -> Result<(), VfsError> {
+    /// Link child node `id` into this directory under `name`. Fails with
+    /// `AlreadyExists` for a duplicate name and `OutOfMemory` when the child
+    /// list cannot grow; a failed call changes nothing.
+    pub fn add_child(&mut self, name: &str, id: u64) -> Result<(), VfsError> {
         if self.metadata.file_type != FileType::Directory {
             return Err(VfsError::NotADirectory);
         }
-        if self.dir_count >= MAX_DIR_ENTRIES {
-            return Err(VfsError::OutOfMemory);
+        if self.find_child(name).is_some() {
+            return Err(VfsError::AlreadyExists);
         }
-        // Check for duplicate
-        for i in 0..self.dir_count {
-            if self.dir_entries[i].name_str() == entry.name_str() {
-                return Err(VfsError::AlreadyExists);
-            }
-        }
-        self.dir_entries[self.dir_count] = entry;
-        self.dir_count += 1;
+        self.push_child(name, id)
+    }
+
+    /// Append a child without the duplicate scan (the caller knows the name
+    /// is new, e.g. while materializing a directory from disk).
+    fn push_child(&mut self, name: &str, id: u64) -> Result<(), VfsError> {
+        self.children
+            .try_reserve(1)
+            .map_err(|_| VfsError::OutOfMemory)?;
+        let mut owned = String::new();
+        owned
+            .try_reserve_exact(name.len())
+            .map_err(|_| VfsError::OutOfMemory)?;
+        owned.push_str(name);
+        self.children.push(Child { name: owned, id });
         Ok(())
+    }
+
+    /// Unlink the child called `name`; keeps the order of the others.
+    fn remove_child(&mut self, name: &str) -> bool {
+        match self.children.iter().position(|c| c.name == name) {
+            Some(index) => {
+                self.children.remove(index);
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn find_child(&self, name: &str) -> Option<u64> {
         if self.metadata.file_type != FileType::Directory {
             return None;
         }
-        for i in 0..self.dir_count {
-            if self.dir_entries[i].name_str() == name {
-                return Some(self.dir_entries[i].inode_id);
-            }
-        }
-        None
+        self.children.iter().find(|c| c.name == name).map(|c| c.id)
     }
 }
 
@@ -346,27 +388,23 @@ impl MountPoint {
     }
 }
 
-/// Maximum number of nodes in the VFS (reduced to fit 256KB file data)
-const MAX_VFS_NODES: usize = 128;
-
 /// Maximum mount points
 const MAX_MOUNT_POINTS: usize = 8;
 
-/// Global VFS state
-static mut VFS_NODES: [VfsNode; MAX_VFS_NODES] = {
-    // Initialize all nodes as empty
-    let mut arr: [VfsNode; MAX_VFS_NODES] = [VfsNode::empty(0); MAX_VFS_NODES];
-    let mut i = 0;
-    while i < MAX_VFS_NODES {
-        arr[i].id = i as u64;
-        i += 1;
-    }
-    arr
-};
-static mut VFS_NODE_COUNT: usize = 0;
+/// Every node ever allocated, indexed by node id. Entries point at leaked
+/// heap boxes and are never freed or moved: the table may reallocate, the
+/// nodes it points to may not. Removed nodes stay as tombstones so ids are
+/// never reused (a stale open fd cannot alias a newer file).
+static mut NODE_TABLE: Vec<*mut VfsNode> = Vec::new();
 static mut MOUNT_POINTS: [MountPoint; MAX_MOUNT_POINTS] = [MountPoint::empty(); MAX_MOUNT_POINTS];
 static mut MOUNT_COUNT: usize = 0;
 static mut NEXT_FS_ID: u32 = 1;
+
+/// Test hook: refuse to grow the node table past this many nodes, to drive
+/// the out-of-memory path deterministically.
+#[cfg(test)]
+pub(crate) static NODE_LIMIT: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(usize::MAX);
 
 /// File handle for open files
 pub struct FileHandle {
@@ -387,124 +425,203 @@ pub const O_APPEND: u32 = 0x400;
 static mut OPEN_FILES: [Option<FileHandle>; MAX_OPEN_FILES] = [const { None }; MAX_OPEN_FILES];
 static mut NEXT_FD: usize = 0;
 
+/// Permission bits of a freshly created directory / file.
+const DEFAULT_DIR_MODE: u32 = 0o755;
+const DEFAULT_FILE_MODE: u32 = 0o644;
+
+/// Directories every fresh boot gets (the VFS is volatile until a persistent
+/// disk is mounted).
+const STANDARD_DIRS: [&str; 7] = ["bin", "etc", "tmp", "root", "home", "var", "usr"];
+
+/// Current wall-clock time in epoch seconds; 0 until a clock has been set.
+pub(crate) fn now_secs() -> u32 {
+    #[cfg(feature = "std")]
+    let uptime_ms = 0;
+    #[cfg(not(feature = "std"))]
+    let uptime_ms = crate::arch::timer::Timer::uptime_ms();
+    crate::clock::epoch_secs_at(uptime_ms).map_or(0, |secs| secs as u32)
+}
+
+/// Metadata for a node that has no backing inode yet.
+fn default_metadata(file_type: FileType, id: u64) -> Metadata {
+    let permissions = if file_type == FileType::Directory {
+        DEFAULT_DIR_MODE
+    } else {
+        DEFAULT_FILE_MODE
+    };
+    Metadata {
+        size: 0,
+        file_type,
+        permissions,
+        modified_time: u64::from(now_secs()),
+        inode_id: id,
+        uid: 0,
+        gid: 0,
+    }
+}
+
 /// Initialize the VFS
 pub fn init() {
+    // SAFETY: boot-time, single-threaded. Old nodes (a second init() only
+    // happens in host tests) are deliberately leaked, never freed, because
+    // `&'static VfsNode` references to them may still exist.
     unsafe {
-        VFS_NODE_COUNT = 0;
+        NODE_TABLE.clear();
         MOUNT_COUNT = 0;
         NEXT_FS_ID = 1;
-
-        // Create root node
-        let root = &mut VFS_NODES[0];
-        root.id = 0;
-        root.set_name("/");
-        root.metadata = Metadata {
-            size: 0,
-            file_type: FileType::Directory,
-            permissions: 0o755,
-            modified_time: 0,
-            inode_id: 0,
-            uid: 0,
-            gid: 0,
-        };
-        root.fs_id = 0;
-        root.parent_id = 0;
-        root.dir_count = 0;
-        VFS_NODE_COUNT = 1;
-
-        // Create standard directories so fresh boots have a usable layout
-        // (VFS is volatile until a persistent disk is mounted).
-        for dir in ["/bin", "/etc", "/tmp", "/root", "/home", "/var", "/usr"] {
-            if let Ok(id) = alloc_node(dir.trim_start_matches('/'), FileType::Directory, 0) {
-                let _ = id;
-            }
+    }
+    let mut root = VfsNode::empty(0);
+    root.set_name("/");
+    root.metadata = default_metadata(FileType::Directory, 0);
+    if push_node(root).is_err() {
+        println!("[vfs] out of memory creating the root node");
+        return;
+    }
+    for dir in STANDARD_DIRS {
+        if let Err(e) = alloc_node(dir, FileType::Directory, 0) {
+            println!("[vfs] cannot create /{}: {}", dir, e);
         }
     }
     println!("[vfs] Virtual filesystem initialized (root + /bin /etc /tmp /root /home /var /usr)");
 }
 
-/// Allocate a new VFS node
+/// Number of nodes allocated so far (tombstones included).
+fn node_count() -> usize {
+    // SAFETY: the table is only mutated from task context, never concurrently.
+    unsafe { NODE_TABLE.len() }
+}
+
+/// Put `node` on the heap, give it the next id and register it in the table.
+fn push_node(mut node: VfsNode) -> Result<u64, VfsError> {
+    #[cfg(test)]
+    if node_count() >= NODE_LIMIT.load(core::sync::atomic::Ordering::Relaxed) {
+        return Err(VfsError::OutOfMemory);
+    }
+    // SAFETY: only called from task context; no reference into the Vec
+    // itself is held across this call (nodes are reached through raw pointers).
+    let table = unsafe { &mut *core::ptr::addr_of_mut!(NODE_TABLE) };
+    table.try_reserve(1).map_err(|_| VfsError::OutOfMemory)?;
+    let id = table.len() as u64;
+    node.id = id;
+    node.metadata.inode_id = id;
+    let layout = core::alloc::Layout::new::<VfsNode>();
+    // SAFETY: VfsNode is not zero-sized, so the layout is valid for alloc.
+    let ptr = unsafe { alloc::alloc::alloc(layout) } as *mut VfsNode;
+    if ptr.is_null() {
+        return Err(VfsError::OutOfMemory);
+    }
+    // SAFETY: ptr is non-null, aligned and large enough for a VfsNode, and
+    // holds no value yet, so writing (not assigning) is correct.
+    unsafe { ptr.write(node) };
+    table.push(ptr);
+    Ok(id)
+}
+
+/// Allocate a new VFS node with default metadata and link it into `parent_id`.
 pub fn alloc_node(name: &str, file_type: FileType, parent_id: u64) -> Result<u64, VfsError> {
-    unsafe {
-        if VFS_NODE_COUNT >= MAX_VFS_NODES {
-            return Err(VfsError::OutOfMemory);
-        }
-        let idx = VFS_NODE_COUNT;
-        let node = &mut VFS_NODES[idx];
-        node.id = idx as u64;
-        node.set_name(name);
-        node.metadata = Metadata {
-            size: 0,
-            file_type,
-            permissions: if file_type == FileType::Directory {
-                0o755
-            } else {
-                0o644
-            },
-            modified_time: 0,
-            inode_id: idx as u64,
-            uid: 0,
-            gid: 0,
-        };
-        node.fs_id = 0;
-        node.parent_id = parent_id;
-        node.dir_count = 0;
-        node.data_ptr = core::ptr::null_mut();
-        node.data_cap = 0;
-        node.data_len = 0;
-        VFS_NODE_COUNT += 1;
+    alloc_node_with(name, file_type, parent_id, default_metadata(file_type, 0))
+}
 
-        // Add to parent directory
-        if parent_id < VFS_NODE_COUNT as u64 && parent_id != idx as u64 {
-            let parent = &mut VFS_NODES[parent_id as usize];
-            let mut entry = DirEntry::empty();
-            entry.set_name(name);
-            entry.file_type = file_type;
-            entry.inode_id = idx as u64;
-            let _ = parent.add_dir_entry(entry);
-        }
+/// Allocate a node carrying `metadata` (as read from a backing store) and
+/// link it into `parent_id`. Nothing is left behind when it fails: a bad
+/// name, a missing or non-directory parent, a duplicate name or memory
+/// exhaustion are all reported to the caller.
+pub fn alloc_node_with(
+    name: &str,
+    file_type: FileType,
+    parent_id: u64,
+    metadata: Metadata,
+) -> Result<u64, VfsError> {
+    create_child(name, file_type, parent_id, metadata, true)
+}
 
-        Ok(idx as u64)
+/// Shared body of node creation. `check_duplicates` is false only while a
+/// directory is being materialized from disk, where names are known unique.
+fn create_child(
+    name: &str,
+    file_type: FileType,
+    parent_id: u64,
+    metadata: Metadata,
+    check_duplicates: bool,
+) -> Result<u64, VfsError> {
+    check_name(name)?;
+    let parent = get_node(parent_id).ok_or(VfsError::NotFound)?;
+    if parent.metadata.file_type != FileType::Directory {
+        return Err(VfsError::NotADirectory);
+    }
+    if check_duplicates && parent.find_child(name).is_some() {
+        return Err(VfsError::AlreadyExists);
+    }
+    link_new_node(name, file_type, parent_id, metadata)
+}
+
+/// Create the node and its parent link, undoing the node on link failure.
+fn link_new_node(
+    name: &str,
+    file_type: FileType,
+    parent_id: u64,
+    metadata: Metadata,
+) -> Result<u64, VfsError> {
+    let mut node = VfsNode::empty(0);
+    node.metadata = Metadata {
+        file_type,
+        ..metadata
+    };
+    node.parent_id = parent_id;
+    node.name
+        .try_reserve_exact(name.len())
+        .map_err(|_| VfsError::OutOfMemory)?;
+    node.set_name(name);
+    let id = push_node(node)?;
+    let parent = get_node_mut(parent_id).ok_or(VfsError::NotFound)?;
+    if let Err(e) = parent.push_child(name, id) {
+        retire_node(id);
+        return Err(e);
+    }
+    Ok(id)
+}
+
+/// Reject names the VFS cannot store: empty, too long, or containing '/'.
+fn check_name(name: &str) -> Result<(), VfsError> {
+    if name.is_empty() || name.len() > MAX_NAME_LEN || name.contains('/') {
+        return Err(VfsError::InvalidPath);
+    }
+    Ok(())
+}
+
+/// Turn a node into a tombstone: free its data and forget its identity. The
+/// id stays allocated so it is never handed out again.
+fn retire_node(id: u64) {
+    if let Some(node) = get_node_mut(id) {
+        node.release_data();
+        node.children = Vec::new();
+        node.name = String::new();
+        node.metadata.file_type = FileType::RegularFile;
+        node.metadata.size = 0;
+        node.backing_fs = 0;
+        node.backing_ino = 0;
     }
 }
 
 /// Get a VFS node by ID
 pub fn get_node(id: u64) -> Option<&'static VfsNode> {
+    // SAFETY: every table entry is a leaked heap box that is never freed or
+    // moved (see NODE_TABLE), so the reference is valid for 'static even if
+    // the table reallocates afterwards.
     unsafe {
-        if (id as usize) < VFS_NODE_COUNT {
-            Some(&VFS_NODES[id as usize])
-        } else {
-            None
-        }
+        let ptr = *NODE_TABLE.get(id as usize)?;
+        Some(&*ptr)
     }
 }
 
 /// Get a mutable VFS node by ID
 pub fn get_node_mut(id: u64) -> Option<&'static mut VfsNode> {
+    // SAFETY: as for get_node. Callers uphold the existing single-writer
+    // discipline of the VFS (kernel task context, no concurrent mutation).
     unsafe {
-        if (id as usize) < VFS_NODE_COUNT {
-            Some(&mut VFS_NODES[id as usize])
-        } else {
-            None
-        }
+        let ptr = *NODE_TABLE.get(id as usize)?;
+        Some(&mut *ptr)
     }
-}
-
-/// Split a path into components
-fn split_path(path: &str) -> [Option<&str>; MAX_PATH_DEPTH] {
-    let mut parts: [Option<&str>; MAX_PATH_DEPTH] = [None; MAX_PATH_DEPTH];
-    let mut idx = 0;
-    for component in path.split('/') {
-        if component.is_empty() {
-            continue;
-        }
-        if idx >= MAX_PATH_DEPTH {
-            break;
-        }
-        parts[idx] = Some(component);
-        idx += 1;
-    }
-    parts
 }
 
 /// Persistent-home overlay: while enabled, `/home[/<name>[/...]]` is an alias
@@ -569,181 +686,178 @@ pub fn bootstrap_home() {
     );
 }
 
-/// Resolve a path to a VFS node ID
+/// Resolve a path to a VFS node ID. Every backing-store directory walked
+/// through is expanded first; the final node is returned as it is.
 pub fn resolve_path(path: &str) -> Result<u64, VfsError> {
     let path = &*alias_path(path);
     if path.is_empty() {
         return Err(VfsError::InvalidPath);
     }
-
-    let start_node = if path.starts_with('/') {
-        0u64
-    } else {
-        // Use current working directory (simplified: root)
-        0u64
-    };
-
-    let parts = split_path(path);
-    let mut current_id = start_node;
-
-    for part_opt in &parts {
-        if let Some(part) = part_opt {
-            let node = get_node(current_id).ok_or(VfsError::NotFound)?;
-            if node.metadata.file_type != FileType::Directory {
-                return Err(VfsError::NotADirectory);
-            }
-            // Lazily materialize ext2-backed directory contents on first traversal
-            maybe_expand_dir(current_id);
-            let node = get_node(current_id).ok_or(VfsError::NotFound)?;
-            current_id = node.find_child(part).ok_or(VfsError::NotFound)?;
+    let mut current_id = 0u64;
+    for part in path.split('/').filter(|part| !part.is_empty()) {
+        ensure_expanded(current_id)?;
+        let node = get_node(current_id).ok_or(VfsError::NotFound)?;
+        if node.metadata.file_type != FileType::Directory {
+            return Err(VfsError::NotADirectory);
         }
+        current_id = node.find_child(part).ok_or(VfsError::NotFound)?;
     }
-
     Ok(current_id)
 }
 
-/// Create a directory
-pub fn mkdir(path: &str) -> Result<u64, VfsError> {
-    let path = &*alias_path(path);
-    // Split path into parent + name
-    let (parent_path, name) = if let Some(idx) = path.rfind('/') {
-        (&path[..idx.max(1)], &path[idx + 1..])
-    } else {
-        ("", path)
-    };
+/// Split `path` into its parent directory path and final component.
+fn split_parent(path: &str) -> (&str, &str) {
+    match path.rfind('/') {
+        Some(idx) => (&path[..idx.max(1)], &path[idx + 1..]),
+        None => ("", path),
+    }
+}
 
+/// Resolve the directory that holds (or will hold) `path`'s last component
+/// and make sure its children are loaded. Returns the directory's node id
+/// and the component's name. `path` must already be alias-rewritten.
+fn resolve_parent(path: &str) -> Result<(u64, &str), VfsError> {
+    let (parent_path, name) = split_parent(path);
     let parent_id = if parent_path.is_empty() || parent_path == "/" {
         0u64
     } else {
         resolve_path(parent_path)?
     };
+    ensure_expanded(parent_id)?;
+    Ok((parent_id, name))
+}
 
-    let node_id = alloc_node(name, FileType::Directory, parent_id)?;
-
-    // Persist into the ext2 backing store when the parent dir is ext2-backed
-    // (so directories survive reboots, matching file write-through).
-    if let Some(parent) = get_node(parent_id) {
-        let (p_ino, p_fs) = (parent.backing_ino, parent.backing_fs);
-        if p_ino != 0 && p_fs != 0 {
-            match crate::fs::ext2::create_backing_dir(p_ino, name) {
-                Ok(new_ino) => {
-                    set_node_backing(node_id, p_fs, new_ino);
-                }
-                Err(e) => {
-                    println!("[vfs] ext2 mkdir '{}' failed: {:?}", name, e);
-                }
-            }
-        }
+/// Backing-store inode and fs id of a node, when it has one.
+fn backing_of(node_id: u64) -> Option<(u32, u32)> {
+    let node = get_node(node_id)?;
+    if node.backing_ino == 0 || node.backing_fs == 0 {
+        return None;
     }
+    Some((node.backing_ino, node.backing_fs))
+}
 
+/// Remove `name` from its parent's child list and retire the node.
+fn detach_node(parent_id: u64, name: &str, node_id: u64) {
+    if let Some(parent) = get_node_mut(parent_id) {
+        parent.remove_child(name);
+    }
+    retire_node(node_id);
+}
+
+/// Create a directory (also in the ext2 backing store when the parent is
+/// ext2-backed, so it survives reboots like file write-through does).
+pub fn mkdir(path: &str) -> Result<u64, VfsError> {
+    let path = &*alias_path(path);
+    let (parent_id, name) = resolve_parent(path)?;
+    let node_id = alloc_node(name, FileType::Directory, parent_id)?;
+    if let Err(e) = persist_new_dir(parent_id, node_id, name) {
+        detach_node(parent_id, name, node_id);
+        return Err(e);
+    }
     Ok(node_id)
 }
 
-/// Create a file
+/// Create the ext2 directory behind a new VFS directory node.
+fn persist_new_dir(parent_id: u64, node_id: u64, name: &str) -> Result<(), VfsError> {
+    let Some((parent_ino, fs_id)) = backing_of(parent_id) else {
+        return Ok(());
+    };
+    let new_ino = crate::fs::ext2::create_backing_dir(parent_ino, name)?;
+    set_node_backing(node_id, fs_id, new_ino);
+    // A directory that was just created has nothing on disk to expand.
+    if let Some(node) = get_node_mut(node_id) {
+        node.hydrated = true;
+    }
+    Ok(())
+}
+
+/// Create a file; an existing regular file is returned as it is.
 pub fn create(path: &str) -> Result<u64, VfsError> {
     let path = &*alias_path(path);
-    let (parent_path, name) = if let Some(idx) = path.rfind('/') {
-        (&path[..idx.max(1)], &path[idx + 1..])
-    } else {
-        ("", path)
-    };
+    let (parent_id, name) = resolve_parent(path)?;
+    let parent = get_node(parent_id).ok_or(VfsError::NotFound)?;
+    match parent.find_child(name).and_then(get_node) {
+        Some(existing) if existing.metadata.file_type == FileType::RegularFile => Ok(existing.id),
+        Some(_) => Err(VfsError::AlreadyExists),
+        None => alloc_node(name, FileType::RegularFile, parent_id),
+    }
+}
 
-    let parent_id = if parent_path.is_empty() || parent_path == "/" {
-        0u64
-    } else {
-        resolve_path(parent_path)?
-    };
+/// Permission bits `open` must check for the access mode in `flags`.
+fn open_access_mask(flags: u32) -> u32 {
+    let read = crate::security::PERM_OWNER_READ
+        | crate::security::PERM_GROUP_READ
+        | crate::security::PERM_OTHERS_READ;
+    let write = crate::security::PERM_OWNER_WRITE
+        | crate::security::PERM_GROUP_WRITE
+        | crate::security::PERM_OTHERS_WRITE;
+    match flags & 0x3 {
+        O_RDONLY => read,
+        O_WRONLY => write,
+        O_RDWR => read | write,
+        _ => 0,
+    }
+}
 
-    alloc_node(name, FileType::RegularFile, parent_id)
+/// Create the file an `open(O_CREAT)` asked for, if the parent allows it.
+fn create_for_open(path: &str) -> Result<u64, VfsError> {
+    let (parent_id, _) = resolve_parent(path)?;
+    if let Some(parent) = get_node(parent_id) {
+        let write_access = crate::security::PERM_OWNER_WRITE
+            | crate::security::PERM_GROUP_WRITE
+            | crate::security::PERM_OTHERS_WRITE;
+        if !check_permission(parent, write_access) {
+            return Err(VfsError::PermissionDenied);
+        }
+    }
+    create(path)
 }
 
 /// Open a file (resolve path, return file descriptor)
 pub fn open(path: &str, flags: u32) -> Result<usize, VfsError> {
     let path = &*alias_path(path);
-    let inode_id = resolve_path(path);
-
-    let inode_id = match inode_id {
+    let inode_id = match resolve_path(path) {
         Ok(id) => id,
-        Err(VfsError::NotFound) if flags & O_CREAT != 0 => {
-            // Check write permission on parent directory
-            let (parent_path, _) = if let Some(idx) = path.rfind('/') {
-                (&path[..idx.max(1)], &path[idx + 1..])
-            } else {
-                ("", path)
-            };
-            let parent_id = if parent_path.is_empty() || parent_path == "/" {
-                0u64
-            } else {
-                resolve_path(parent_path)?
-            };
-            if let Some(parent) = get_node(parent_id) {
-                let write_access = crate::security::PERM_OWNER_WRITE
-                    | crate::security::PERM_GROUP_WRITE
-                    | crate::security::PERM_OTHERS_WRITE;
-                if !check_permission(parent, write_access) {
-                    return Err(VfsError::PermissionDenied);
-                }
-            }
-            create(path)?
-        }
+        Err(VfsError::NotFound) if flags & O_CREAT != 0 => create_for_open(path)?,
         Err(e) => return Err(e),
     };
-
-    // Check access permissions on the file
     if let Some(node) = get_node(inode_id) {
-        let access = match flags & 0x3 {
-            O_RDONLY => {
-                crate::security::PERM_OWNER_READ
-                    | crate::security::PERM_GROUP_READ
-                    | crate::security::PERM_OTHERS_READ
-            }
-            O_WRONLY => {
-                crate::security::PERM_OWNER_WRITE
-                    | crate::security::PERM_GROUP_WRITE
-                    | crate::security::PERM_OTHERS_WRITE
-            }
-            O_RDWR => {
-                crate::security::PERM_OWNER_READ
-                    | crate::security::PERM_GROUP_READ
-                    | crate::security::PERM_OTHERS_READ
-                    | crate::security::PERM_OWNER_WRITE
-                    | crate::security::PERM_GROUP_WRITE
-                    | crate::security::PERM_OTHERS_WRITE
-            }
-            _ => 0,
-        };
-        if !check_permission(node, access) {
+        if !check_permission(node, open_access_mask(flags)) {
             return Err(VfsError::PermissionDenied);
         }
     }
+    open_handle(inode_id, flags)
+}
 
-    unsafe {
-        for i in 0..MAX_OPEN_FILES {
-            if OPEN_FILES[i].is_none() {
-                // Lazy-load content from the ext2 backing store on first open
-                // so reads see the persistent file.
-                let _ = hydrate_node(inode_id);
-                OPEN_FILES[i] = Some(FileHandle {
-                    inode_id,
-                    // O_APPEND starts at end-of-file so `>> file` extends it.
-                    offset: if flags & O_APPEND != 0 {
-                        get_node(inode_id).map(|n| n.data_len).unwrap_or(0)
-                    } else {
-                        0
-                    },
-                    flags,
-                });
-                if flags & O_TRUNC != 0 {
-                    if let Some(node) = get_node_mut(inode_id) {
-                        node.data_len = 0;
-                        node.metadata.size = 0;
-                    }
-                }
-                return Ok(i);
-            }
-        }
+/// Claim a free slot in the open-file table for `inode_id`.
+fn open_handle(inode_id: u64, flags: u32) -> Result<usize, VfsError> {
+    // SAFETY: the open-file table is only touched from kernel task context.
+    let slot = unsafe { OPEN_FILES.iter().position(|f| f.is_none()) };
+    let slot = slot.ok_or(VfsError::OutOfMemory)?;
+    // Lazy-load content from the ext2 backing store on first open
+    // so reads see the persistent file.
+    let _ = hydrate_node(inode_id);
+    let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
+    // O_APPEND starts at end-of-file so `>> file` extends it.
+    let offset = if flags & O_APPEND != 0 {
+        node.data_len
+    } else {
+        0
+    };
+    if flags & O_TRUNC != 0 {
+        node.data_len = 0;
+        node.metadata.size = 0;
+        node.dirty = true;
     }
-    Err(VfsError::OutOfMemory)
+    // SAFETY: as above; `slot` was just found free.
+    unsafe {
+        OPEN_FILES[slot] = Some(FileHandle {
+            inode_id,
+            offset,
+            flags,
+        });
+    }
+    Ok(slot)
 }
 
 /// Close a file descriptor
@@ -852,55 +966,76 @@ fn share_rel_path(path: &str) -> Option<&str> {
     path.strip_prefix("/share/")
 }
 
-pub fn list_dir(path: &str) -> Result<alloc::vec::Vec<DirEntry>, VfsError> {
-    // Host shared folder (lobster-share device): /share[/<rel>]
-    if let Some(rel) = share_rel_path(path) {
-        if !crate::drivers::lobster_share::detect() {
-            return Err(VfsError::NotFound);
-        }
-        let mut entries = alloc::vec::Vec::new();
-        crate::drivers::lobster_share::list_dir(rel, |name| {
-            let child_rel = if rel.is_empty() {
-                name.to_string()
-            } else {
-                alloc::format!("{}/{}", rel, name)
-            };
-            let size = crate::drivers::lobster_share::stat(&child_rel).unwrap_or(0);
-            let mut de = DirEntry::empty();
-            de.set_name(name);
-            de.size = size;
-            entries.push(de);
-        })
-        .map_err(|_| VfsError::NotFound)?;
-        return Ok(entries);
+/// List the host shared folder directory `rel` (relative to /share).
+fn list_share_dir(rel: &str) -> Result<Vec<DirEntry>, VfsError> {
+    if !crate::drivers::lobster_share::detect() {
+        return Err(VfsError::NotFound);
     }
+    let mut entries = Vec::new();
+    crate::drivers::lobster_share::list_dir(rel, |name| {
+        let child_rel = if rel.is_empty() {
+            name.to_string()
+        } else {
+            alloc::format!("{}/{}", rel, name)
+        };
+        let mut de = DirEntry::empty();
+        de.set_name(name);
+        de.size = crate::drivers::lobster_share::stat(&child_rel).unwrap_or(0);
+        entries.push(de);
+    })
+    .map_err(|_| VfsError::NotFound)?;
+    Ok(entries)
+}
 
-    let inode_id = resolve_path(path)?;
-    let node = get_node(inode_id).ok_or(VfsError::NotFound)?;
+/// Copy a name into a fresh `String`, reporting allocation failure.
+fn try_string(s: &str) -> Result<String, VfsError> {
+    let mut owned = String::new();
+    owned
+        .try_reserve_exact(s.len())
+        .map_err(|_| VfsError::OutOfMemory)?;
+    owned.push_str(s);
+    Ok(owned)
+}
+
+/// The listing entry for one child link, with the child's current metadata.
+fn dir_entry_for(child: &Child) -> Result<DirEntry, VfsError> {
+    let mut entry = DirEntry::empty();
+    entry.name = try_string(&child.name)?;
+    entry.inode_id = child.id;
+    if let Some(node) = get_node(child.id) {
+        entry.file_type = node.metadata.file_type;
+        entry.size = node.metadata.size;
+        entry.uid = node.metadata.uid;
+        entry.gid = node.metadata.gid;
+        entry.is_dir = node.metadata.file_type == FileType::Directory;
+    }
+    Ok(entry)
+}
+
+/// Every child of directory `node_id`, after loading it from its backing
+/// store if that has not happened yet.
+fn list_node(node_id: u64) -> Result<Vec<DirEntry>, VfsError> {
+    ensure_expanded(node_id)?;
+    let node = get_node(node_id).ok_or(VfsError::NotFound)?;
     if node.metadata.file_type != FileType::Directory {
         return Err(VfsError::NotADirectory);
     }
-    let mut entries = alloc::vec::Vec::new();
-    for i in 0..node.dir_count {
-        let de = &node.dir_entries[i];
-        let (size, uid, gid, is_dir) = if let Some(child) = get_node(de.inode_id) {
-            (
-                child.metadata.size,
-                child.metadata.uid,
-                child.metadata.gid,
-                child.metadata.file_type == FileType::Directory,
-            )
-        } else {
-            (0, 0, 0, false)
-        };
-        let mut enriched = *de;
-        enriched.size = size;
-        enriched.uid = uid;
-        enriched.gid = gid;
-        enriched.is_dir = is_dir;
-        entries.push(enriched);
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(node.children.len())
+        .map_err(|_| VfsError::OutOfMemory)?;
+    for child in &node.children {
+        entries.push(dir_entry_for(child)?);
     }
     Ok(entries)
+}
+
+/// List a directory's entries (`/share/...` is served by the host share).
+pub fn list_dir(path: &str) -> Result<Vec<DirEntry>, VfsError> {
+    if let Some(rel) = share_rel_path(path) {
+        return list_share_dir(rel);
+    }
+    list_node(resolve_path(path)?)
 }
 
 /// Read entire file contents into a Vec
@@ -923,6 +1058,26 @@ pub fn read_file(path: &str) -> Result<alloc::vec::Vec<u8>, VfsError> {
     Ok(buf)
 }
 
+/// Create the VFS node for a file that does not exist yet.
+fn create_new_file(path: &str) -> Result<u64, VfsError> {
+    let path = &*alias_path(path);
+    let (parent_id, name) = resolve_parent(path)?;
+    alloc_node(name, FileType::RegularFile, parent_id)
+}
+
+/// Replace a file node's in-memory contents with `data`.
+fn store_contents(inode_id: u64, data: &[u8]) -> Result<(), VfsError> {
+    let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
+    node.data_len = 0;
+    node.metadata.size = 0;
+    node.dirty = true;
+    if !data.is_empty() {
+        node.write(0, data)?;
+    }
+    node.metadata.modified_time = u64::from(now_secs());
+    Ok(())
+}
+
 /// Write data to a VFS file, creating it if it doesn't exist.
 /// Truncates existing content. Bypasses permission checks (kernel use).
 pub fn write_file(path: &str, data: &[u8]) -> Result<usize, VfsError> {
@@ -936,47 +1091,14 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<usize, VfsError> {
             let _ = hydrate_node(id);
             id
         }
-        Err(VfsError::NotFound) => {
-            // Create the file
-            let parent_path = parent_dir(path);
-            let parent_id = resolve_path(&parent_path)?;
-            let name = file_name(path);
-            alloc_node(name, FileType::RegularFile, parent_id)?
-        }
+        Err(VfsError::NotFound) => create_new_file(path)?,
         Err(e) => return Err(e),
     };
-    {
-        let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
-        node.data_len = 0;
-        if !data.is_empty() {
-            let written = node.write(0, data)?;
-            node.metadata.size = written as u64;
-        } else {
-            node.metadata.size = 0;
-        }
-    }
+    store_contents(inode_id, data)?;
     // Write through to the ext2 backing store so kernel-side writes
     // (settings persistence etc.) actually land on disk.
     writeback_node(inode_id)?;
-    // Re-resolve: writeback may have tagged the node with its new ext2 inode.
     Ok(data.len())
-}
-
-/// Extract parent directory from a path
-fn parent_dir(path: &str) -> alloc::string::String {
-    match path.rfind('/') {
-        Some(0) => "/".into(),
-        Some(i) => alloc::string::String::from(&path[..i]),
-        None => "/".into(),
-    }
-}
-
-/// Extract file name from a path
-fn file_name(path: &str) -> &str {
-    match path.rfind('/') {
-        Some(i) if i < path.len() - 1 => &path[i + 1..],
-        _ => path,
-    }
 }
 
 /// Create a directory (wrapper with shell-friendly name)
@@ -987,118 +1109,80 @@ pub fn create_dir(path: &str) -> Result<u64, VfsError> {
 /// Remove a file or empty directory
 pub fn remove(path: &str) -> Result<(), VfsError> {
     let inode_id = resolve_path(path)?;
-    let node = get_node_mut(inode_id).ok_or(VfsError::NotFound)?;
-    if node.metadata.file_type == FileType::Directory && node.dir_count > 0 {
+    if inode_id == 0 {
+        return Err(VfsError::Busy);
+    }
+    ensure_expanded(inode_id)?;
+    let node = get_node(inode_id).ok_or(VfsError::NotFound)?;
+    if node.metadata.file_type == FileType::Directory && node.dir_count() > 0 {
         return Err(VfsError::NotEmpty);
     }
-    // Remove from parent
-    if node.parent_id < unsafe { VFS_NODE_COUNT } as u64 {
-        let parent = unsafe { &mut VFS_NODES[node.parent_id as usize] };
-        let name = node.name_str();
-        let mut shift = false;
-        for i in 0..parent.dir_count {
-            if shift {
-                parent.dir_entries[i - 1] = parent.dir_entries[i];
-            } else if parent.dir_entries[i].name_str() == name {
-                shift = true;
-            }
-        }
-        if shift && parent.dir_count > 0 {
-            parent.dir_count -= 1;
-        }
-    }
-    // Mark node as free (zero name)
-    node.name_len = 0;
-    node.metadata.file_type = FileType::RegularFile;
-    node.data_len = 0;
-
-    // Write-through: unlink in the ext2 backing store when the parent is
-    // ext2-backed, so deletes persist across reboots.
-    {
-        let (p_ino, p_fs, name_str): (u32, u32, alloc::string::String) = {
-            let pid = node.parent_id;
-            let pname = get_node(pid)
-                .map(|p| alloc::string::String::from(p.name_str()))
-                .unwrap_or_default();
-            let pino = get_node(pid).map(|p| p.backing_ino).unwrap_or(0);
-            let pfs = get_node(pid).map(|p| p.backing_fs).unwrap_or(0);
-            (pino, pfs, pname)
-        };
-        // The node's name was zeroed above — reconstruct from the path.
-        let name_from_path = path.rsplit('/').next().unwrap_or("");
-        let _ = name_str;
-        if p_ino != 0 && p_fs != 0 && !name_from_path.is_empty() {
-            match crate::fs::ext2::remove_backing_file(p_ino, name_from_path) {
-                Ok(()) => {}
-                Err(e) => println!("[vfs] ext2 unlink failed: {:?}", e),
-            }
-        }
-    }
+    let parent_id = node.parent_id;
+    let name = try_string(node.name_str())?;
+    // Unlink on disk first: a failure leaves the VFS view untouched.
+    persist_unlink(parent_id, &name)?;
+    detach_node(parent_id, &name, inode_id);
     Ok(())
+}
+
+/// Write-through of a delete: unlink in the ext2 backing store when the
+/// parent is ext2-backed, so deletes persist across reboots. An entry that
+/// only ever existed in RAM (an empty file never written) is not an error.
+fn persist_unlink(parent_id: u64, name: &str) -> Result<(), VfsError> {
+    let Some((parent_ino, _)) = backing_of(parent_id) else {
+        return Ok(());
+    };
+    match crate::fs::ext2::remove_backing_file(parent_ino, name) {
+        Ok(()) | Err(VfsError::NotFound) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Write-through of a rename when the source's parent is ext2-backed.
+/// Parents on different backing stores cannot be renamed across.
+fn persist_rename(
+    old_parent: u64,
+    old_name: &str,
+    new_parent: u64,
+    new_name: &str,
+) -> Result<(), VfsError> {
+    let Some((old_ino, old_fs)) = backing_of(old_parent) else {
+        return Ok(());
+    };
+    let Some((new_ino, new_fs)) = backing_of(new_parent) else {
+        return Err(VfsError::PermissionDenied);
+    };
+    if old_fs != new_fs {
+        return Err(VfsError::PermissionDenied);
+    }
+    crate::fs::ext2::rename_backing_entry(old_ino, old_name, new_ino, new_name)
 }
 
 /// Rename / move a file or directory
 pub fn rename(src_path: &str, dst_path: &str) -> Result<(), VfsError> {
-    let src_path = &*alias_path(src_path);
-    let dst_path = &*alias_path(dst_path);
     let src_id = resolve_path(src_path)?;
-    let (dst_parent, dst_name) = if let Some(idx) = dst_path.rfind('/') {
-        (&dst_path[..idx.max(1)], &dst_path[idx + 1..])
-    } else {
-        ("", dst_path)
-    };
-    let dst_parent_id = if dst_parent.is_empty() || dst_parent == "/" {
-        0u64
-    } else {
-        resolve_path(dst_parent)?
-    };
-    // Remove from old parent
+    let dst_path = &*alias_path(dst_path);
+    let (dst_parent_id, dst_name) = resolve_parent(dst_path)?;
+    check_name(dst_name)?;
     let src_node = get_node(src_id).ok_or(VfsError::NotFound)?;
     let old_parent_id = src_node.parent_id;
-    // Own a copy — the node's name buffer mutates below and a borrowed
-    // &str would alias the NEW name.
-    let src_name = alloc::string::String::from(src_node.name_str());
-    if old_parent_id < unsafe { VFS_NODE_COUNT } as u64 {
-        let old_parent = unsafe { &mut VFS_NODES[old_parent_id as usize] };
-        let mut shift = false;
-        for i in 0..old_parent.dir_count {
-            if shift {
-                old_parent.dir_entries[i - 1] = old_parent.dir_entries[i];
-            } else if old_parent.dir_entries[i].name_str() == src_name {
-                shift = true;
-            }
-        }
-        if shift && old_parent.dir_count > 0 {
-            old_parent.dir_count -= 1;
-        }
+    // Own a copy: the node's name buffer is overwritten below.
+    let src_name = try_string(src_node.name_str())?;
+    if old_parent_id == dst_parent_id && src_name == dst_name {
+        return Ok(());
     }
-    // Update node name and parent
+    let new_parent = get_node_mut(dst_parent_id).ok_or(VfsError::NotFound)?;
+    new_parent.add_child(dst_name, src_id)?;
+    if let Err(e) = persist_rename(old_parent_id, &src_name, dst_parent_id, dst_name) {
+        new_parent.remove_child(dst_name);
+        return Err(e);
+    }
+    if let Some(old_parent) = get_node_mut(old_parent_id) {
+        old_parent.remove_child(&src_name);
+    }
     let src = get_node_mut(src_id).ok_or(VfsError::NotFound)?;
     src.set_name(dst_name);
     src.parent_id = dst_parent_id;
-    // Add to new parent
-    if dst_parent_id < unsafe { VFS_NODE_COUNT } as u64 {
-        let new_parent = unsafe { &mut VFS_NODES[dst_parent_id as usize] };
-        let mut entry = DirEntry::empty();
-        entry.set_name(dst_name);
-        entry.file_type = src.metadata.file_type;
-        entry.inode_id = src_id;
-        let _ = new_parent.add_dir_entry(entry);
-    }
-
-    // Write-through: same-parent rename in the ext2 backing store.
-    if old_parent_id == dst_parent_id {
-        let (p_ino, p_fs): (u32, u32) = {
-            let p = get_node(old_parent_id).ok_or(VfsError::NotFound)?;
-            (p.backing_ino, p.backing_fs)
-        };
-        if p_ino != 0 && p_fs != 0 {
-            match crate::fs::ext2::rename_backing_file(p_ino, &src_name, dst_name) {
-                Ok(()) => {}
-                Err(e) => println!("[vfs] ext2 rename failed: {:?}", e),
-            }
-        }
-    }
     Ok(())
 }
 
@@ -1201,6 +1285,67 @@ pub fn mount(path: &str, fs_id: u32, root_inode: u64) -> Result<(), VfsError> {
     Ok(())
 }
 
+/// Hydrate a node's inline buffer from its ext2 backing store (once).
+pub fn hydrate_node(node_id: u64) -> Result<(), VfsError> {
+    let node = get_node(node_id).ok_or(VfsError::NotFound)?;
+    if node.hydrated || backing_of(node_id).is_none() {
+        return Ok(());
+    }
+    if node.metadata.file_type != FileType::RegularFile {
+        return Ok(());
+    }
+    let data = crate::fs::ext2::read_backing_file(node.backing_ino)?;
+    let node = get_node_mut(node_id).ok_or(VfsError::NotFound)?;
+    let modified_time = node.metadata.modified_time;
+    node.set_data(&data)?;
+    node.metadata.modified_time = modified_time;
+    node.hydrated = true;
+    Ok(())
+}
+
+/// Whether a backing-store directory has been materialized into the VFS.
+pub fn node_dir_expanded(node_id: u64) -> bool {
+    get_node(node_id).map(|n| n.hydrated).unwrap_or(false)
+}
+
+/// Load an ext2-backed directory's children into the VFS the first time
+/// anything needs them. Every reader of a directory's children goes through
+/// this one function; on failure the directory stays unexpanded so the next
+/// call retries, and the error reaches the caller.
+pub fn ensure_expanded(node_id: u64) -> Result<(), VfsError> {
+    let node = get_node(node_id).ok_or(VfsError::NotFound)?;
+    if node.metadata.file_type != FileType::Directory || node.hydrated {
+        return Ok(());
+    }
+    let Some((ino, fs_id)) = backing_of(node_id) else {
+        return Ok(());
+    };
+    expand_backed_dir(node_id, fs_id, ino)?;
+    if let Some(node) = get_node_mut(node_id) {
+        node.hydrated = true;
+    }
+    Ok(())
+}
+
+/// Create a node for every entry of the backing directory `ino` under
+/// `node_id`, carrying each inode's real size, type, mode, owner and mtime.
+/// Entries that already exist (created in RAM before the expansion) are kept.
+pub(crate) fn expand_backed_dir(node_id: u64, fs_id: u32, ino: u32) -> Result<(), VfsError> {
+    let entries = crate::fs::ext2::read_backing_dir(ino)?;
+    let check_duplicates = get_node(node_id).is_some_and(|n| n.dir_count() > 0);
+    for entry in entries {
+        let duplicate = check_duplicates
+            && get_node(node_id).is_some_and(|n| n.find_child(&entry.name).is_some());
+        if duplicate {
+            continue;
+        }
+        let file_type = entry.metadata.file_type;
+        let child_id = create_child(&entry.name, file_type, node_id, entry.metadata, false)?;
+        set_node_backing(child_id, fs_id, entry.ino);
+    }
+    Ok(())
+}
+
 /// Tag a VFS node with its ext2 backing store (fs id + inode) so reads and
 /// writes route through the ext2 instance instead of the inline buffer.
 pub fn set_node_backing(node_id: u64, fs_id: u32, ext2_ino: u32) {
@@ -1210,131 +1355,77 @@ pub fn set_node_backing(node_id: u64, fs_id: u32, ext2_ino: u32) {
     }
 }
 
-/// Hydrate a node's inline buffer from its ext2 backing store (once).
-pub fn hydrate_node(node_id: u64) -> Result<(), VfsError> {
-    let (fs_id, ino) = {
-        let node = get_node(node_id).ok_or(VfsError::NotFound)?;
-        if node.hydrated || node.backing_fs == 0 || node.backing_ino == 0 {
-            return Ok(());
-        }
-        if node.metadata.file_type != FileType::RegularFile {
-            if let Some(mut_node) = get_node_mut(node_id) {
-                mut_node.hydrated = true;
-            }
-            return Ok(());
-        }
-        (node.backing_fs, node.backing_ino)
-    };
-    let data = crate::fs::ext2::read_backing_file(ino)?;
-    if let Some(node) = get_node_mut(node_id) {
-        node.set_data(&data)?;
-        node.hydrated = true;
-    }
-    let _ = fs_id;
-    Ok(())
-}
-
-/// Whether a backing-store directory has been materialized into the VFS.
-pub fn node_dir_expanded(node_id: u64) -> bool {
-    get_node(node_id).map(|n| n.hydrated).unwrap_or(false)
-}
-
-/// Lazy directory expansion: called during path resolution when a node is an
-/// unexpanded ext2-backed directory.
-fn maybe_expand_dir(node_id: u64) {
-    let (is_dir, backing, ino, expanded, fs_id) = {
-        let node = match get_node(node_id) {
-            Some(n) => n,
-            None => return,
-        };
-        (
-            node.metadata.file_type == FileType::Directory,
-            node.backing_fs != 0 && node.backing_ino != 0,
-            node.backing_ino,
-            node.hydrated,
-            node.backing_fs,
-        )
-    };
-    if is_dir && backing && !expanded {
-        let _ = crate::fs::ext2::expand_dir(ino, node_id, fs_id);
-        if let Some(mut_node) = get_node_mut(node_id) {
-            mut_node.hydrated = true;
-        }
-    }
-}
-
 /// Write a hydrated node's content back to its ext2 backing store. For new
 /// files created under an ext2-backed directory (no backing inode yet),
 /// create the file in ext2 first and tag the node.
 pub fn writeback_node(node_id: u64) -> Result<(), VfsError> {
-    let (ino, data, name, parent_id, file_type) = {
-        let node = get_node(node_id).ok_or(VfsError::NotFound)?;
-        // Persist any regular file with content whose parent dir is
-        // ext2-backed — both hydrated (modified existing) files and new
-        // files created this boot.
-        if node.metadata.file_type != FileType::RegularFile {
-            return Ok(());
-        }
-        let name: alloc::string::String = alloc::string::String::from(node.name_str());
-        (
-            node.backing_ino,
-            node.data().to_vec(),
-            name,
-            node.parent_id,
-            node.metadata.file_type,
-        )
-    };
-    let _ = file_type;
-
-    if ino != 0 {
-        crate::fs::ext2::write_backing_file(ino, &data)?;
-    } else if data.is_empty() {
+    let node = get_node(node_id).ok_or(VfsError::NotFound)?;
+    if node.metadata.file_type != FileType::RegularFile {
+        return Ok(());
+    }
+    if !node.dirty {
+        return Ok(());
+    }
+    if node.backing_ino != 0 {
+        crate::fs::ext2::write_backing_file(node.backing_ino, node.data())?;
+    } else if node.data().is_empty() {
         return Ok(()); // nothing to persist for zero-length new files
     } else {
-        // New file under an ext2-backed directory: create + persist it.
-        let (parent_ino, parent_fs) = {
-            let parent = get_node(parent_id).ok_or(VfsError::NotFound)?;
-            (parent.backing_ino, parent.backing_fs)
-        };
-        if parent_ino != 0 && parent_fs != 0 {
-            match crate::fs::ext2::create_backing_file(parent_ino, &name, &data) {
-                Ok(new_ino) => {
-                    set_node_backing(node_id, parent_fs, new_ino);
-                }
-                Err(e) => {
-                    println!("[vfs] ext2 create '{}' failed: {:?}", name, e);
-                    return Err(e);
-                }
-            }
-        }
+        create_backing_for_new_file(node_id)?;
+    }
+    if let Some(node) = get_node_mut(node_id) {
+        node.dirty = false;
+        node.metadata.modified_time = u64::from(now_secs());
     }
     Ok(())
 }
 
+/// Create the ext2 file behind a new VFS file whose parent is ext2-backed.
+fn create_backing_for_new_file(node_id: u64) -> Result<(), VfsError> {
+    let node = get_node(node_id).ok_or(VfsError::NotFound)?;
+    let Some((parent_ino, fs_id)) = backing_of(node.parent_id) else {
+        return Ok(());
+    };
+    let name = node.name_str();
+    match crate::fs::ext2::create_backing_file(parent_ino, name, node.data()) {
+        Ok(new_ino) => {
+            set_node_backing(node_id, fs_id, new_ino);
+            if let Some(node) = get_node_mut(node_id) {
+                node.hydrated = true;
+            }
+            Ok(())
+        }
+        Err(e) => {
+            println!("[vfs] ext2 create '{}' failed: {:?}", name, e);
+            Err(e)
+        }
+    }
+}
+
 /// Print VFS debug info
 pub fn print_debug() {
-    unsafe {
+    println!(
+        "[vfs] {} nodes, {} mount points, {} open files",
+        node_count(),
+        // SAFETY: read-only snapshot of kernel-task-context state.
+        unsafe { MOUNT_COUNT },
+        // SAFETY: as above.
+        unsafe { OPEN_FILES.iter().filter(|f| f.is_some()).count() }
+    );
+    for id in 0..node_count() as u64 {
+        let Some(node) = get_node(id) else { continue };
+        let type_str = match node.metadata.file_type {
+            FileType::RegularFile => "FILE",
+            FileType::Directory => "DIR ",
+            FileType::Device => "DEV ",
+            FileType::Symlink => "LINK",
+        };
         println!(
-            "[vfs] {} nodes, {} mount points, {} open files",
-            VFS_NODE_COUNT,
-            MOUNT_COUNT,
-            OPEN_FILES.iter().filter(|f| f.is_some()).count()
+            "[vfs] {} {} ({} bytes)",
+            node.name_str(),
+            type_str,
+            node.metadata.size
         );
-        for i in 0..VFS_NODE_COUNT {
-            let node = &VFS_NODES[i];
-            let type_str = match node.metadata.file_type {
-                FileType::RegularFile => "FILE",
-                FileType::Directory => "DIR ",
-                FileType::Device => "DEV ",
-                FileType::Symlink => "LINK",
-            };
-            println!(
-                "[vfs] {} {} ({} bytes)",
-                node.name_str(),
-                type_str,
-                node.metadata.size
-            );
-        }
     }
 }
 
@@ -1394,41 +1485,33 @@ pub fn check_permission(node: &VfsNode, access: u32) -> bool {
 // Extended VFS Operations (symlink, readlink, link, unlink, fsync, fcntl, ioctl)
 // ═══════════════════════════════════════════════════════════════
 
+/// Check that the current process may create entries in directory `dir_id`.
+fn check_dir_writable(dir_id: u64) -> Result<(), VfsError> {
+    let write_access = crate::security::PERM_OWNER_WRITE
+        | crate::security::PERM_GROUP_WRITE
+        | crate::security::PERM_OTHERS_WRITE;
+    match get_node(dir_id) {
+        Some(dir) if !check_permission(dir, write_access) => Err(VfsError::PermissionDenied),
+        _ => Ok(()),
+    }
+}
+
 /// Create a symbolic link
 pub fn symlink(target: &str, link_path: &str) -> Result<u64, VfsError> {
-    // Resolve target path (store as-is, don't resolve)
-    let (parent_path, name) = if let Some(idx) = link_path.rfind('/') {
-        (&link_path[..idx.max(1)], &link_path[idx + 1..])
-    } else {
-        ("", link_path)
-    };
-
-    let parent_id = if parent_path.is_empty() || parent_path == "/" {
-        0u64
-    } else {
-        resolve_path(parent_path)?
-    };
-
-    // Check write permission on parent directory
-    if let Some(parent) = get_node(parent_id) {
-        let write_access = crate::security::PERM_OWNER_WRITE
-            | crate::security::PERM_GROUP_WRITE
-            | crate::security::PERM_OTHERS_WRITE;
-        if !check_permission(parent, write_access) {
-            return Err(VfsError::PermissionDenied);
-        }
+    if target.len() > MAX_NAME_LEN {
+        return Err(VfsError::InvalidPath);
     }
-
-    // Create symlink node
+    let link_path = &*alias_path(link_path);
+    let (parent_id, name) = resolve_parent(link_path)?;
+    check_dir_writable(parent_id)?;
     let link_id = alloc_node(name, FileType::Symlink, parent_id)?;
-    if let Some(node) = get_node_mut(link_id) {
-        // Store target path in data field
-        let target_bytes = target.as_bytes();
-        if target_bytes.len() > 255 {
-            return Err(VfsError::InvalidPath);
-        }
-        node.set_data(target_bytes)?;
-        node.metadata.size = target_bytes.len() as u64;
+    // The target path lives in the node's data buffer.
+    let stored = get_node_mut(link_id)
+        .ok_or(VfsError::NotFound)
+        .and_then(|node| node.set_data(target.as_bytes()));
+    if let Err(e) = stored {
+        detach_node(parent_id, name, link_id);
+        return Err(e);
     }
     Ok(link_id)
 }
@@ -1459,55 +1542,16 @@ pub fn readlink(path: &str) -> Result<alloc::string::String, VfsError> {
 pub fn link(src_path: &str, dst_path: &str) -> Result<(), VfsError> {
     let src_id = resolve_path(src_path)?;
     let src_node = get_node(src_id).ok_or(VfsError::NotFound)?;
-
     // Cannot link directories (POSIX restriction)
     if src_node.metadata.file_type == FileType::Directory {
         return Err(VfsError::PermissionDenied);
     }
-
-    let (dst_parent, dst_name) = if let Some(idx) = dst_path.rfind('/') {
-        (&dst_path[..idx.max(1)], &dst_path[idx + 1..])
-    } else {
-        ("", dst_path)
-    };
-
-    let dst_parent_id = if dst_parent.is_empty() || dst_parent == "/" {
-        0u64
-    } else {
-        resolve_path(dst_parent)?
-    };
-
-    // Check write permission on destination parent
-    if let Some(parent) = get_node(dst_parent_id) {
-        let write_access = crate::security::PERM_OWNER_WRITE
-            | crate::security::PERM_GROUP_WRITE
-            | crate::security::PERM_OTHERS_WRITE;
-        if !check_permission(parent, write_access) {
-            return Err(VfsError::PermissionDenied);
-        }
-    }
-
-    // Create directory entry pointing to same inode
-    let mut entry = DirEntry::empty();
-    entry.set_name(dst_name);
-    entry.file_type = src_node.metadata.file_type;
-    entry.inode_id = src_id;
-    entry.size = src_node.metadata.size;
-    entry.uid = src_node.metadata.uid;
-    entry.gid = src_node.metadata.gid;
-    entry.is_dir = src_node.metadata.file_type == FileType::Directory;
-
-    if let Some(new_parent) = get_node_mut(dst_parent_id) {
-        new_parent.add_dir_entry(entry)?;
-    }
-
-    // Increment link count in metadata (we'll add nlink field)
-    if let Some(_node) = get_node_mut(src_id) {
-        // For now, just track in metadata
-        // TODO: add nlink field to Metadata
-    }
-
-    Ok(())
+    let dst_path = &*alias_path(dst_path);
+    let (dst_parent_id, dst_name) = resolve_parent(dst_path)?;
+    check_name(dst_name)?;
+    check_dir_writable(dst_parent_id)?;
+    let new_parent = get_node_mut(dst_parent_id).ok_or(VfsError::NotFound)?;
+    new_parent.add_child(dst_name, src_id)
 }
 
 /// Remove a file or directory (unlink)

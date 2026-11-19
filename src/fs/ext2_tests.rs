@@ -270,6 +270,34 @@ impl<'a> Img<'a> {
         Ok(out)
     }
 
+    /// The data blocks of an inode in logical order (indirect blocks left out).
+    fn data_blocks(&self, ino: &RawInode) -> Result<Vec<u32>, String> {
+        let mut out = Vec::new();
+        for (slot, &b) in ino.iblock.iter().enumerate() {
+            if b != 0 {
+                self.collect_data(b, slot.saturating_sub(11), &mut out)?;
+            }
+        }
+        Ok(out)
+    }
+
+    fn collect_data(&self, b: u32, depth: usize, out: &mut Vec<u32>) -> Result<(), String> {
+        if b >= self.blocks {
+            return Err(format!("block {} beyond volume", b));
+        }
+        if depth == 0 {
+            out.push(b);
+            return Ok(());
+        }
+        for i in 0..self.bs / 4 {
+            let child = le32(self.block(b), i * 4);
+            if child != 0 {
+                self.collect_data(child, depth - 1, out)?;
+            }
+        }
+        Ok(())
+    }
+
     fn collect(&self, b: u32, depth: usize, out: &mut Vec<u32>) -> Result<(), String> {
         if b >= self.blocks {
             return Err(format!("block {} beyond volume", b));
@@ -391,7 +419,7 @@ fn parse_dir(img: &Img, dir: u32) -> Result<Vec<(String, u32, u32)>, String> {
     }
     let mut entries = Vec::new();
     for (n, &b) in img
-        .inode_blocks(&raw)?
+        .data_blocks(&raw)?
         .iter()
         .take(raw.size as usize / img.bs)
         .enumerate()
@@ -917,5 +945,316 @@ fn inode_writes_preserve_extra_inode_bytes() {
                 n
             );
         }
+    });
+}
+
+// ─── VFS-level scenarios (the path the kernel takes at boot) ─────────
+
+use crate::fs::vfs;
+
+const VFS_MOUNT: &str = "/sd";
+const HOME_DIR: &str = "/sd/home";
+const WALL_CLOCK_SECS: u64 = 1_900_000_000;
+const MANY_FILES: usize = 40;
+const HUGE_DIR_ENTRIES: usize = 4096;
+const REAL_FILES: usize = 500;
+const LONG_NAME_LEN: usize = 200;
+const TOO_LONG_NAME_LEN: usize = 256;
+const GROWTH_DIRS: usize = 30;
+const GROWTH_FILES_PER_DIR: usize = 20;
+
+/// Boot the kernel's VFS and mount the test volume at `/sd`, the way
+/// `kernel_main` does. Calling it again simulates a reboot.
+fn boot_vfs() {
+    vfs::init();
+    mount(device_index(), 0, VFS_MOUNT).expect("mount ext2 at /sd");
+}
+
+/// Sets the wall clock for one test and unsets it again afterwards.
+struct ClockGuard;
+
+impl ClockGuard {
+    fn set(epoch_secs: u64) -> ClockGuard {
+        crate::clock::set_boot_time(epoch_secs, 0, 0);
+        ClockGuard
+    }
+}
+
+impl Drop for ClockGuard {
+    fn drop(&mut self) {
+        crate::clock::set_boot_time(0, 0, 0);
+    }
+}
+
+fn file_body(index: usize) -> Vec<u8> {
+    format!("content{}\n", index).into_bytes()
+}
+
+fn listed_names(path: &str) -> Vec<String> {
+    let mut names: Vec<String> = vfs::list_dir(path)
+        .expect("list_dir")
+        .iter()
+        .map(|e| e.name_str().to_string())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn vfs_directory_with_40_files_lists_and_reads_all_after_remount() {
+    with_volume(FIXTURE_4K, |vol| {
+        mkdir(ROOT, "home");
+        boot_vfs();
+        vfs::mkdir("/sd/home/many").expect("mkdir");
+        for i in 0..MANY_FILES {
+            let path = format!("/sd/home/many/f{:02}.txt", i);
+            vfs::write_file(&path, &file_body(i)).expect("write");
+        }
+        assert_eq!(
+            vfs::list_dir("/sd/home/many").expect("list").len(),
+            MANY_FILES
+        );
+        boot_vfs();
+        let entries = vfs::list_dir("/sd/home/many").expect("list after remount");
+        assert_eq!(entries.len(), MANY_FILES, "every file listed");
+        for entry in &entries {
+            let index: usize = entry.name_str()[1..3].parse().expect("index");
+            assert_eq!(
+                entry.size,
+                file_body(index).len() as u64,
+                "{}",
+                entry.name_str()
+            );
+        }
+        let last = vfs::read_file("/sd/home/many/f39.txt").expect("read 40th");
+        assert_eq!(last, file_body(MANY_FILES - 1));
+        assert_clean(vol);
+    });
+}
+
+/// A directory of `HUGE_DIR_ENTRIES` names. The fixtures have only ~1000
+/// inodes, so the first `REAL_FILES` entries are distinct files and the rest
+/// are hard links to the last of them. Returns the body each entry reads as.
+fn build_huge_dir(dir: u32) -> Vec<Vec<u8>> {
+    let mut bodies = Vec::new();
+    let mut last_ino = 0;
+    for i in 0..HUGE_DIR_ENTRIES {
+        let name = format!("e{:04}", i);
+        if i < REAL_FILES {
+            last_ino = mkfile(dir, &name, &file_body(i));
+        } else {
+            fs().add_dir_entry(dir, last_ino, &name, EXT2_FT_REG_FILE)
+                .expect("hard link entry");
+        }
+        bodies.push(file_body(i.min(REAL_FILES - 1)));
+    }
+    let extra_links = (HUGE_DIR_ENTRIES - REAL_FILES) as i32;
+    fs().adjust_links(last_ino, extra_links)
+        .expect("link count");
+    bodies
+}
+
+#[test]
+fn vfs_directory_with_4096_entries_is_fully_reachable_after_remount() {
+    with_volume(FIXTURE_1K, |vol| {
+        let big = mkdir(ROOT, "big");
+        let bodies = build_huge_dir(big);
+        boot_vfs();
+        let entries = vfs::list_dir("/sd/big").expect("list");
+        assert_eq!(entries.len(), HUGE_DIR_ENTRIES);
+        for (i, body) in bodies.iter().enumerate() {
+            let path = format!("/sd/big/e{:04}", i);
+            assert_eq!(&vfs::read_file(&path).expect(&path), body, "{}", path);
+        }
+        assert_clean(vol);
+    });
+}
+
+#[test]
+fn vfs_200_byte_file_name_roundtrips() {
+    with_volume(FIXTURE_4K, |vol| {
+        mkdir(ROOT, "home");
+        boot_vfs();
+        let name = "n".repeat(LONG_NAME_LEN);
+        let path = format!("{}/{}", HOME_DIR, name);
+        vfs::write_file(&path, b"long").expect("write");
+        boot_vfs();
+        assert_eq!(listed_names(HOME_DIR), vec![name]);
+        assert_eq!(vfs::read_file(&path).expect("read"), b"long");
+        assert_clean(vol);
+    });
+}
+
+#[test]
+fn vfs_lists_a_never_traversed_directory_after_remount() {
+    with_volume(FIXTURE_4K, |_vol| {
+        let home = mkdir(ROOT, "home");
+        let cold = mkdir(home, "cold");
+        for name in ["a", "b", "c"] {
+            mkfile(cold, name, name.as_bytes());
+        }
+        boot_vfs();
+        assert_eq!(listed_names("/sd/home/cold"), ["a", "b", "c"]);
+    });
+}
+
+#[test]
+fn vfs_file_created_at_the_mount_root_survives_a_remount() {
+    with_volume(FIXTURE_4K, |vol| {
+        boot_vfs();
+        vfs::write_file("/sd/proof.txt", b"x\n").expect("write at the mount root");
+        boot_vfs();
+        assert_eq!(vfs::read_file("/sd/proof.txt").expect("read back"), b"x\n");
+        assert_clean(vol);
+    });
+}
+
+/// Shorten the last entry of a one-block directory to its minimal size and
+/// zero the rest, the way images written by older kernels look.
+fn zero_the_tail_of_the_last_entry(dir: u32) {
+    let inode = fs().read_inode(dir).expect("dir inode");
+    let block_no = u64::from(u32::from_le(inode.i_block[0]));
+    let mut buf = [0u8; 1024];
+    read_block(fs(), block_no, &mut buf).expect("read dir block");
+    let mut pos = 0;
+    loop {
+        let rec_len = usize::from(u16::from_le_bytes([buf[pos + 4], buf[pos + 5]]));
+        if pos + rec_len == buf.len() {
+            break;
+        }
+        pos += rec_len;
+    }
+    let minimal_rec_len = 12u16;
+    buf[pos + 4..pos + 6].copy_from_slice(&minimal_rec_len.to_le_bytes());
+    buf[pos + usize::from(minimal_rec_len)..].fill(0);
+    write_block(fs(), block_no, &buf).expect("write dir block");
+}
+
+#[test]
+fn vfs_lists_a_directory_block_with_a_zeroed_tail() {
+    with_volume(FIXTURE_1K, |_vol| {
+        let legacy = mkdir(ROOT, "legacy");
+        mkfile(legacy, "a", b"1");
+        mkfile(legacy, "b", b"2");
+        zero_the_tail_of_the_last_entry(legacy);
+        boot_vfs();
+        assert_eq!(listed_names("/sd/legacy"), ["a", "b"]);
+    });
+}
+
+#[test]
+fn vfs_stat_reports_real_metadata_before_any_open() {
+    with_volume(FIXTURE_4K, |_vol| {
+        let _clock = ClockGuard::set(WALL_CLOCK_SECS);
+        let home = mkdir(ROOT, "home");
+        mkfile(home, "sized.bin", &pattern(1234, 3));
+        boot_vfs();
+        let meta = vfs::stat("/sd/home/sized.bin").expect("stat");
+        assert_eq!(meta.size, 1234);
+        assert_eq!(meta.file_type, vfs::FileType::RegularFile);
+        assert_eq!(meta.permissions, 0o644);
+        assert_eq!(meta.modified_time, WALL_CLOCK_SECS);
+        let entry = &vfs::list_dir(HOME_DIR).expect("list")[0];
+        assert_eq!(entry.size, 1234, "ls -l size without opening the file");
+    });
+}
+
+#[test]
+fn vfs_created_inodes_carry_wall_clock_timestamps() {
+    with_volume(FIXTURE_4K, |_vol| {
+        mkdir(ROOT, "home");
+        boot_vfs();
+        let clock = ClockGuard::set(WALL_CLOCK_SECS);
+        vfs::mkdir("/sd/home/d").expect("mkdir");
+        vfs::write_file("/sd/home/d/f", b"one").expect("create");
+        let (dir_ino, file_ino) = backing_inos("/sd/home/d", "/sd/home/d/f");
+        let stamp = |ino| {
+            let i = fs().read_inode(ino).expect("inode");
+            (i.i_atime, i.i_ctime, i.i_mtime)
+        };
+        let now = WALL_CLOCK_SECS as u32;
+        assert_eq!(stamp(file_ino), (now, now, now), "new file");
+        assert_eq!(stamp(dir_ino), (now, now, now), "new directory");
+        crate::clock::set_boot_time(WALL_CLOCK_SECS + 100, 0, 0);
+        vfs::write_file("/sd/home/d/f", b"two!").expect("rewrite");
+        let (atime, ctime, mtime) = stamp(file_ino);
+        assert_eq!(
+            (atime, ctime, mtime),
+            (now, now + 100, now + 100),
+            "rewrite"
+        );
+        drop(clock);
+    });
+}
+
+#[test]
+fn vfs_timestamps_stay_zero_without_a_clock() {
+    with_volume(FIXTURE_4K, |_vol| {
+        mkdir(ROOT, "home");
+        boot_vfs();
+        vfs::write_file("/sd/home/f", b"x").expect("create");
+        let (_, file_ino) = backing_inos(HOME_DIR, "/sd/home/f");
+        let inode = fs().read_inode(file_ino).expect("inode");
+        assert_eq!((inode.i_ctime, inode.i_mtime), (0, 0));
+    });
+}
+
+fn backing_inos(dir: &str, file: &str) -> (u32, u32) {
+    let ino = |path: &str| {
+        vfs::get_node(vfs::resolve_path(path).expect("resolve"))
+            .expect("node")
+            .backing_ino
+    };
+    (ino(dir), ino(file))
+}
+
+#[test]
+fn vfs_node_table_grows_past_the_old_128_node_limit() {
+    with_volume(FIXTURE_4K, |vol| {
+        mkdir(ROOT, "home");
+        boot_vfs();
+        for d in 0..GROWTH_DIRS {
+            vfs::mkdir(&format!("/sd/home/d{:02}", d)).expect("mkdir");
+            for f in 0..GROWTH_FILES_PER_DIR {
+                let path = format!("/sd/home/d{:02}/f{:02}", d, f);
+                vfs::write_file(&path, &file_body(d * 100 + f)).expect(&path);
+            }
+        }
+        boot_vfs();
+        for d in 0..GROWTH_DIRS {
+            let names = listed_names(&format!("/sd/home/d{:02}", d));
+            assert_eq!(names.len(), GROWTH_FILES_PER_DIR, "dir d{:02}", d);
+        }
+        let last = format!(
+            "/sd/home/d{:02}/f{:02}",
+            GROWTH_DIRS - 1,
+            GROWTH_FILES_PER_DIR - 1
+        );
+        assert_eq!(vfs::read_file(&last).expect("read"), file_body(2919));
+        assert_clean(vol);
+    });
+}
+
+#[test]
+fn vfs_errors_are_reported_not_swallowed() {
+    with_volume(FIXTURE_4K, |vol| {
+        mkdir(ROOT, "home");
+        boot_vfs();
+        assert_eq!(
+            vfs::write_file("/sd/home/missing/f", b"x"),
+            Err(vfs::VfsError::NotFound)
+        );
+        let too_long = format!("{}/{}", HOME_DIR, "n".repeat(TOO_LONG_NAME_LEN));
+        assert_eq!(
+            vfs::write_file(&too_long, b"x"),
+            Err(vfs::VfsError::InvalidPath)
+        );
+        vfs::mkdir("/sd/home/once").expect("first mkdir");
+        assert_eq!(
+            vfs::mkdir("/sd/home/once"),
+            Err(vfs::VfsError::AlreadyExists)
+        );
+        assert_eq!(listed_names(HOME_DIR), ["once"]);
+        assert_clean(vol);
     });
 }
