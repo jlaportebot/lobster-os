@@ -1092,17 +1092,16 @@ fn sys_brk(addr: u64) -> u64 {
     }
 }
 
-/// sys_getrandom — fill buffer with random bytes
+/// sys_getrandom — fill a user buffer from the kernel CSPRNG. A buffer that
+/// is not entirely in user address space is refused with -EFAULT.
 fn sys_getrandom(buf_ptr: u64, len: usize, _flags: u32) -> u64 {
-    if buf_ptr == 0 || len == 0 {
+    if len == 0 {
         return 0;
     }
-    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, len) };
-    let mut seed = crate::arch::timer::Timer::system_time_us() as u32;
-    for b in buf.iter_mut() {
-        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-        *b = (seed >> 16) as u8;
-    }
+    let Some(buf) = crate::sched::uaccess::user_slice_mut(buf_ptr, len as u64) else {
+        return u64::MAX - 13; // -EFAULT
+    };
+    crate::security::random::fill(buf);
     len as u64
 }
 
@@ -2061,4 +2060,37 @@ fn sys_dlsym(handle: u64, symbol_ptr: u64) -> u64 {
 /// sys_dlclose — unload shared library
 fn sys_dlclose(handle: u64) -> u64 {
     crate::sched::shared_lib::sys_dlclose(handle)
+}
+
+#[cfg(test)]
+mod getrandom_tests {
+    use super::sys_getrandom;
+
+    const EFAULT: u64 = u64::MAX - 13;
+    const KERNEL_ADDRESS: u64 = 0xFFFF_0000_0010_0000;
+
+    #[test]
+    fn getrandom_rejects_kernel_pointer() {
+        assert_eq!(sys_getrandom(KERNEL_ADDRESS, 16, 0), EFAULT);
+    }
+
+    #[test]
+    fn getrandom_rejects_null_and_wrapping_ranges() {
+        assert_eq!(sys_getrandom(0, 16, 0), EFAULT);
+        assert_eq!(sys_getrandom(u64::MAX - 4, 16, 0), EFAULT);
+    }
+
+    #[test]
+    fn getrandom_fills_a_user_buffer_with_different_bytes() {
+        let _guard = crate::test_support::serial_guard();
+        let (mut a, mut b) = ([0u8; 32], [0u8; 32]);
+        assert_eq!(sys_getrandom(a.as_mut_ptr() as u64, 32, 0), 32);
+        assert_eq!(sys_getrandom(b.as_mut_ptr() as u64, 32, 0), 32);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn getrandom_of_zero_bytes_succeeds() {
+        assert_eq!(sys_getrandom(KERNEL_ADDRESS, 0, 0), 0);
+    }
 }

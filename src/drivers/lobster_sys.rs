@@ -9,6 +9,7 @@
 const SYS_BASE: u64 = 0x7D50_0000;
 
 const REG_MAGIC: u64 = 0x00;
+const REG_VERSION: u64 = 0x04;
 const REG_POWER: u64 = 0x08;
 const REG_STATE: u64 = 0x0C;
 const REG_RTC_LO: u64 = 0x10;
@@ -16,6 +17,10 @@ const REG_RTC_HI: u64 = 0x14;
 const REG_TZ_OFFSET: u64 = 0x18;
 const REG_HINT_WIDTH: u64 = 0x20;
 const REG_HINT_HEIGHT: u64 = 0x24;
+const REG_ENTROPY: u64 = 0x28;
+
+/// First device version that provides the ENTROPY register.
+const ENTROPY_MIN_VERSION: u32 = 0x0001_0100;
 
 const MAGIC: u32 = 0x4C53_5953; // "LSYS"
 const POWER_OFF: u32 = 1;
@@ -59,6 +64,17 @@ pub fn wall_clock() -> Option<(u64, i32)> {
     let hi = u64::from(read32(REG_RTC_HI));
     let offset = read32(REG_TZ_OFFSET) as i32;
     Some(((hi << 32) | lo, offset))
+}
+
+/// A fresh 32-bit word of host randomness, or None when the device is absent
+/// or older than the ENTROPY register (version below 0x00010100). Each read
+/// of the register returns new host random bits.
+#[must_use]
+pub fn host_entropy() -> Option<u32> {
+    if !detect() || read32(REG_VERSION) < ENTROPY_MIN_VERSION {
+        return None;
+    }
+    Some(read32(REG_ENTROPY))
 }
 
 /// The resolution the VM manager asked for, if any.
