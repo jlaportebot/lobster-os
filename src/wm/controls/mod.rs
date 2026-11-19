@@ -11,16 +11,20 @@
 
 pub mod drag;
 pub mod dropdown;
+pub mod item_view;
 pub mod rect;
 pub mod scroll;
 pub mod slider;
 mod slider_draw;
+pub mod toolbar;
 pub mod ui;
 mod widgets;
 
 pub use drag::Track;
 pub use dropdown::Dropdown;
+pub use item_view::Column;
 pub use rect::Rect;
 pub use slider_draw::{accent_text, POPUP_ROW_H, PROGRESS_H, ROW_H, SHADOW_ALPHA};
+pub use toolbar::CrumbItem;
 pub use ui::{on_color, style, ControlState, Look, Ui, KEY_NONE};
 pub use widgets::{button_width, ButtonKind, CONTROL_H, LABEL_PX, RADIUS, SWITCH_H, SWITCH_W};

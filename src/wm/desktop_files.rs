@@ -102,14 +102,18 @@ pub fn delete(name: &str) -> Result<(), VfsError> {
 
 /// Open a desktop entry with the app its type maps to.
 pub fn open(name: &str, is_dir: bool) {
-    let path = path_of(name);
+    open_path(&path_of(name), is_dir);
+}
+
+/// Open any file or folder by absolute path with the app its type maps to.
+pub fn open_path(path: &str, is_dir: bool) {
+    let name = path.rsplit('/').next().unwrap_or(path);
     match desktop_layout::open_with(name, is_dir) {
         OpenWith::Files => {
-            crate::apps::file_manager::get_file_manager().cd(&path);
-            crate::wm::start_menu::launch_by_name("Files");
+            crate::apps::files::open_at(path);
         }
-        OpenWith::Images => open_image(&path),
-        OpenWith::Editor => open_text(&path),
+        OpenWith::Images => open_image(path),
+        OpenWith::Editor => open_text(path),
     }
     crate::wm::compositor::mark_full_redraw();
 }

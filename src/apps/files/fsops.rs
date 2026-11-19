@@ -244,7 +244,14 @@ impl Fs for VfsFs {
         Ok(listed
             .iter()
             .filter(|e| e.name_str() != "." && e.name_str() != "..")
-            .map(|e| entry_of(e.name_str(), &paths::join(dir, e.name_str()), e.is_dir, e.size))
+            .map(|e| {
+                entry_of(
+                    e.name_str(),
+                    &paths::join(dir, e.name_str()),
+                    e.is_dir,
+                    e.size,
+                )
+            })
             .collect())
     }
 
@@ -354,7 +361,10 @@ mod tests {
         }
 
         fn remove(&mut self, path: &str) -> Result<(), VfsError> {
-            self.nodes.remove(path).map(|_| ()).ok_or(VfsError::NotFound)
+            self.nodes
+                .remove(path)
+                .map(|_| ())
+                .ok_or(VfsError::NotFound)
         }
 
         fn rename(&mut self, from: &str, to: &str) -> Result<(), VfsError> {

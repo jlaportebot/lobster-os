@@ -74,7 +74,14 @@ pub struct Layout {
 pub fn compute(w: u32, h: u32, view: ViewMode) -> Layout {
     let toolbar = Rect::new(0, 0, w, TOOLBAR_H.min(h));
     let btn_y = ((TOOLBAR_H - NAV_BTN) / 2) as i32;
-    let nav = |i: u32| Rect::new((GAP + i * (NAV_BTN + NAV_GAP)) as i32, btn_y, NAV_BTN, NAV_BTN);
+    let nav = |i: u32| {
+        Rect::new(
+            (GAP + i * (NAV_BTN + NAV_GAP)) as i32,
+            btn_y,
+            NAV_BTN,
+            NAV_BTN,
+        )
+    };
     let toggle_x = w.saturating_sub(GAP + TOGGLE_W) as i32;
     let new_x = toggle_x - (GAP + NEW_FOLDER_W) as i32;
     let crumbs_x = (GAP + 3 * (NAV_BTN + NAV_GAP)) as i32;
@@ -94,12 +101,27 @@ pub fn compute(w: u32, h: u32, view: ViewMode) -> Layout {
         crumbs: Rect::new(crumbs_x, btn_y, crumbs_w, NAV_BTN),
         new_folder: Rect::new(new_x, btn_y, NEW_FOLDER_W, NAV_BTN),
         view_toggle: Rect::new(toggle_x, btn_y, TOGGLE_W, NAV_BTN),
-        sidebar: Rect::new(0, TOOLBAR_H as i32, sidebar_w, status_y.saturating_sub(TOOLBAR_H)),
+        sidebar: Rect::new(
+            0,
+            TOOLBAR_H as i32,
+            sidebar_w,
+            status_y.saturating_sub(TOOLBAR_H),
+        ),
         header: Rect::new(sidebar_w as i32, TOOLBAR_H as i32, main_w - bar_w, header_h),
         body: Rect::new(sidebar_w as i32, body_y as i32, main_w - bar_w, body_h),
         scrollbar: Rect::new((w - bar_w) as i32, body_y as i32, bar_w, body_h),
         status: Rect::new(0, status_y as i32, w, STATUS_H.min(h)),
     }
+}
+
+/// Position and size of a newly opened window: the preferred size clamped
+/// to the screen minus the taskbar, centred in what is left.
+#[must_use]
+pub fn initial_window(screen_w: u32, screen_h: u32, panel_h: u32) -> (u32, u32, u32, u32) {
+    let usable_h = screen_h.saturating_sub(panel_h);
+    let w = PREFERRED_W.min(screen_w);
+    let h = PREFERRED_H.min(usable_h);
+    ((screen_w - w) / 2, (usable_h - h) / 2, w, h)
 }
 
 /// Rectangle of sidebar place `i`.
@@ -228,7 +250,13 @@ pub enum Move {
 /// Item the cursor moves to from `cur`; `page` is the number of rows a
 /// page jump covers. `None` when there are no items.
 #[must_use]
-pub fn move_target(cur: Option<usize>, mv: Move, n: usize, cols: usize, page: usize) -> Option<usize> {
+pub fn move_target(
+    cur: Option<usize>,
+    mv: Move,
+    n: usize,
+    cols: usize,
+    page: usize,
+) -> Option<usize> {
     let last = n.checked_sub(1)?;
     let Some(cur) = cur else {
         let backwards = matches!(mv, Move::Up | Move::Left | Move::End | Move::PageUp);
@@ -309,7 +337,12 @@ mod tests {
             [l.crumbs, l.new_folder],
             [l.new_folder, l.view_toggle],
         ] {
-            assert!(disjoint(pair[0], pair[1]), "{:?} overlaps {:?}", pair[0], pair[1]);
+            assert!(
+                disjoint(pair[0], pair[1]),
+                "{:?} overlaps {:?}",
+                pair[0],
+                pair[1]
+            );
         }
     }
 
@@ -389,7 +422,10 @@ mod tests {
     #[test]
     fn list_rows_hit_test_to_their_index() {
         assert_eq!(index_at(ViewMode::List, 10, 0, 5, 1), Some(0));
-        assert_eq!(index_at(ViewMode::List, 10, ROW_H as i32 - 1, 5, 1), Some(0));
+        assert_eq!(
+            index_at(ViewMode::List, 10, ROW_H as i32 - 1, 5, 1),
+            Some(0)
+        );
         assert_eq!(index_at(ViewMode::List, 10, ROW_H as i32, 5, 1), Some(1));
         assert_eq!(index_at(ViewMode::List, 10, 5 * ROW_H as i32, 5, 1), None);
         assert_eq!(index_at(ViewMode::List, 10, -3, 5, 1), None);
@@ -400,7 +436,10 @@ mod tests {
         for i in 0..5 {
             let r = item_rect(ViewMode::List, i, 1, 600);
             assert_eq!(index_at(ViewMode::List, r.x + 5, r.y + 5, 5, 1), Some(i));
-            assert_eq!(index_at(ViewMode::List, r.right() - 1, r.bottom() - 1, 5, 1), Some(i));
+            assert_eq!(
+                index_at(ViewMode::List, r.right() - 1, r.bottom() - 1, 5, 1),
+                Some(i)
+            );
         }
     }
 
@@ -413,7 +452,10 @@ mod tests {
         for i in 0..n {
             let r = item_rect(ViewMode::Icons, i, cols, view_w);
             assert!(r.right() <= view_w as i32, "cell {i} escapes");
-            assert_eq!(index_at(ViewMode::Icons, r.x + 3, r.y + 3, n, cols), Some(i));
+            assert_eq!(
+                index_at(ViewMode::Icons, r.x + 3, r.y + 3, n, cols),
+                Some(i)
+            );
             for j in i + 1..n {
                 let other = item_rect(ViewMode::Icons, j, cols, view_w);
                 assert!(r.intersect(&other).is_none(), "{i} overlaps {j}");
@@ -427,7 +469,13 @@ mod tests {
         assert_eq!(index_at(ViewMode::Icons, 2, 2, 8, cols), None);
         let past_last = item_rect(ViewMode::Icons, 7, cols, 600);
         assert_eq!(
-            index_at(ViewMode::Icons, past_last.x + 1, past_last.bottom() + 1, 8, cols),
+            index_at(
+                ViewMode::Icons,
+                past_last.x + 1,
+                past_last.bottom() + 1,
+                8,
+                cols
+            ),
             None
         );
         let right_of_grid = (GRID_PAD + 4 * CELL_W + 1) as i32;
@@ -472,6 +520,14 @@ mod tests {
         assert_eq!(move_target(None, Move::Down, 5, 1, 8), Some(0));
         assert_eq!(move_target(None, Move::Up, 5, 1, 8), Some(4));
         assert_eq!(move_target(None, Move::Down, 0, 1, 8), None);
+    }
+
+    #[test]
+    fn initial_window_is_centred_and_clamped_to_the_screen() {
+        assert_eq!(initial_window(1280, 720, 48), (160, 16, 960, 640));
+        let (x, y, w, h) = initial_window(800, 600, 48);
+        assert!(x + w <= 800 && y + h <= 552);
+        assert_eq!((w, h), (800, 552));
     }
 
     #[test]
