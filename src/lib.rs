@@ -632,6 +632,12 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     crate::println!("[fs] VFS initialized");
     crate::display::splash::update_progress(2, "Filesystem ready");
 
+    // 8-disk. Persistent disk + prefix map (/etc, /var, /usr, /apps, /opt,
+    // /root, /home, /bin onto /sd) before anything touches those paths.
+    #[cfg(feature = "qemu_raspi5b")]
+    let disk_mounted = crate::fs::boot_disk::mount();
+    crate::fs::virtual_fs::mount();
+
     // 8a. Embed prebuilt user programs into VFS
     // This makes `run /bin/hello` work out-of-the-box for testing EL0 execution
     {
@@ -639,33 +645,29 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         let _ = crate::fs::vfs::create_dir("/bin");
         // Embed the cross-compiled C hello program
         let hello_elf = include_bytes!("../tools/hello_lobster.bin");
-        match crate::fs::vfs::write_file("/bin/hello", hello_elf) {
-            Ok(n) => crate::println!("[fs] Embedded /bin/hello ({} bytes)", n),
+        match crate::fs::vfs::write_file_if_changed("/bin/hello", hello_elf) {
+            Ok(_) => crate::println!("[fs] Embedded /bin/hello ({} bytes)", hello_elf.len()),
             Err(e) => crate::println!("[fs] Failed to embed /bin/hello: {:?}", e),
         }
 
         // Embed a C source file for testing in-emulator compilation
         let hello_c = include_str!("../tools/hello_cc.c");
-        match crate::fs::vfs::write_file("/bin/hello.c", hello_c.as_bytes()) {
-            Ok(n) => crate::println!("[fs] Embedded /bin/hello.c ({} bytes)", n),
+        match crate::fs::vfs::write_file_if_changed("/bin/hello.c", hello_c.as_bytes()) {
+            Ok(_) => crate::println!("[fs] Embedded /bin/hello.c ({} bytes)", hello_c.len()),
             Err(e) => crate::println!("[fs] Failed to embed /bin/hello.c: {:?}", e),
         }
 
         // Embed a libc test source file
         let libc_test_c = include_str!("../tools/libc/test_full.c");
-        match crate::fs::vfs::write_file("/bin/libc_test.c", libc_test_c.as_bytes()) {
-            Ok(n) => crate::println!("[fs] Embedded /bin/libc_test.c ({} bytes)", n),
+        match crate::fs::vfs::write_file_if_changed("/bin/libc_test.c", libc_test_c.as_bytes()) {
+            Ok(_) => crate::println!("[fs] Embedded /bin/libc_test.c ({} bytes)", libc_test_c.len()),
             Err(e) => crate::println!("[fs] Failed to embed /bin/libc_test.c: {:?}", e),
         }
 
         // Embed MicroPython interpreter binary
         let micropython_bin = include_bytes!("../tools/micropython_min.bin");
-        match crate::fs::vfs::write_file("/bin/python", micropython_bin) {
-            Ok(n) => crate::println!(
-                "[fs] Embedded /bin/python ({}/{} bytes)",
-                n,
-                micropython_bin.len()
-            ),
+        match crate::fs::vfs::write_file_if_changed("/bin/python", micropython_bin) {
+            Ok(_) => crate::println!("[fs] Embedded /bin/python ({} bytes)", micropython_bin.len()),
             Err(e) => crate::println!("[fs] Failed to embed /bin/python: {:?}", e),
         }
     }
@@ -763,52 +765,18 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
     }
     #[cfg(feature = "qemu_raspi5b")]
     {
-        // Paravirtual block device (host-backed disk image) instead of eMMC.
-        crate::println!("[vd] Probing lobster-vd0 (paravirtual disk)...");
-        match crate::drivers::lobster_storage::detect() {
-            Some(nblk) => {
-                crate::drivers::lobster_storage::TOTAL_BLOCKS
-                    .store(nblk, core::sync::atomic::Ordering::Relaxed);
-                static DISK: crate::drivers::lobster_storage::LobsterDisk =
-                    crate::drivers::lobster_storage::LobsterDisk::new();
-                match crate::fs::block_dev::register_device(&DISK) {
-                    Ok(idx) => {
-                        crate::println!(
-                            "[vd] lobster-vd0: {} blocks ({} MB) registered as device {}",
-                            nblk,
-                            nblk * 512 / (1024 * 1024),
-                            idx
-                        );
-                        // Mount persistent filesystem: whole-disk ext2 (no partition
-                        // table in the emulator image).
-                        match crate::fs::ext2::mount(idx, 0, "/sd") {
-                            Ok(()) => {
-                                crate::println!("[ext2] persistent /sd mounted from lobster-vd0");
-                                crate::wm::notifications::success(
-                                    "Storage",
-                                    "Persistent disk mounted at /sd",
-                                );
-                                // Restore persisted desktop preferences.
-                                crate::wm::wallpaper::load_persisted();
-                                crate::wm::theme::load_persisted();
-                            }
-                            Err(e) => crate::println!("[ext2] /sd mount failed: {:?}", e),
-                        }
-                    }
-                    Err(e) => crate::println!("[vd] register failed: {:?}", e),
-                }
-            }
-            None => crate::println!("[vd] no paravirtual disk (LBST_DISKIMG unset)"),
+        // The disk itself was mounted right after vfs::init() (step 8).
+        if disk_mounted {
+            crate::wm::notifications::success("Storage", "Persistent disk mounted at /sd");
+            // Restore persisted desktop preferences.
+            crate::wm::wallpaper::load_persisted();
+            crate::wm::theme::load_persisted();
         }
     }
 
-    // Home directory: ensure /sd/home/user, alias /home/user onto it, seed welcome.txt,
+    // Home directory: ensure /home/user (on disk via the prefix map), seed welcome.txt,
     // and start the shell there.
     crate::fs::vfs::bootstrap_home();
-    // C5: restore users added in earlier boots (/sd/etc/passwd -> /etc/passwd).
-    if crate::users::passwd::load_persisted() {
-        crate::println!("[users] Restored user database from /sd/etc/passwd");
-    }
     crate::shell::set_cwd(&crate::users::home_path());
 
     // 19. Initialize package manager repositories from /etc/pkg/repos.conf

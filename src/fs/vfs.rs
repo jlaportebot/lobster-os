@@ -462,6 +462,7 @@ fn default_metadata(file_type: FileType, id: u64) -> Metadata {
 
 /// Initialize the VFS
 pub fn init() {
+    crate::fs::virtual_fs::reset();
     // SAFETY: boot-time, single-threaded. Old nodes (a second init() only
     // happens in host tests) are deliberately leaked, never freed, because
     // `&'static VfsNode` references to them may still exist.
@@ -659,6 +660,7 @@ pub fn bootstrap_home() {
 /// through is expanded first; the final node is returned as it is.
 pub fn resolve_path(path: &str) -> Result<u64, VfsError> {
     let path = &*crate::fs::prefix_map::rewrite(path);
+    crate::fs::virtual_fs::refresh_for(path);
     if path.is_empty() {
         return Err(VfsError::InvalidPath);
     }
@@ -1734,28 +1736,4 @@ pub fn sync() {
 /// Get directory entries for getdents
 pub fn getdents(path: &str) -> Result<alloc::vec::Vec<DirEntry>, VfsError> {
     list_dir(path)
-}
-/// Called from kernel_init after vfs::init().
-pub fn mount_virtual_fs() {
-    // Create mount-point directories in VFS root
-    let proc_id = alloc_node("proc", FileType::Directory, 0);
-    let dev_id = alloc_node("dev", FileType::Directory, 0);
-    let sys_id = alloc_node("sys", FileType::Directory, 0);
-
-    // Register and mount each virtual filesystem
-    let proc_fs_id = register_fs();
-    let dev_fs_id = register_fs();
-    let sys_fs_id = register_fs();
-
-    if let Ok(id) = proc_id {
-        let _ = mount("/proc", proc_fs_id, id);
-    }
-    if let Ok(id) = dev_id {
-        let _ = mount("/dev", dev_fs_id, id);
-    }
-    if let Ok(id) = sys_id {
-        let _ = mount("/sys", sys_fs_id, id);
-    }
-
-    println!("[vfs] Virtual filesystems mounted: /proc, /dev, /sys");
 }

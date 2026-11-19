@@ -1,6 +1,8 @@
 //! Filesystem subsystem — VFS, FAT32, initrd, block devices, virtual FS
 
 pub mod block_dev;
+#[cfg(feature = "qemu_raspi5b")]
+pub mod boot_disk;
 pub mod devfs;
 pub mod ext2;
 pub mod ext2_fsck;
