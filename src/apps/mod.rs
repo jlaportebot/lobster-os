@@ -7,6 +7,7 @@ pub mod calculator;
 pub mod calculator_engine;
 pub mod editor;
 pub mod file_manager;
+pub mod files;
 pub mod image_viewer;
 pub mod network_manager;
 pub mod notes;
