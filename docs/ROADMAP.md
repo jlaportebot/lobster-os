@@ -241,7 +241,12 @@ and tested by CI; nothing is hand-assembled.
       paragraphs, lists, links, emphasis, pre, tables-lite), proportional text, address bar,
       back/forward/reload, clickable links, scrolling, history/bookmarks, images (O2.6),
       basic CSS colours; HTTPS through the host proxy on QEMU; native TLS on hardware later.
-      *2026-11-10:* panic on repeated/large responses fixed, entity decoding fixed (ff1b0c9); layout engine (v2) still to do.
+      *2026-11-10:* panic on repeated/large responses fixed, entity decoding fixed (ff1b0c9).
+      *Verified 2026-11-19:* v2 engine — tolerant tokenizer (entities, UTF-8, script/style skipped), document model,
+      proportional block/inline layout (h1–h6, lists, blockquote, pre, tables-lite, links, emphasis), status-aware fetch
+      (404/500 bodies render), clickable links with hover URL, back/forward/reload, `#anchor` jumps, bookmarks + history
+      persisted under `/etc/browser`, error page with Retry; a 512 KiB page lays out in ~0.5 s under TCG (62b98c7, gate
+      563 tests, harness 12/12). Left: images (needs O2.6), CSS colours/`display:none`, forms, wheel scrolling.
 - [ ] **O4.4 Terminal**: own shell per tab, correct CR/LF, scrollback, copy/paste, resize
       reflow (audit Q15).
 - [ ] **O4.5 Text editor / Code**: undo/redo, selection, click-to-place, syntax highlight,
@@ -352,3 +357,4 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-18 | O4.1 Settings app + shared controls library; pkg database save truncates (uninstall sticks) | gate 480 tests + harness 12/12 + screenshots of every page |
 | 2026-11-18 | Persistent system state: one prefix map puts `/bin /etc /var /usr /apps /opt /root /home` on the disk (ADR 0001); pkg installs, users and settings survive reboot; `/dev`, `/proc`, `/sys` reachable | gate 495 tests + harness 12/12 + reboot persistence check (pkg list, /etc file, e2fsck clean) |
 | 2026-11-19 | QEMU: HMP `lclick` honours the button mask, so `lobstervm click --right` and the harness can right-click (39e2987) | harness 12/12 + live desktop right-click menu |
+| 2026-11-19 | O4.3 Browser v2: HTML tokenizer + layout engine, status-aware fetch, links/history/bookmarks | gate 563 tests + harness 12/12 + live pages (test page, 404, example.com, info.cern.ch, Wikipedia 512 KiB) |
