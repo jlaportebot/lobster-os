@@ -3,7 +3,9 @@
 //! VFS looks them up, so system state survives a reboot with one mechanism
 //! instead of per-module `/sd/...` paths. See docs/adr/0001-persistent-root.md.
 
+use crate::fs::vfs;
 use alloc::borrow::Cow;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Where the persistent disk is mounted.
@@ -18,9 +20,19 @@ pub const PERSISTENT_PREFIXES: [&str; 8] = [
 /// Bit set per prefix whose backing directory exists on disk.
 static ACTIVE_MASK: AtomicU32 = AtomicU32::new(0);
 
+/// Bit of `prefix` in the mask, or `None` for a path that is not in the table.
+fn prefix_bit(prefix: &str) -> Option<u32> {
+    PERSISTENT_PREFIXES
+        .iter()
+        .position(|p| *p == prefix)
+        .map(|index| 1 << index)
+}
+
 /// Turn the map on for one prefix of [`PERSISTENT_PREFIXES`].
 pub fn activate(prefix: &str) {
-    let _ = prefix;
+    if let Some(bit) = prefix_bit(prefix) {
+        ACTIVE_MASK.fetch_or(bit, Ordering::Relaxed);
+    }
 }
 
 /// Turn the whole map off (no disk: everything is RAM).
@@ -30,19 +42,73 @@ pub fn deactivate_all() {
 
 /// Whether `prefix` currently resolves onto the disk.
 pub fn is_active(prefix: &str) -> bool {
-    let _ = prefix;
-    false
+    prefix_bit(prefix).is_some_and(|bit| ACTIVE_MASK.load(Ordering::Relaxed) & bit != 0)
 }
 
 /// Mount-time setup: make sure each prefix's backing directory exists on the
-/// disk and turn the map on for it. Returns how many prefixes are active.
+/// disk and turn the map on for it. A prefix whose directory cannot be
+/// created stays RAM-only. Returns how many prefixes are active.
 pub fn enable() -> usize {
-    0
+    let mut active = 0;
+    for prefix in PERSISTENT_PREFIXES {
+        let backing = alloc::format!("{BACKING_ROOT}{prefix}");
+        if vfs::resolve_path(&backing).is_err() {
+            if let Err(e) = vfs::create_dir(&backing) {
+                crate::println!("[vfs] {} stays in RAM: mkdir {} failed: {:?}", prefix, backing, e);
+                continue;
+            }
+        }
+        activate(prefix);
+        active += 1;
+    }
+    active
 }
 
-/// Rewrite `path` onto the disk when it falls under an active prefix.
+/// Resolve `.`, `..` and empty components lexically; borrowed when the path
+/// is already clean. `..` at the root stays at the root.
+fn normalize(path: &str) -> Cow<'_, str> {
+    let clean = path
+        .split('/')
+        .skip(1)
+        .all(|part| !part.is_empty() && part != "." && part != "..");
+    if clean || path == "/" {
+        return Cow::Borrowed(path);
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            name => parts.push(name),
+        }
+    }
+    Cow::Owned(alloc::format!("/{}", parts.join("/")))
+}
+
+/// The active prefix that `path` (already normalised) starts with, as a
+/// whole path component.
+fn matching_prefix(path: &str) -> Option<&'static str> {
+    PERSISTENT_PREFIXES.iter().copied().find(|prefix| {
+        is_active(prefix)
+            && path
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
+/// Rewrite `path` onto the disk when it falls under an active prefix. With
+/// the map off the path is returned untouched.
 pub fn rewrite(path: &str) -> Cow<'_, str> {
-    Cow::Borrowed(path)
+    if ACTIVE_MASK.load(Ordering::Relaxed) == 0 || !path.starts_with('/') {
+        return Cow::Borrowed(path);
+    }
+    let path = normalize(path);
+    if matching_prefix(&path).is_none() {
+        return path;
+    }
+    Cow::Owned(alloc::format!("{BACKING_ROOT}{path}"))
 }
 
 #[cfg(test)]
