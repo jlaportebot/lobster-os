@@ -35,6 +35,7 @@ pub fn perform(action: Action) {
         Action::TestSound => play_test_sound(st),
         Action::TestConnection => st.net_test = NetTest::Queued,
         Action::AddUser => ask_add_user(st),
+        Action::ChangePassword => super::passwords::start(st),
         Action::RemoveUser(i) => ask_remove_user(st, i),
         Action::Clock24 => toggle_clock(),
         Action::OpenFiles => {
@@ -141,11 +142,21 @@ fn revert_resolution(st: &mut State) {
 /// Ask for a dialog. It opens once the mouse button is up: the dialog layer
 /// treats the release that follows the opening press as a click outside its
 /// text field and would otherwise take the keyboard focus away from it.
-fn queue_dialog(st: &mut State, title: &str, message: &str, is_prompt: bool) {
+pub(super) fn queue_dialog(st: &mut State, title: &str, message: &str, is_prompt: bool) {
+    queue(st, title, message, is_prompt, false);
+}
+
+/// Queue a prompt whose text is drawn as asterisks.
+pub(super) fn queue_secret(st: &mut State, title: &str, message: &str) {
+    queue(st, title, message, true, true);
+}
+
+fn queue(st: &mut State, title: &str, message: &str, is_prompt: bool, is_secret: bool) {
     st.queued_dialog = Some(QueuedDialog {
         title: String::from(title),
         message: String::from(message),
         is_prompt,
+        is_secret,
     });
 }
 
@@ -156,7 +167,9 @@ fn open_queued_dialog(st: &mut State) {
     let Some(request) = st.queued_dialog.take() else {
         return;
     };
-    if request.is_prompt {
+    if request.is_secret {
+        dialog::prompt_secret(&request.title, &request.message);
+    } else if request.is_prompt {
         dialog::prompt(&request.title, &request.message, "");
     } else {
         dialog::confirm(&request.title, &request.message);
@@ -231,8 +244,13 @@ fn collect_dialog_answer(st: &mut State) {
         return;
     };
     let pending = st.pending.take();
+    if let Some(Pending::Password(step)) = pending {
+        st.notice = super::passwords::advance(st, step, result);
+        crate::wm::dirty::mark();
+        return;
+    }
     st.notice = match (pending, result) {
-        (Some(Pending::AddUser), DialogResult::Prompt(Some(name))) => add_user_notice(&name),
+        (Some(Pending::AddUser), DialogResult::Prompt(Some(name))) => add_user_notice(st, &name),
         (Some(Pending::RemoveUser(name)), DialogResult::Confirm(true)) => {
             report(accounts::remove_user(&name), &name, "removed")
         }
@@ -242,9 +260,9 @@ fn collect_dialog_answer(st: &mut State) {
     crate::wm::dirty::mark();
 }
 
-fn add_user_notice(raw: &str) -> String {
+fn add_user_notice(st: &mut State, raw: &str) -> String {
     let name = super::users::clean_name(raw);
-    report(accounts::add_user(name), name, "created")
+    super::passwords::begin_new_user(st, name)
 }
 
 fn report(result: Result<(), String>, name: &str, verb: &str) -> String {

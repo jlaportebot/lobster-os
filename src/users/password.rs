@@ -10,10 +10,12 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use sha2::{Digest, Sha256};
 
-/// PBKDF2 iteration count for new hashes. Measured at one hash per ~0.4 s
-/// under the TCG-emulated Pi 5 on the build host (see `authbench`); real
-/// hardware is faster, so this is the slow-case target.
-pub const PBKDF2_ITERATIONS: u32 = 100_000;
+/// PBKDF2 iteration count for new hashes. Measured with `authbench 12000`
+/// under the TCG-emulated Pi 5 on the build host: 360 and 378 ms per hash
+/// (about 30 us per iteration), the 0.3-0.5 s a login should take. A real
+/// Pi 5 is far faster, so this is the slow-emulator floor, not the target
+/// for hardware; raise it when the emulator gets faster.
+pub const PBKDF2_ITERATIONS: u32 = 12_000;
 /// Refuse stored hashes demanding more than this, so a corrupted or hostile
 /// shadow file cannot hang the login screen.
 const MAX_ITERATIONS: u32 = 5_000_000;
@@ -167,11 +169,11 @@ mod tests {
 
     // Reference from Python:
     //   import hashlib,base64
-    //   dk=hashlib.pbkdf2_hmac("sha256",b"correct horse",bytes(range(16)),100000)
+    //   dk=hashlib.pbkdf2_hmac("sha256",b"correct horse",bytes(range(16)),12000)
     //   b64 = lambda x: base64.b64encode(x).decode().rstrip("=").replace("+", ".")
-    //   "$pbkdf2-sha256$100000$" + b64(salt) + "$" + b64(dk)
+    //   "$pbkdf2-sha256$12000$" + b64(salt) + "$" + b64(dk)
     const REFERENCE: &str =
-        "$pbkdf2-sha256$100000$AAECAwQFBgcICQoLDA0ODw$V/LC8HOXSNUWQZsGKohGZjI8WD6krhZVBKgfe1PGKgk";
+        "$pbkdf2-sha256$12000$AAECAwQFBgcICQoLDA0ODw$K2IO3tVkvR2aRAZdGN1sn.xFgNsFtXA66lhQefleiOs";
 
     fn salt() -> [u8; SALT_LEN] {
         core::array::from_fn(|i| i as u8)
@@ -216,14 +218,14 @@ mod tests {
             "",
             "$",
             "$pbkdf2-sha256$",
-            "$pbkdf2-sha256$100000",
-            "$pbkdf2-sha256$100000$AAECAwQFBgcICQoLDA0ODw",
+            "$pbkdf2-sha256$12000",
+            "$pbkdf2-sha256$12000$AAECAwQFBgcICQoLDA0ODw",
             "$pbkdf2-sha256$0$AAECAwQFBgcICQoLDA0ODw$AAECAwQFBgcICQoLDA0ODw",
             "$pbkdf2-sha256$99999999999$AAECAwQFBgcICQoLDA0ODw$x",
             "$pbkdf2-sha256$abc$AAECAwQFBgcICQoLDA0ODw$x",
-            "$pbkdf2-sha256$100000$!!!!$????",
-            "$pbkdf2-sha256$100000$AA$AA",
-            "$pbkdf2-sha256$100000$AAECAwQFBgcICQoLDA0ODw$AAECAwQFBgcICQoLDA0ODw$extra",
+            "$pbkdf2-sha256$12000$!!!!$????",
+            "$pbkdf2-sha256$12000$AA$AA",
+            "$pbkdf2-sha256$12000$AAECAwQFBgcICQoLDA0ODw$AAECAwQFBgcICQoLDA0ODw$extra",
             "$sha256$zz",
             "$argon2id$v=19$m=65536,t=3,p=4$salt$hash",
             "!",

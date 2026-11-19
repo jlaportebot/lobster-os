@@ -335,6 +335,15 @@ pub fn confirm(title: &str, message: &str) {
 
 /// Show a prompt dialog
 pub fn prompt(title: &str, message: &str, default: &str) {
+    prompt_with(title, message, default, false);
+}
+
+/// Show a prompt whose text is drawn as asterisks (passwords).
+pub fn prompt_secret(title: &str, message: &str) {
+    prompt_with(title, message, "", true);
+}
+
+fn prompt_with(title: &str, message: &str, default: &str, masked: bool) {
     let fb = match crate::wm::compositor::fb_info() {
         Some(fb) => fb,
         None => return,
@@ -354,6 +363,7 @@ pub fn prompt(title: &str, message: &str, default: &str) {
     input.h = INPUT_H;
     input.set_text(default);
     input.state = WidgetState::Focused;
+    input.masked = masked;
 
     let dialog = Dialog {
         kind: DialogKind::Prompt {
