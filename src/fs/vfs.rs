@@ -462,6 +462,7 @@ fn default_metadata(file_type: FileType, id: u64) -> Metadata {
 
 /// Initialize the VFS
 pub fn init() {
+    crate::fs::virtual_fs::reset();
     // SAFETY: boot-time, single-threaded. Old nodes (a second init() only
     // happens in host tests) are deliberately leaked, never freed, because
     // `&'static VfsNode` references to them may still exist.
@@ -624,49 +625,22 @@ pub fn get_node_mut(id: u64) -> Option<&'static mut VfsNode> {
     }
 }
 
-/// Persistent-home overlay: while enabled, `/home[/<name>[/...]]` is an alias
-/// for `/sd/home[/<name>[/...]]` (no copying — paths are rewritten before
-/// lookup). Covers every user's home (C5 multi-user), not just `/home/user`.
-/// Enabled at boot once /sd is mounted and /sd/home/user exists; otherwise
-/// /home/<name> is an ordinary (volatile) RAM directory.
-static HOME_ALIAS_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-
+/// The default user's home directory.
 pub const HOME_PATH: &str = "/home/user";
-const HOME_BACKING: &str = "/sd/home/user";
 
-pub fn set_home_alias(on: bool) {
-    HOME_ALIAS_ON.store(on, core::sync::atomic::Ordering::Relaxed);
-}
-
-/// Rewrite a leading `/home` (exact component match) to `/sd/home`.
-pub fn alias_path(path: &str) -> alloc::borrow::Cow<'_, str> {
-    if HOME_ALIAS_ON.load(core::sync::atomic::Ordering::Relaxed) {
-        if let Some(rest) = path.strip_prefix("/home") {
-            if rest.is_empty() || rest.starts_with('/') {
-                return alloc::borrow::Cow::Owned(alloc::format!("/sd/home{}", rest));
-            }
-        }
-    }
-    alloc::borrow::Cow::Borrowed(path)
-}
-
-/// Ensure /sd/home/user exists (mkdir -p) and enable the /home/user alias.
-/// Falls back to a RAM /home/user when no persistent disk is mounted.
+/// Ensure the default user's home exists and holds a welcome file. With a
+/// disk the home is persistent (the prefix map sends `/home` to `/sd/home`);
+/// without one it is an ordinary RAM directory.
 pub fn bootstrap_home() {
-    let have_sd = resolve_path("/sd").is_ok();
-    if have_sd {
-        for dir in ["/sd/home", HOME_BACKING] {
+    let persistent = crate::fs::prefix_map::is_active("/home");
+    if resolve_path(HOME_PATH).is_err() {
+        for dir in ["/home", HOME_PATH] {
             if resolve_path(dir).is_err() {
                 if let Err(e) = create_dir(dir) {
                     println!("[vfs] mkdir {} failed: {:?}", dir, e);
                 }
             }
         }
-        if resolve_path(HOME_BACKING).is_ok() {
-            set_home_alias(true);
-        }
-    } else if resolve_path(HOME_PATH).is_err() {
-        let _ = create_dir(HOME_PATH);
     }
     let welcome = "/home/user/welcome.txt";
     if resolve_path(welcome).is_err() {
@@ -676,20 +650,17 @@ pub fn bootstrap_home() {
         );
     }
     println!(
-        "[vfs] home: {} (alias {})",
+        "[vfs] home: {} ({})",
         HOME_PATH,
-        if have_sd {
-            "-> /sd/home/user"
-        } else {
-            "RAM only"
-        }
+        if persistent { "on disk" } else { "RAM only" }
     );
 }
 
 /// Resolve a path to a VFS node ID. Every backing-store directory walked
 /// through is expanded first; the final node is returned as it is.
 pub fn resolve_path(path: &str) -> Result<u64, VfsError> {
-    let path = &*alias_path(path);
+    let path = &*crate::fs::prefix_map::rewrite(path);
+    crate::fs::virtual_fs::refresh_for(path);
     if path.is_empty() {
         return Err(VfsError::InvalidPath);
     }
@@ -747,7 +718,7 @@ fn detach_node(parent_id: u64, name: &str, node_id: u64) {
 /// Create a directory (also in the ext2 backing store when the parent is
 /// ext2-backed, so it survives reboots like file write-through does).
 pub fn mkdir(path: &str) -> Result<u64, VfsError> {
-    let path = &*alias_path(path);
+    let path = &*crate::fs::prefix_map::rewrite(path);
     let (parent_id, name) = resolve_parent(path)?;
     let node_id = alloc_node(name, FileType::Directory, parent_id)?;
     if let Err(e) = persist_new_dir(parent_id, node_id, name) {
@@ -773,7 +744,7 @@ fn persist_new_dir(parent_id: u64, node_id: u64, name: &str) -> Result<(), VfsEr
 
 /// Create a file; an existing regular file is returned as it is.
 pub fn create(path: &str) -> Result<u64, VfsError> {
-    let path = &*alias_path(path);
+    let path = &*crate::fs::prefix_map::rewrite(path);
     let (parent_id, name) = resolve_parent(path)?;
     let parent = get_node(parent_id).ok_or(VfsError::NotFound)?;
     match parent.find_child(name).and_then(get_node) {
@@ -815,7 +786,7 @@ fn create_for_open(path: &str) -> Result<u64, VfsError> {
 
 /// Open a file (resolve path, return file descriptor)
 pub fn open(path: &str, flags: u32) -> Result<usize, VfsError> {
-    let path = &*alias_path(path);
+    let path = &*crate::fs::prefix_map::rewrite(path);
     let inode_id = match resolve_path(path) {
         Ok(id) => id,
         Err(VfsError::NotFound) if flags & O_CREAT != 0 => create_for_open(path)?,
@@ -1060,7 +1031,7 @@ pub fn read_file(path: &str) -> Result<alloc::vec::Vec<u8>, VfsError> {
 
 /// Create the VFS node for a file that does not exist yet.
 fn create_new_file(path: &str) -> Result<u64, VfsError> {
-    let path = &*alias_path(path);
+    let path = &*crate::fs::prefix_map::rewrite(path);
     let (parent_id, name) = resolve_parent(path)?;
     alloc_node(name, FileType::RegularFile, parent_id)
 }
@@ -1099,6 +1070,26 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<usize, VfsError> {
     // (settings persistence etc.) actually land on disk.
     writeback_node(inode_id)?;
     Ok(data.len())
+}
+
+/// Write `data` to `path` only when the file does not exist yet. Returns
+/// whether it was written. Used to seed defaults without clobbering state.
+pub fn write_file_if_missing(path: &str, data: &[u8]) -> Result<bool, VfsError> {
+    if resolve_path(path).is_ok() {
+        return Ok(false);
+    }
+    write_file(path, data)?;
+    Ok(true)
+}
+
+/// Write `data` to `path` unless it already holds exactly those bytes.
+/// Returns whether it was written. Keeps boot from rewriting the disk.
+pub fn write_file_if_changed(path: &str, data: &[u8]) -> Result<bool, VfsError> {
+    if read_file(path).is_ok_and(|current| current == data) {
+        return Ok(false);
+    }
+    write_file(path, data)?;
+    Ok(true)
 }
 
 /// Create a directory (wrapper with shell-friendly name)
@@ -1161,7 +1152,7 @@ fn persist_rename(
 /// Rename / move a file or directory
 pub fn rename(src_path: &str, dst_path: &str) -> Result<(), VfsError> {
     let src_id = resolve_path(src_path)?;
-    let dst_path = &*alias_path(dst_path);
+    let dst_path = &*crate::fs::prefix_map::rewrite(dst_path);
     let (dst_parent_id, dst_name) = resolve_parent(dst_path)?;
     check_name(dst_name)?;
     let src_node = get_node(src_id).ok_or(VfsError::NotFound)?;
@@ -1501,7 +1492,7 @@ pub fn symlink(target: &str, link_path: &str) -> Result<u64, VfsError> {
     if target.len() > MAX_NAME_LEN {
         return Err(VfsError::InvalidPath);
     }
-    let link_path = &*alias_path(link_path);
+    let link_path = &*crate::fs::prefix_map::rewrite(link_path);
     let (parent_id, name) = resolve_parent(link_path)?;
     check_dir_writable(parent_id)?;
     let link_id = alloc_node(name, FileType::Symlink, parent_id)?;
@@ -1546,7 +1537,7 @@ pub fn link(src_path: &str, dst_path: &str) -> Result<(), VfsError> {
     if src_node.metadata.file_type == FileType::Directory {
         return Err(VfsError::PermissionDenied);
     }
-    let dst_path = &*alias_path(dst_path);
+    let dst_path = &*crate::fs::prefix_map::rewrite(dst_path);
     let (dst_parent_id, dst_name) = resolve_parent(dst_path)?;
     check_name(dst_name)?;
     check_dir_writable(dst_parent_id)?;
@@ -1745,28 +1736,4 @@ pub fn sync() {
 /// Get directory entries for getdents
 pub fn getdents(path: &str) -> Result<alloc::vec::Vec<DirEntry>, VfsError> {
     list_dir(path)
-}
-/// Called from kernel_init after vfs::init().
-pub fn mount_virtual_fs() {
-    // Create mount-point directories in VFS root
-    let proc_id = alloc_node("proc", FileType::Directory, 0);
-    let dev_id = alloc_node("dev", FileType::Directory, 0);
-    let sys_id = alloc_node("sys", FileType::Directory, 0);
-
-    // Register and mount each virtual filesystem
-    let proc_fs_id = register_fs();
-    let dev_fs_id = register_fs();
-    let sys_fs_id = register_fs();
-
-    if let Ok(id) = proc_id {
-        let _ = mount("/proc", proc_fs_id, id);
-    }
-    if let Ok(id) = dev_id {
-        let _ = mount("/dev", dev_fs_id, id);
-    }
-    if let Ok(id) = sys_id {
-        let _ = mount("/sys", sys_fs_id, id);
-    }
-
-    println!("[vfs] Virtual filesystems mounted: /proc, /dev, /sys");
 }

@@ -115,17 +115,7 @@ impl RepositoryManager {
 
     /// Save repository configuration to VFS
     pub fn save_config(&self) -> Result<(), RepoError> {
-        use crate::fs::vfs::{create, create_dir, open, write};
-
-        // Ensure config directory exists
-        let _ = create_dir("/etc/pkg");
-
-        // Create or open the config file
-        let _ = create("/etc/pkg/repos.conf");
-        let fd = match open("/etc/pkg/repos.conf", 1) {
-            Ok(fd) => fd,
-            Err(_) => return Err(RepoError::IoError),
-        };
+        let _ = crate::fs::vfs::create_dir("/etc/pkg");
 
         // Build config content
         let mut content = String::new();
@@ -144,9 +134,10 @@ impl RepositoryManager {
             ));
         }
 
-        // Write to file
-        write(fd, content.as_bytes());
-        Ok(())
+        // write_file truncates and writes through to the disk.
+        crate::fs::vfs::write_file("/etc/pkg/repos.conf", content.as_bytes())
+            .map(|_| ())
+            .map_err(|_| RepoError::IoError)
     }
 
     /// Load repository configuration from VFS

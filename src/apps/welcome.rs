@@ -8,39 +8,24 @@ use crate::fs::vfs;
 use crate::println;
 use crate::wm::window;
 
-/// Persistent marker path (survives reboots when a disk is attached).
-const WELCOME_MARKER_PERSISTENT: &str = "/sd/etc/lobster_welcome_seen";
-/// Volatile fallback path (no persistent disk attached).
-const WELCOME_MARKER_VOLATILE: &str = "/etc/lobster_welcome_seen";
+/// Marker path; `/etc` is on the disk whenever one is attached, so the
+/// marker survives reboots without a path of its own.
+const WELCOME_MARKER: &str = "/etc/lobster_welcome_seen";
 /// Window title; also how the renderer finds the window.
 const WELCOME_TITLE: &str = "Welcome to LobsterOS";
 /// Outer window size.
 const WELCOME_W: u32 = 500;
 const WELCOME_H: u32 = 350;
 
-/// The path the marker is (or would be) stored at: persistent when /sd is
-/// mounted, volatile otherwise.
-fn marker_path() -> &'static str {
-    if vfs::stat("/sd").is_some() {
-        WELCOME_MARKER_PERSISTENT
-    } else {
-        WELCOME_MARKER_VOLATILE
-    }
-}
-
 /// Check if the welcome window has already been shown
 pub fn is_welcome_seen() -> bool {
-    vfs::stat(WELCOME_MARKER_PERSISTENT).is_some() || vfs::stat(WELCOME_MARKER_VOLATILE).is_some()
+    vfs::stat(WELCOME_MARKER).is_some()
 }
 
 /// Mark the welcome window as seen (create marker file)
 pub fn mark_welcome_seen() {
-    let path = marker_path();
-    if path == WELCOME_MARKER_PERSISTENT {
-        let _ = vfs::create_dir("/sd/etc");
-    }
-    let _ = vfs::write_file(path, b"1");
-    println!("[welcome] Marker written to {}", path);
+    let _ = vfs::write_file(WELCOME_MARKER, b"1");
+    println!("[welcome] Marker written to {}", WELCOME_MARKER);
 }
 
 /// Show the welcome window (called once on first boot)
@@ -255,16 +240,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_welcome_marker_paths() {
-        assert_eq!(WELCOME_MARKER_PERSISTENT, "/sd/etc/lobster_welcome_seen");
-        assert_eq!(WELCOME_MARKER_VOLATILE, "/etc/lobster_welcome_seen");
-    }
-
-    #[test]
-    fn test_marker_path_prefers_persistent_when_sd_mounted() {
-        let _guard = crate::test_support::serial_guard();
-        // Without a disk the volatile path is used.
-        assert_eq!(marker_path(), WELCOME_MARKER_VOLATILE);
+    fn test_welcome_marker_path() {
+        assert_eq!(WELCOME_MARKER, "/etc/lobster_welcome_seen");
     }
 
     #[test]

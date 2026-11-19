@@ -23,7 +23,7 @@ use crate::println;
 use crate::sched;
 
 /// Maximum sysfs entries
-const MAX_SYS_ENTRIES: usize = 16;
+const MAX_SYS_ENTRIES: usize = 24;
 
 /// Sysfs entry types
 #[derive(Debug, Clone, Copy, PartialEq)]

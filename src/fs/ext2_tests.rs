@@ -1258,3 +1258,101 @@ fn vfs_errors_are_reported_not_swallowed() {
         assert_clean(vol);
     });
 }
+
+// ─── Persistent root (prefix map) ────────────────────────────────────
+
+/// Boot as `kernel_main` does with a disk: VFS, mount, prefix map.
+fn boot_persistent_root() {
+    boot_vfs();
+    crate::fs::prefix_map::enable();
+}
+
+fn sample_package(name: &str) -> crate::pkg::package::InstalledPackage {
+    use crate::pkg::package::{InstalledPackage, PackageArch, PackageMetadata};
+    let meta = PackageMetadata::new(
+        name.to_string(),
+        "1.0".to_string(),
+        PackageArch::Aarch64,
+        format!("{name} tool"),
+        Vec::new(),
+        10,
+        [0u8; 32],
+        String::new(),
+    );
+    InstalledPackage::new(meta, 1, true)
+}
+
+#[test]
+fn etc_var_usr_apps_opt_root_survive_a_reboot() {
+    with_volume(FIXTURE_4K, |vol| {
+        boot_persistent_root();
+        for dir in ["/etc", "/var", "/usr", "/apps", "/opt", "/root"] {
+            let path = format!("{dir}/lobster-test");
+            vfs::write_file(&path, dir.as_bytes()).expect("write");
+            assert_eq!(
+                vfs::read_file(&format!("/sd{path}")).expect("same node on disk"),
+                dir.as_bytes()
+            );
+        }
+        boot_persistent_root();
+        for dir in ["/etc", "/var", "/usr", "/apps", "/opt", "/root"] {
+            let path = format!("{dir}/lobster-test");
+            assert_eq!(vfs::read_file(&path).expect("after reboot"), dir.as_bytes());
+        }
+        assert_clean(vol);
+        crate::fs::prefix_map::deactivate_all();
+    });
+}
+
+#[test]
+fn tmp_stays_in_ram_when_the_map_is_on() {
+    with_volume(FIXTURE_4K, |_vol| {
+        boot_persistent_root();
+        vfs::write_file("/tmp/scratch", b"x").expect("write");
+        assert!(vfs::read_file("/sd/tmp/scratch").is_err());
+        boot_persistent_root();
+        assert!(vfs::read_file("/tmp/scratch").is_err());
+        crate::fs::prefix_map::deactivate_all();
+    });
+}
+
+#[test]
+fn pkg_database_round_trips_across_a_reboot() {
+    use crate::pkg::install::PackageDatabase;
+    with_volume(FIXTURE_4K, |vol| {
+        boot_persistent_root();
+        let mut db = PackageDatabase::load().expect("empty db");
+        db.add(sample_package("hello"), true);
+        db.save().expect("save");
+        boot_persistent_root();
+        let db = PackageDatabase::load().expect("load after reboot");
+        assert!(db.is_installed("hello"), "hello survives the reboot");
+        assert_clean(vol);
+        crate::fs::prefix_map::deactivate_all();
+    });
+}
+
+#[test]
+fn seeding_only_writes_missing_files() {
+    with_volume(FIXTURE_4K, |_vol| {
+        boot_persistent_root();
+        assert_eq!(vfs::write_file_if_missing("/etc/seed", b"one"), Ok(true));
+        assert_eq!(vfs::write_file_if_missing("/etc/seed", b"two"), Ok(false));
+        assert_eq!(vfs::read_file("/etc/seed").expect("read"), b"one");
+        assert_eq!(vfs::write_file_if_changed("/etc/seed", b"one"), Ok(false));
+        assert_eq!(vfs::write_file_if_changed("/etc/seed", b"three"), Ok(true));
+        assert_eq!(vfs::read_file("/etc/seed").expect("read"), b"three");
+        crate::fs::prefix_map::deactivate_all();
+    });
+}
+
+#[test]
+fn enabling_the_map_creates_missing_backing_directories() {
+    with_volume(FIXTURE_4K, |_vol| {
+        boot_vfs();
+        let active = crate::fs::prefix_map::enable();
+        assert_eq!(active, crate::fs::prefix_map::PERSISTENT_PREFIXES.len());
+        assert!(vfs::stat("/sd/apps").is_some());
+        crate::fs::prefix_map::deactivate_all();
+    });
+}

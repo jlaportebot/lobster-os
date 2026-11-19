@@ -3925,7 +3925,6 @@ fn cmd_useradd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         crate::println!("useradd: failed to write /etc/passwd: {:?}", e);
         return 1;
     }
-    crate::users::passwd::persist();
 
     // Write shadow file
     let mut shadows = crate::users::shadow::read_shadow_file().unwrap_or_default();
@@ -4000,7 +3999,6 @@ fn cmd_userdel(args: [&str; MAX_ARGS], argc: usize) -> i32 {
             crate::println!("[userdel] Failed to write /etc/passwd: {:?}", e);
             return 1;
         }
-        crate::users::passwd::persist();
     }
 
     // Remove from shadow
