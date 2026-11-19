@@ -2,11 +2,10 @@
 
 pub mod app_store;
 pub mod browser;
-pub mod browser_text;
 pub mod calculator;
 pub mod calculator_engine;
 pub mod editor;
-pub mod file_manager;
+pub mod files;
 pub mod image_viewer;
 pub mod network_manager;
 pub mod notes;
@@ -23,7 +22,7 @@ use crate::println;
 /// Initialize all core desktop applications
 pub fn init() {
     terminal::init();
-    file_manager::init();
+    files::init();
     editor::init();
     settings::init();
     calculator::init();

@@ -24,7 +24,6 @@ pub mod dialog;
 pub mod dirty;
 pub mod event_router;
 pub mod greeter;
-pub mod gui_files;
 pub mod gui_shell;
 pub mod hit_region;
 pub mod input;
@@ -114,7 +113,7 @@ fn render_apps(content_dirty: bool) {
     }
     if content_dirty {
         render_app(crate::apps::calculator::render_to_windows);
-        render_app(crate::apps::file_manager::render_to_windows);
+        render_app(crate::apps::files::render_to_windows);
         render_app(crate::apps::browser::render_to_windows);
         render_app(crate::apps::editor::render_to_windows);
         render_app(crate::apps::notes::render_to_windows);

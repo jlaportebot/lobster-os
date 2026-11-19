@@ -42,9 +42,7 @@ pub static APPS: &[AppEntry] = &[
     AppEntry {
         name: "Files",
         launch: || {
-            focus_or_create("File Manager", 500, 400, || {
-                let _ = window::create(120, 100, 500, 400, "File Manager");
-            });
+            crate::apps::files::open_window();
         },
     },
     AppEntry {

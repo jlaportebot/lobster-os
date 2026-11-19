@@ -39,7 +39,7 @@ pub fn perform(action: Action) {
         Action::RemoveUser(i) => ask_remove_user(st, i),
         Action::Clock24 => toggle_clock(),
         Action::OpenFiles => {
-            crate::wm::start_menu::launch_by_name("Files");
+            crate::apps::files::open_at("/sd");
         }
         Action::Uninstall(i) => ask_uninstall(st, i),
         Action::DismissPopup => st.resolution_menu.close(),
