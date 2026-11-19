@@ -6,6 +6,7 @@ use crate::apps::settings::model::Action;
 use crate::apps::settings::state::State;
 use crate::apps::settings::users::validate_removal;
 use crate::display::icons::Glyph;
+use crate::users::auth::PasswordState;
 use crate::wm::controls::{ButtonKind, Ui};
 use alloc::string::String;
 
@@ -49,10 +50,16 @@ pub fn draw(ui: &mut Ui, flow: &mut Flow, st: &mut State) {
         ui,
         flow,
         "Change password",
-        "Passwords arrive with the lock screen (O3.8)",
+        "Leave the new password empty to remove it",
         ADD_W,
     );
-    ui.button(0, pw, "Change password", ButtonKind::Secondary, false);
+    ui.button(
+        Action::ChangePassword.key(),
+        pw,
+        "Change password",
+        ButtonKind::Secondary,
+        true,
+    );
     note(ui, flow, &st.notice);
 }
 
@@ -65,8 +72,17 @@ fn title(row: &UserRow) -> String {
 }
 
 fn subtitle(row: &UserRow) -> String {
+    let password = match crate::users::auth::password_state(&row.name) {
+        PasswordState::Set => "password set",
+        PasswordState::None => "no password",
+        PasswordState::Locked => "locked",
+    };
     match row.uid {
-        Some(uid) => alloc::format!("uid {}  \u{b7}  {}", uid, row.home),
-        None => alloc::format!("desktop account  \u{b7}  {}", row.home),
+        Some(uid) => alloc::format!("uid {}  \u{b7}  {}  \u{b7}  {}", uid, row.home, password),
+        None => alloc::format!(
+            "desktop account  \u{b7}  {}  \u{b7}  {}",
+            row.home,
+            password
+        ),
     }
 }

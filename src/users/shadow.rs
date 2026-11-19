@@ -70,10 +70,10 @@ pub fn parse_shadow_line(line: &str) -> Option<ShadowEntry> {
         last_change: parts[2].parse().unwrap_or(0),
         min_age: parts[3].parse().unwrap_or(0),
         max_age: parts[4].parse().unwrap_or(99999),
-        warning: parts[4].parse().unwrap_or(7), // Note: parts[5] is warning
-        inactive: parts[5].parse().unwrap_or(-1),
-        expire: parts[6].parse().unwrap_or(-1),
-        reserved: parts[7].to_string(),
+        warning: parts[5].parse().unwrap_or(7),
+        inactive: parts[6].parse().unwrap_or(-1),
+        expire: parts[7].parse().unwrap_or(-1),
+        reserved: parts[8].to_string(),
     })
 }
 
@@ -141,4 +141,24 @@ pub fn write_shadow_file(entries: &[ShadowEntry]) -> Result<(), crate::fs::vfs::
     crate::fs::vfs::close(fd)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shadow_line_roundtrips_every_field() {
+        let line = "alice:$pbkdf2-sha256$1$a$b:19000:1:90:7:3:20000:";
+        let entry = parse_shadow_line(line).expect("nine fields parse");
+        assert_eq!(entry.max_age, 90);
+        assert_eq!(entry.warning, 7);
+        assert_eq!(entry.inactive, 3);
+        assert_eq!(entry.expire, 20000);
+    }
+
+    #[test]
+    fn short_shadow_lines_are_rejected() {
+        assert!(parse_shadow_line("alice:hash").is_none());
+    }
 }

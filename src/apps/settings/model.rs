@@ -123,6 +123,8 @@ pub enum Action {
     DismissPopup,
     /// The URL text field on the Network page.
     UrlField,
+    /// Change (or remove) the signed-in user's password.
+    ChangePassword,
 }
 
 /// Bits of a key that hold the action parameter.
@@ -153,6 +155,7 @@ impl Action {
             Action::PageScroll => (19, 0),
             Action::DismissPopup => (20, 0),
             Action::UrlField => (21, 0),
+            Action::ChangePassword => (22, 0),
         }
     }
 
@@ -190,6 +193,7 @@ impl Action {
             19 => Action::PageScroll,
             20 => Action::DismissPopup,
             21 => Action::UrlField,
+            22 => Action::ChangePassword,
             _ => return None,
         };
         Some(action)
@@ -265,6 +269,7 @@ mod tests {
             Action::PageScroll,
             Action::DismissPopup,
             Action::UrlField,
+            Action::ChangePassword,
         ];
         for action in samples {
             assert_eq!(Action::from_key(action.key()), Some(action));

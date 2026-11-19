@@ -388,10 +388,14 @@ pub fn compose() -> bool {
     for rect in &rects[..count] {
         let target = back.clipped(rect.x0, rect.y0, rect.x1, rect.y1);
         fb::set_render_target(Some(target));
-        crate::wm::wallpaper::paint_into(&target);
-        crate::wm::desktop_icons::draw(&target);
-        draw_windows(scene, &target);
-        draw_overlays(&target);
+        if crate::wm::lock::is_active() {
+            crate::wm::lock::draw(&target);
+        } else {
+            crate::wm::wallpaper::paint_into(&target);
+            crate::wm::desktop_icons::draw(&target);
+            draw_windows(scene, &target);
+            draw_overlays(&target);
+        }
         fb::set_render_target(None);
         present(scene, &device, rect);
     }

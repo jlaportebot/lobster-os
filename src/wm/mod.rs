@@ -28,6 +28,7 @@ pub mod gui_shell;
 pub mod hit_region;
 pub mod input;
 pub mod launcher;
+pub mod lock;
 pub mod notifications;
 pub mod panel;
 pub mod panel_layout;
@@ -174,6 +175,9 @@ fn tick_scene(user_only: bool) {
         dirty::mark();
     }
 
+    if lock::take_redraw() {
+        scene::damage_all();
+    }
     let content_dirty = dirty::should_render_static();
     render_apps(content_dirty);
     if !user_only {
@@ -230,6 +234,9 @@ fn tick_hardware() {
     notifications::draw(&fb);
     context_menu::draw(&fb);
     dialog::draw(&fb);
+    if lock::is_active() {
+        lock::draw(&fb);
+    }
 }
 
 /// Handle keyboard shortcuts (called from input module)
