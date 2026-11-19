@@ -234,9 +234,14 @@ and tested by CI; nothing is hand-assembled.
       Tab/Shift+Tab focus (30b9b03, gate 480 tests, harness 12/12). Disabled with a reason until their
       features exist: scale (O2.9), passwords (O3.8). Gaps: no mouse wheel (QEMU input has no wheel
       events), dropdown popups clip to the window, keyboard focus starts only after a click.
-- [ ] **O4.2 Files**: mouse selection, double-click open-with by type, back/forward/up,
+- [~] **O4.2 Files**: mouse selection, double-click open-with by type, back/forward/up,
       breadcrumb, new/rename/delete/copy/cut/paste, drag-move, properties, trash, list/icon
       views, sidebar places, shared folder.
+      *Verified 2026-11-19 (phase 1):* new `src/apps/files/` on the shared controls — list/icon views, sortable
+      columns, places sidebar, clickable breadcrumb, back/forward/up, click/Ctrl/Shift multi-select with totals,
+      copy/cut/paste with "(copy)" naming + rollback, rename, new folder/file, delete, item + background context menus,
+      open-with through the desktop opener, `/share` listing, layout at 800×600 (f2b11fb, gate 641 tests, harness
+      12/12). Left (phase 2): trash, properties, drag-move, type-to-select, writes into `/share`.
 - [~] **O4.3 Browser v2**: fix the panic; HTML tokenizer + block/inline layout (headings,
       paragraphs, lists, links, emphasis, pre, tables-lite), proportional text, address bar,
       back/forward/reload, clickable links, scrolling, history/bookmarks, images (O2.6),
@@ -358,3 +363,4 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-18 | Persistent system state: one prefix map puts `/bin /etc /var /usr /apps /opt /root /home` on the disk (ADR 0001); pkg installs, users and settings survive reboot; `/dev`, `/proc`, `/sys` reachable | gate 495 tests + harness 12/12 + reboot persistence check (pkg list, /etc file, e2fsck clean) |
 | 2026-11-19 | QEMU: HMP `lclick` honours the button mask, so `lobstervm click --right` and the harness can right-click (39e2987) | harness 12/12 + live desktop right-click menu |
 | 2026-11-19 | O4.3 Browser v2: HTML tokenizer + layout engine, status-aware fetch, links/history/bookmarks | gate 563 tests + harness 12/12 + live pages (test page, 404, example.com, info.cern.ch, Wikipedia 512 KiB) |
+| 2026-11-19 | O4.2 Files phase 1 (views, selection, clipboard operations, context menus, open-with) | gate 641 tests + harness 12/12 + live screenshots |
