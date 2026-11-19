@@ -7,8 +7,9 @@ use alloc::vec::Vec;
 
 /// Login shell given to new accounts.
 const DEFAULT_SHELL: &str = "/bin/sh";
-/// Shadow hash meaning "locked: no password set".
-const LOCKED_HASH: &str = "!";
+/// Shadow hash field of an account with no password (unlocks on an empty
+/// password; see `users::auth::PasswordState`).
+const NO_PASSWORD_HASH: &str = "";
 
 /// Names of every account that exists.
 #[must_use]
@@ -44,7 +45,7 @@ pub fn add_user(name: &str) -> Result<(), String> {
 
 fn store_shadow_and_group(name: &str, gid: u32) {
     let mut shadows = shadow::read_shadow_file().unwrap_or_default();
-    shadows.push(shadow::ShadowEntry::new(name, LOCKED_HASH));
+    shadows.push(shadow::ShadowEntry::new(name, NO_PASSWORD_HASH));
     let _ = shadow::write_shadow_file(&shadows);
     let mut groups = group::read_group_file().unwrap_or_default();
     groups.push(group::GroupEntry::new(name, gid));

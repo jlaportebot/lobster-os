@@ -6,6 +6,8 @@ use alloc::vec::Vec;
 pub mod auth;
 pub mod group;
 pub mod passwd;
+pub mod password;
+pub mod policy;
 pub mod session;
 pub mod shadow;
 
