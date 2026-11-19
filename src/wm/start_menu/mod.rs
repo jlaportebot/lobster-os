@@ -376,11 +376,15 @@ fn activate(pos: usize) {
 fn perform_power(action: PowerAction) {
     close();
     crate::println!("[wm] Start menu power: {}", action.label());
-    #[cfg(target_arch = "aarch64")]
     match action {
+        PowerAction::Lock => crate::wm::lock::lock(),
+        PowerAction::LogOut => crate::wm::lock::log_out(),
+        #[cfg(target_arch = "aarch64")]
         PowerAction::Restart => crate::drivers::power::reset(),
+        #[cfg(target_arch = "aarch64")]
         PowerAction::ShutDown => crate::drivers::power::shutdown(),
-        PowerAction::Lock | PowerAction::LogOut => {}
+        #[cfg(not(target_arch = "aarch64"))]
+        PowerAction::Restart | PowerAction::ShutDown => {}
     }
 }
 

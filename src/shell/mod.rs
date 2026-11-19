@@ -923,6 +923,11 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
             cmd_uptime(out);
             0
         }
+        c if crate::wm::lock::commands::NAMES.contains(&c) => {
+            let (code, text) = crate::wm::lock::commands::run_with_args(c, &args[..argc]);
+            out.puts(&text);
+            code
+        }
         "mem" | "memory" => {
             cmd_mem(out);
             0

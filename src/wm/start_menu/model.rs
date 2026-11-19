@@ -70,11 +70,13 @@ impl PowerAction {
         }
     }
 
-    /// Whether the kernel has a real path behind the entry. There is no
-    /// session lock screen and the greeter only runs once at boot, so Lock
-    /// and Log out stay disabled rather than pretend.
+    /// Whether the kernel has a real path behind the entry. Every power
+    /// entry now does: Lock and Log out drive `wm::lock`.
     pub fn is_enabled(self) -> bool {
-        matches!(self, PowerAction::Restart | PowerAction::ShutDown)
+        matches!(
+            self,
+            PowerAction::Lock | PowerAction::LogOut | PowerAction::Restart | PowerAction::ShutDown
+        )
     }
 }
 

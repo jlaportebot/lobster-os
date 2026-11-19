@@ -108,6 +108,9 @@ pub fn pump_events() {
         let event = next_deferred().or_else(hid::poll);
         if let Some(seen) = event.as_ref() {
             count_event(seen);
+            if route_locked(seen) {
+                continue;
+            }
         }
         match event {
             Some(HidEvent::KeyPress { scancode, extended }) => {
@@ -256,6 +259,9 @@ pub fn pump_events_user_only() {
         let event = hid::poll();
         let Some(ev) = event else { break };
         count_event(&ev);
+        if route_locked(&ev) {
+            continue;
+        }
         match ev {
             HidEvent::MouseMove { dx, dy } => move_cursor_only(dx, dy),
             HidEvent::MouseButton { left, .. } => {
@@ -283,6 +289,11 @@ const SC_RIGHT_GUI: u8 = 0x5C;
 
 /// Handle a key press event
 fn handle_key_press(scancode: u8, _extended: bool) {
+    // Super+L: lock the session before any other shortcut sees the key.
+    if crate::wm::lock::is_lock_chord(scancode, hid::gui_held()) {
+        crate::wm::lock::lock();
+        return;
+    }
     // Get ASCII character from scancode (respecting shift state)
     let shift = hid::shift_held();
     let ch = hid::scancode_to_ascii(scancode, shift);
@@ -423,6 +434,53 @@ fn handle_mouse_move(dx: i16, dy: i16) {
 
     // Hover observers, drag/resize bookkeeping, optional focus-follows-z
     event_router::route_move(cx, cy, dx, dy);
+}
+
+/// Hand `ev` to the lock overlay when it is up. Returns true when consumed:
+/// while locked no event reaches shortcuts, menus, hit regions or windows.
+fn route_locked(ev: &HidEvent) -> bool {
+    if crate::wm::lock::delivery(crate::wm::lock::is_active(), ev)
+        == crate::wm::lock::Delivery::Desktop
+    {
+        return false;
+    }
+    match *ev {
+        HidEvent::KeyPress { scancode, .. } => crate::wm::lock::key_press(scancode),
+        HidEvent::MouseMove { dx, dy } => move_cursor_only(dx, dy),
+        HidEvent::MouseButton {
+            left,
+            right,
+            middle,
+        } => {
+            let pressed = left && !mouse_buttons().0;
+            // SAFETY: input state is only touched from the main loop.
+            unsafe {
+                MOUSE_LEFT = left;
+                MOUSE_RIGHT = right;
+                MOUSE_MIDDLE = middle;
+            }
+            if pressed {
+                let (cx, cy) = cursor_pos();
+                crate::wm::lock::click(cx, cy);
+            }
+        }
+        HidEvent::KeyRelease { .. } => {}
+    }
+    true
+}
+
+/// Route one event to the overlay from the boot greeter loop, which runs
+/// before the main pump exists.
+pub fn deliver_boot_event(ev: &HidEvent) {
+    count_event(ev);
+    route_locked(ev);
+}
+
+/// Forget an in-flight press on a user window so a lock mid-click cannot
+/// leave it pending across the overlay.
+pub fn cancel_pointer_capture() {
+    // SAFETY: input state is only touched from the main loop.
+    unsafe { USER_CLICK_PENDING = false };
 }
 
 /// Pending EL0 user-window click awaiting its release event.
