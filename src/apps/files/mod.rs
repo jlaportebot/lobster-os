@@ -9,6 +9,7 @@
 
 pub mod actions;
 pub mod diag;
+pub mod dnd;
 pub mod fsops;
 pub mod history;
 pub mod keys;
@@ -18,10 +19,15 @@ pub mod model;
 pub mod nav;
 pub mod ops;
 pub mod paths;
+pub mod properties;
 mod render;
 pub mod selection;
 pub mod state;
 pub mod targets;
+#[cfg(all(test, feature = "std"))]
+mod testfs;
+pub mod trash;
+pub mod typeahead;
 
 use crate::wm::controls::Ui;
 use crate::wm::hit_region::{self, Hit};
