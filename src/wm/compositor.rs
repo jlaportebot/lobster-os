@@ -464,7 +464,28 @@ pub fn cursor_shape() -> CursorShape {
     unsafe { CURSOR_SHAPE }
 }
 
+/// Pointer to the pixel at (`x`, `y`) in the framebuffer, or `None` when it
+/// lies outside. Both the save and the restore path address pixels this way,
+/// so they always agree on the stored pixel format.
+///
+/// # Safety
+/// Callers must hold the single-threaded render guarantee the compositor
+/// runs under, so no other reference to the framebuffer is live.
+unsafe fn cursor_pixel_ptr(fb: &FramebufferInfo, x: u32, y: u32) -> Option<*mut u32> {
+    if x >= fb.width || y >= fb.height {
+        return None;
+    }
+    // SAFETY: the bounds check above keeps the offset inside the buffer the
+    // caller owns under the single-threaded render guarantee.
+    Some((fb.virt_addr as *mut u32).add((y * (fb.pitch / 4) + x) as usize))
+}
+
 /// Restore the pixels saved under the last drawn cursor.
+///
+/// The saved words are already in the framebuffer's stored format (they were
+/// read raw), so they go back raw: converting them through a colour like
+/// `draw_pixel` would swap R and B a second time and leave an exchanged-colour
+/// box behind.
 pub fn restore_software_cursor(fb: &FramebufferInfo) {
     unsafe {
         let (sx, sy) = (CURSOR_SAVED_X, CURSOR_SAVED_Y);
@@ -473,17 +494,13 @@ pub fn restore_software_cursor(fb: &FramebufferInfo) {
         }
         for row in 0..GLYPH_H {
             for col in 0..GLYPH_W {
-                let x = sx + col;
-                let y = sy + row;
-                if x >= fb.width || y >= fb.height {
-                    continue;
+                let saved = CURSOR_SAVED[(row * GLYPH_W + col) as usize];
+                // SAFETY: `cursor_pixel_ptr` only returns a pointer inside
+                // the framebuffer, and the cursor state plus the target are
+                // owned by the single compositor thread.
+                if let Some(ptr) = cursor_pixel_ptr(fb, sx + col, sy + row) {
+                    core::ptr::write_volatile(ptr, saved);
                 }
-                crate::display::graphics::draw_pixel(
-                    fb,
-                    x,
-                    y,
-                    CURSOR_SAVED[(row * GLYPH_W + col) as usize],
-                );
             }
         }
     }
@@ -493,48 +510,67 @@ pub fn restore_software_cursor(fb: &FramebufferInfo) {
 /// saving what was beneath it for a later restore.
 pub fn draw_software_cursor(fb: &FramebufferInfo) {
     let (cx, cy) = crate::wm::input::cursor_pos();
-    unsafe {
-        // Save the area beneath
-        for row in 0..GLYPH_H {
-            for col in 0..GLYPH_W {
-                let x = cx + col;
-                let y = cy + row;
-                if x >= fb.width || y >= fb.height {
-                    CURSOR_SAVED[(row * GLYPH_W + col) as usize] = 0;
-                    continue;
-                }
-                let offset = (y * (fb.pitch / 4) + x) as usize;
-                let ptr = (fb.virt_addr as *const u32).add(offset);
-                CURSOR_SAVED[(row * GLYPH_W + col) as usize] = core::ptr::read_volatile(ptr);
+    draw_cursor_at(fb, cx, cy);
+}
+
+/// Save the pixels under a cursor at (`x`, `y`) and draw its glyph there.
+fn draw_cursor_at(fb: &FramebufferInfo, x: u32, y: u32) {
+    save_under_cursor(fb, x, y);
+    draw_cursor_glyph(fb, x, y);
+}
+
+/// Read (raw, stored format) the pixels a cursor at (`x`, `y`) covers and
+/// record that position for `restore_software_cursor`.
+fn save_under_cursor(fb: &FramebufferInfo, x: u32, y: u32) {
+    for row in 0..GLYPH_H {
+        for col in 0..GLYPH_W {
+            // SAFETY: `cursor_pixel_ptr` only returns a pointer inside the
+            // framebuffer, and the cursor state plus the target are owned by
+            // the single compositor thread.
+            unsafe {
+                let saved = match cursor_pixel_ptr(fb, x + col, y + row) {
+                    Some(ptr) => core::ptr::read_volatile(ptr),
+                    None => 0,
+                };
+                CURSOR_SAVED[(row * GLYPH_W + col) as usize] = saved;
             }
         }
-        CURSOR_SAVED_X = cx;
-        CURSOR_SAVED_Y = cy;
-        // Draw the glyph: black outline then white fill
-        let glyph = CURSOR_SHAPE.glyph();
-        for row in 0..GLYPH_H {
-            let bits = glyph[row as usize];
-            for col in 0..GLYPH_W {
-                if (bits << col) & 0x8000 == 0 {
-                    continue;
+    }
+    // SAFETY: the cursor state is only touched from the single compositor
+    // thread, so recording the position here cannot race.
+    unsafe {
+        CURSOR_SAVED_X = x;
+        CURSOR_SAVED_Y = y;
+    }
+}
+
+/// Draw the cursor glyph (black outline, white fill) at (`cx`, `cy`).
+fn draw_cursor_glyph(fb: &FramebufferInfo, cx: u32, cy: u32) {
+    // SAFETY: the cursor shape is only written from the single compositor
+    // thread, so reading it here cannot race.
+    let glyph = unsafe { CURSOR_SHAPE.glyph() };
+    for row in 0..GLYPH_H {
+        let bits = glyph[row as usize];
+        for col in 0..GLYPH_W {
+            if (bits << col) & 0x8000 == 0 {
+                continue;
+            }
+            let x = cx + col;
+            let y = cy + row;
+            if x >= fb.width || y >= fb.height {
+                continue;
+            }
+            // Fill
+            crate::display::graphics::draw_pixel(fb, x, y, 0xFFFFFFFF);
+            // Outline: right + below neighbors of set bits
+            if col + 1 < GLYPH_W && (bits << (col + 1)) & 0x8000 == 0 {
+                if x + 1 < fb.width {
+                    crate::display::graphics::draw_pixel(fb, x + 1, y, 0xFF000000);
                 }
-                let x = cx + col;
-                let y = cy + row;
-                if x >= fb.width || y >= fb.height {
-                    continue;
-                }
-                // Fill
-                crate::display::graphics::draw_pixel(fb, x, y, 0xFFFFFFFF);
-                // Outline: right + below neighbors of set bits
-                if col + 1 < GLYPH_W && (bits << (col + 1)) & 0x8000 == 0 {
-                    if x + 1 < fb.width {
-                        crate::display::graphics::draw_pixel(fb, x + 1, y, 0xFF000000);
-                    }
-                }
-                if row + 1 < GLYPH_H && (glyph[(row + 1) as usize] << col) & 0x8000 == 0 {
-                    if y + 1 < fb.height {
-                        crate::display::graphics::draw_pixel(fb, x, y + 1, 0xFF000000);
-                    }
+            }
+            if row + 1 < GLYPH_H && (glyph[(row + 1) as usize] << col) & 0x8000 == 0 {
+                if y + 1 < fb.height {
+                    crate::display::graphics::draw_pixel(fb, x, y + 1, 0xFF000000);
                 }
             }
         }
@@ -2458,5 +2494,71 @@ mod tests {
         let blended = 0xFF000000 | (r << 16) | (g << 8) | b;
 
         assert_eq!(blended, dst);
+    }
+
+    /// Side of the square surface the software-cursor tests render into.
+    const CURSOR_TEST_SIDE: u32 = 64;
+    /// Background pixel scales: chosen so no pixel has R == B, which is what
+    /// makes a red/blue channel swap visible.
+    const BG_RED_PER_X: u32 = 3;
+    const BG_GREEN_PER_Y: u32 = 5;
+    const BG_BLUE_MIX: u32 = 7;
+    /// Opaque alpha byte every test background pixel carries.
+    const BG_ALPHA: u32 = 0xFF00_0000;
+
+    fn cursor_test_bg(x: u32, y: u32) -> u32 {
+        BG_ALPHA
+            | (x * BG_RED_PER_X) << 16
+            | (y * BG_GREEN_PER_Y) << 8
+            | (x + y * BG_BLUE_MIX) & 0xFF
+    }
+
+    #[test]
+    fn cursor_restore_returns_exact_background() {
+        let _guard = crate::test_support::serial_guard();
+        const W: u32 = CURSOR_TEST_SIDE;
+        let mut pixels = alloc::vec![0u32; (W * W) as usize];
+        for y in 0..W {
+            for x in 0..W {
+                pixels[(y * W + x) as usize] = cursor_test_bg(x, y);
+            }
+        }
+        let copy = pixels.clone();
+        let mut screen = FramebufferInfo::empty();
+        screen.width = W;
+        screen.height = W;
+        // SAFETY: `pixels` holds W*W u32 values and outlives every use of the
+        // returned target in this test.
+        let fb = unsafe { screen.surface(pixels.as_mut_ptr(), 0, 0, W, W) };
+
+        draw_cursor_at(&fb, 10, 10);
+        assert_ne!(pixels, copy, "drawing the cursor must change the surface");
+
+        restore_software_cursor(&fb);
+        assert_eq!(pixels, copy);
+    }
+
+    #[test]
+    fn cursor_clipped_at_right_bottom_edge() {
+        let _guard = crate::test_support::serial_guard();
+        const W: u32 = CURSOR_TEST_SIDE;
+        let mut pixels = alloc::vec![0u32; (W * W) as usize];
+        for y in 0..W {
+            for x in 0..W {
+                pixels[(y * W + x) as usize] = cursor_test_bg(x, y);
+            }
+        }
+        let copy = pixels.clone();
+        let mut screen = FramebufferInfo::empty();
+        screen.width = W;
+        screen.height = W;
+        // SAFETY: `pixels` holds W*W u32 values and outlives every use of the
+        // returned target in this test.
+        let fb = unsafe { screen.surface(pixels.as_mut_ptr(), 0, 0, W, W) };
+
+        // 56 + GLYPH_W/H reaches past the surface, so the cursor is clipped.
+        draw_cursor_at(&fb, 56, 56);
+        restore_software_cursor(&fb);
+        assert_eq!(pixels, copy);
     }
 }
