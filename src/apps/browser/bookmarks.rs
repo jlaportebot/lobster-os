@@ -1,12 +1,12 @@
-//! Bookmarks and history persisted under `/sd/etc/browser/`.
+//! Bookmarks and history persisted under `/etc/browser/`.
 
 use super::history::History;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-const DIR: &str = "/sd/etc/browser";
-const BOOKMARKS_FILE: &str = "/sd/etc/browser/bookmarks";
-const HISTORY_FILE: &str = "/sd/etc/browser/history";
+const DIR: &str = "/etc/browser";
+const BOOKMARKS_FILE: &str = "/etc/browser/bookmarks";
+const HISTORY_FILE: &str = "/etc/browser/history";
 /// History entries written to disk.
 const PERSISTED_HISTORY: usize = 20;
 

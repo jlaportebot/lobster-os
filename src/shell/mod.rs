@@ -1384,9 +1384,11 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
             #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
             {
                 crate::apps::browser::init();
-                crate::apps::browser::toggle_bookmark();
+                if argc >= 2 && args[1] == "toggle" {
+                    crate::apps::browser::toggle_bookmark();
+                }
                 crate::println!(
-                    "bookmark: {} bookmarks (current URL toggled)",
+                    "bookmark: {} bookmarks",
                     crate::apps::browser::bookmark_count()
                 );
             }
