@@ -7,6 +7,7 @@ use super::view::{
 };
 use crate::wm::controls::{drag, scroll, Track};
 use crate::wm::hit_region::Hit;
+use alloc::string::String;
 
 const SC_ESC: u8 = 0x01;
 const SC_BACKSPACE: u8 = 0x0E;
@@ -53,11 +54,7 @@ pub fn on_hit(b: &mut Browser, hit: &Hit) -> bool {
 }
 
 fn follow_link(b: &mut Browser, id: u32) {
-    let href = b
-        .page
-        .as_ref()
-        .and_then(|p| p.layout.links.get(id as usize))
-        .cloned();
+    let href = b.page.as_ref().map(|p| String::from(p.layout.href(id)));
     if let Some(href) = href {
         b.follow(&href);
     }

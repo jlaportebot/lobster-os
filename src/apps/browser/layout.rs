@@ -2,7 +2,7 @@
 //! rectangles. The output is shared by the renderer and by link hit-testing,
 //! and is rebuilt only on load and on resize.
 
-use super::dom::{Document, NodeKind, Tag};
+use super::dom::{Document, NodeKind, Span, Tag, NO_NODE};
 use crate::display::text::{self, Face, TextStyle};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -31,8 +31,8 @@ pub struct Run {
     pub w: u32,
     /// Inset of the text inside the run (boxes only).
     pub pad: u32,
-    /// The displayed characters (every one has a glyph).
-    pub text: String,
+    /// The displayed characters (every one has a glyph), a span of [`Layout::text`].
+    pub text: Span,
     /// Typeface.
     pub face: Face,
     /// Requested pixel size.
@@ -74,9 +74,11 @@ pub struct Layout {
     /// Decorations drawn under the text.
     pub rects: Vec<Rect>,
     /// Link targets as written in the document (unresolved).
-    pub links: Vec<String>,
+    pub links: Vec<Span>,
     /// `(id or name, y)` of every anchor.
-    pub anchors: Vec<(String, u32)>,
+    pub anchors: Vec<(Span, u32)>,
+    /// Text of every run, link target and anchor name.
+    pub text: String,
     /// Total page height.
     pub height: u32,
     /// Widest content, for clipping decisions.
@@ -97,12 +99,26 @@ impl Layout {
             .map(|r| r.link)
     }
 
+    /// The displayed text of `run`.
+    #[must_use]
+    pub fn run_text(&self, run: &Run) -> &str {
+        run.text.get(&self.text)
+    }
+
+    /// Target of link `id` as written in the document.
+    #[must_use]
+    pub fn href(&self, id: u32) -> &str {
+        self.links
+            .get(id as usize)
+            .map_or("", |s| s.get(&self.text))
+    }
+
     /// Page y of the anchor called `name`.
     #[must_use]
     pub fn anchor_y(&self, name: &str) -> Option<u32> {
         self.anchors
             .iter()
-            .find(|(n, _)| n == name)
+            .find(|(n, _)| n.get(&self.text) == name)
             .map(|(_, y)| *y)
     }
 }
@@ -280,7 +296,8 @@ enum Exit {
 
 struct Frame {
     node: usize,
-    next: usize,
+    /// Next child to visit, or [`NO_NODE`].
+    next: u32,
     inline: Inline,
     exit: Exit,
 }
@@ -372,8 +389,8 @@ impl<'a> Engine<'a> {
         let top = self.y;
         let bottom = top + asc + desc + LINE_GAP;
         let shift = self.center_shift();
-        let runs = core::mem::take(&mut self.line);
-        for mut r in runs {
+        let mut runs = core::mem::take(&mut self.line);
+        for mut r in runs.drain(..) {
             let st = TextStyle {
                 face: r.face,
                 size: r.size,
@@ -385,6 +402,7 @@ impl<'a> Engine<'a> {
             r.x += shift;
             self.push_run(r);
         }
+        self.line = runs;
         self.y = bottom;
         self.trailing_margin = 0;
         self.reset_line();
@@ -449,7 +467,8 @@ impl<'a> Engine<'a> {
         for key in ["id", "name"] {
             if let Some(v) = self.doc.attr(node, key) {
                 if !v.is_empty() {
-                    self.out.anchors.push((String::from(v), self.y));
+                    let span = push_text(&mut self.out.text, v);
+                    self.out.anchors.push((span, self.y));
                 }
             }
         }
@@ -457,9 +476,11 @@ impl<'a> Engine<'a> {
 
     fn add_text(&mut self, text: &str, look: Look, space: u32) {
         let w = text::width(text, &look.style());
+        let arena_end = self.out.text.len() as u32;
         let can_merge = self.line.last().is_some_and(|l| {
             !l.boxed
                 && l.x + l.w == self.pen
+                && l.text.start + l.text.len == arena_end
                 && l.face == look.face
                 && l.size == look.size
                 && l.color == look.color
@@ -468,16 +489,24 @@ impl<'a> Engine<'a> {
         });
         if let (true, Some(last)) = (can_merge, self.line.last_mut()) {
             if space > 0 {
-                last.text.push(' ');
+                self.out.text.push(' ');
+                last.text.len += 1;
             }
-            last.text.push_str(text);
+            self.out.text.push_str(text);
+            last.text.len += text.len() as u32;
             last.w += space + w;
         } else {
-            self.line.push(new_run(self.pen + space, w, text, look));
+            let run = self.make_run(self.pen + space, w, text, look);
+            self.line.push(run);
         }
         self.pen += space + w;
         self.has_words = true;
         self.pending_space = false;
+    }
+
+    fn make_run(&mut self, x: u32, w: u32, text: &str, look: Look) -> Run {
+        let span = push_text(&mut self.out.text, text);
+        new_run(x, w, span, look)
     }
 
     fn place_word(&mut self, word: &str, inline: &Inline) {
@@ -596,7 +625,7 @@ impl<'a> Engine<'a> {
             self.flush_line();
         }
         let x = self.pen + if self.has_words { space } else { 0 };
-        let mut run = new_run(x, w, &label, look);
+        let mut run = self.make_run(x, w, &label, look);
         run.boxed = true;
         run.pad = BOX_PAD;
         self.line.push(run);
@@ -617,7 +646,7 @@ impl<'a> Engine<'a> {
         let look = Inline::BODY.look();
         let w = text::width(&marker, &look.style());
         let x = self.left.saturating_sub(w + MARKER_GAP);
-        let mut run = new_run(x, w, &marker, look);
+        let mut run = self.make_run(x, w, &marker, look);
         run.color = COLOR_TEXT;
         self.line.push(run);
     }
@@ -661,7 +690,7 @@ impl<'a> Engine<'a> {
         self.record_anchor(node);
         Some(Frame {
             node,
-            next: 0,
+            next: self.doc.nodes[node].first_child,
             inline: inner,
             exit,
         })
@@ -782,7 +811,8 @@ impl<'a> Engine<'a> {
 
     fn link_for(&mut self, node: usize) -> Option<u32> {
         let href = self.doc.attr(node, "href")?;
-        self.out.links.push(String::from(href));
+        let span = push_text(&mut self.out.text, href);
+        self.out.links.push(span);
         Some((self.out.links.len() - 1) as u32)
     }
 
@@ -841,24 +871,25 @@ impl<'a> Engine<'a> {
         let doc = self.doc;
         let mut stack = alloc::vec![Frame {
             node: 0,
-            next: 0,
+            next: doc.nodes[0].first_child,
             inline: Inline::BODY,
             exit: Exit::Nothing
         }];
         while !self.done {
             let Some(frame) = stack.last_mut() else { break };
-            let Some(&child) = doc.nodes[frame.node].children.get(frame.next) else {
+            if frame.next == NO_NODE {
                 let exit = frame.exit;
                 stack.pop();
                 self.leave(exit);
                 continue;
-            };
-            frame.next += 1;
+            }
+            let child = frame.next as usize;
+            frame.next = doc.nodes[child].next;
             let inline = frame.inline;
-            match &doc.nodes[child].kind {
-                NodeKind::Text(t) => self.text(t, &inline),
+            match doc.nodes[child].kind {
+                NodeKind::Text(span) => self.text(doc.str(span), &inline),
                 NodeKind::Element { tag, .. } => {
-                    if let Some(f) = self.enter(child, *tag, inline) {
+                    if let Some(f) = self.enter(child, tag, inline) {
                         stack.push(f);
                     }
                 }
@@ -884,7 +915,7 @@ impl<'a> Engine<'a> {
         }
         .look();
         let w = text::width(TRUNCATED_NOTE, &look.style());
-        let mut run = new_run(PAGE_PAD_X, w, TRUNCATED_NOTE, look);
+        let mut run = self.make_run(PAGE_PAD_X, w, TRUNCATED_NOTE, look);
         run.y = self.y;
         run.top = self.y;
         run.bottom = self.y + text::line_height(&look.style()) + LINE_GAP;
@@ -893,13 +924,23 @@ impl<'a> Engine<'a> {
     }
 }
 
-fn new_run(x: u32, w: u32, text: &str, look: Look) -> Run {
+/// Append `s` to the layout's text arena and return its span.
+fn push_text(arena: &mut String, s: &str) -> Span {
+    let start = arena.len() as u32;
+    arena.push_str(s);
+    Span {
+        start,
+        len: s.len() as u32,
+    }
+}
+
+fn new_run(x: u32, w: u32, text: Span, look: Look) -> Run {
     Run {
         x,
         y: 0,
         w,
         pad: 0,
-        text: String::from(text),
+        text,
         face: look.face,
         size: look.size,
         color: look.color,
@@ -974,10 +1015,10 @@ mod tests {
                     if r.x > last_end {
                         line.push(' ');
                     }
-                    line.push_str(&r.text);
+                    line.push_str(l.run_text(r));
                 }
             } else {
-                out.push(r.text.clone());
+                out.push(String::from(l.run_text(r)));
                 last_top = Some(r.top);
             }
             last_end = r.x + r.w;
@@ -988,7 +1029,7 @@ mod tests {
     fn run_with<'a>(l: &'a Layout, needle: &str) -> &'a Run {
         l.runs
             .iter()
-            .find(|r| r.text.contains(needle))
+            .find(|r| l.run_text(r).contains(needle))
             .unwrap_or_else(|| panic!("no run containing {needle:?} in {:?}", l.runs))
     }
 
@@ -996,7 +1037,7 @@ mod tests {
     fn short_text_is_one_run_at_the_origin_padding() {
         let l = lay("<p>hello world</p>", W);
         assert_eq!(l.runs.len(), 1);
-        assert_eq!(l.runs[0].text, "hello world");
+        assert_eq!(l.run_text(&l.runs[0]), "hello world");
         assert!(l.runs[0].x > 0 && l.runs[0].x < 40);
         assert!(l.height > l.runs[0].y);
     }
@@ -1013,8 +1054,8 @@ mod tests {
         let l = lay(&format!("<p>{words}</p>"), 300);
         assert!(l.runs.len() > 3);
         for r in &l.runs {
-            assert!(r.x + r.w <= 300, "run {:?} overflows", r.text);
-            assert_eq!(r.w, text::width(&r.text, &style_of(r)));
+            assert!(r.x + r.w <= 300, "run {:?} overflows", l.run_text(r));
+            assert_eq!(r.w, text::width(l.run_text(r), &style_of(r)));
         }
         let joined = lines(&l).join(" ");
         assert_eq!(joined, words.trim());
@@ -1025,7 +1066,7 @@ mod tests {
         let l = lay(&format!("<p>{}</p>", "a".repeat(300)), 200);
         assert!(l.runs.len() >= 3);
         assert!(l.runs.iter().all(|r| r.x + r.w <= 200));
-        let all: String = l.runs.iter().map(|r| r.text.as_str()).collect();
+        let all: String = l.runs.iter().map(|r| l.run_text(r)).collect();
         assert_eq!(all, "a".repeat(300));
     }
 
@@ -1067,7 +1108,11 @@ mod tests {
     #[test]
     fn unordered_list_has_bullets_left_of_text() {
         let l = lay("<ul><li>one</li><li>two</li></ul>", W);
-        let bullets: Vec<_> = l.runs.iter().filter(|r| r.text == "\u{2022}").collect();
+        let bullets: Vec<_> = l
+            .runs
+            .iter()
+            .filter(|r| l.run_text(r) == "\u{2022}")
+            .collect();
         assert_eq!(bullets.len(), 2);
         let one = run_with(&l, "one");
         assert!(bullets[0].x + bullets[0].w <= one.x);
@@ -1080,8 +1125,8 @@ mod tests {
         let marks: Vec<_> = l
             .runs
             .iter()
-            .filter(|r| r.text.ends_with('.'))
-            .map(|r| r.text.as_str())
+            .filter(|r| l.run_text(r).ends_with('.'))
+            .map(|r| l.run_text(r))
             .collect();
         assert_eq!(marks, ["1.", "2.", "3."]);
     }
@@ -1095,8 +1140,8 @@ mod tests {
         let marks: Vec<_> = l
             .runs
             .iter()
-            .filter(|r| r.text.ends_with('.'))
-            .map(|r| r.text.as_str())
+            .filter(|r| l.run_text(r).ends_with('.'))
+            .map(|r| l.run_text(r))
             .collect();
         assert_eq!(marks, ["1.", "1.", "2.", "2."]);
         assert!(run_with(&l, "x").x > run_with(&l, "a").x);
@@ -1109,7 +1154,7 @@ mod tests {
         let link_runs: Vec<_> = l.runs.iter().filter(|r| r.link != NO_LINK).collect();
         assert!(!link_runs.is_empty());
         for r in &link_runs {
-            assert_eq!(l.links[r.link as usize], "/x");
+            assert_eq!(l.href(r.link), "/x");
             assert_eq!(r.color, COLOR_LINK);
             assert!(r.underline);
         }
@@ -1150,7 +1195,7 @@ mod tests {
         assert_eq!(lines(&l)[..2], ["  a", "    b"]);
         let wide = run_with(&l, "xxx");
         assert!(wide.x + wide.w > 200, "long line must overflow, not wrap");
-        assert_eq!(wide.text, long);
+        assert_eq!(l.run_text(wide), long);
         assert!(l.content_width > 200);
     }
 
@@ -1191,7 +1236,7 @@ mod tests {
         let img = run_with(&l, "A cat");
         assert!(img.boxed);
         let bare = lay("<img src=a.png>", W);
-        assert!(bare.runs[0].text.contains("image"));
+        assert!(bare.run_text(&bare.runs[0]).contains("image"));
     }
 
     #[test]
@@ -1218,7 +1263,7 @@ mod tests {
     #[test]
     fn characters_without_glyphs_become_question_marks() {
         let l = lay("<p>a\u{4e2d}b\u{1f600}c &#8212; \u{2022}</p>", W);
-        assert_eq!(l.runs[0].text, "a?b?c \u{2014} \u{2022}");
+        assert_eq!(l.run_text(&l.runs[0]), "a?b?c \u{2014} \u{2022}");
     }
 
     #[test]
@@ -1241,7 +1286,7 @@ mod tests {
     #[test]
     fn tiny_width_still_terminates() {
         let l = lay("<p>abcdef ghi</p>", 5);
-        let all: String = l.runs.iter().map(|r| r.text.as_str()).collect();
+        let all: String = l.runs.iter().map(|r| l.run_text(r)).collect();
         assert_eq!(all.replace(' ', ""), "abcdefghi");
     }
 
@@ -1307,7 +1352,7 @@ mod tests {
         let html = format!("{}deep{}", "<div>".repeat(10_000), "</div>".repeat(10_000));
         let l = lay(&html, W);
         assert_eq!(l.runs.len(), 1);
-        assert_eq!(l.runs[0].text, "deep");
+        assert_eq!(l.run_text(&l.runs[0]), "deep");
     }
 
     #[test]

@@ -1,10 +1,14 @@
 //! Document model: a bounded tree built from the token stream.
 //!
+//! Nodes live in one flat arena linked by child/sibling indices and all text
+//! lives in one string, so a page costs a handful of heap blocks instead of
+//! several per node (the kernel heap slows down with every live block).
+//!
 //! The builder repairs the usual authoring mistakes (unclosed `<p>`/`<li>`,
 //! stray end tags, mis-nesting) without ever dropping text, and caps both the
 //! nesting depth and the node count so hostile pages cannot exhaust memory.
 
-use super::html::{tokenize, Attr, Token};
+use super::html::{attrs, decode_entities_into, Lexer, Tok};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -66,27 +70,90 @@ pub enum Tag {
     Other,
 }
 
+/// Index meaning "no node".
+pub const NO_NODE: u32 = u32::MAX;
+
+/// A byte range of a shared text arena.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    /// First byte.
+    pub start: u32,
+    /// Length in bytes; [`Span::NONE`] marks an absent value.
+    pub len: u32,
+}
+
+impl Span {
+    /// No value.
+    pub const NONE: Span = Span {
+        start: 0,
+        len: u32::MAX,
+    };
+
+    /// The text of the span inside `arena`; empty when absent or out of range.
+    #[must_use]
+    pub fn get(self, arena: &str) -> &str {
+        if self.len == u32::MAX {
+            return "";
+        }
+        arena
+            .get(self.start as usize..(self.start + self.len) as usize)
+            .unwrap_or("")
+    }
+
+    /// True when a value is present (possibly empty).
+    #[must_use]
+    pub fn is_some(self) -> bool {
+        self.len != u32::MAX
+    }
+}
+
+/// The attributes the layout engine reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Attrs {
+    /// `href`.
+    pub href: Span,
+    /// `id`.
+    pub id: Span,
+    /// `name`.
+    pub name: Span,
+    /// `alt`.
+    pub alt: Span,
+}
+
+impl Attrs {
+    const NONE: Attrs = Attrs {
+        href: Span::NONE,
+        id: Span::NONE,
+        name: Span::NONE,
+        alt: Span::NONE,
+    };
+}
+
 /// Node payload.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
     /// An element with its attributes.
     Element {
         /// Element kind.
         tag: Tag,
-        /// Source attributes.
-        attrs: Vec<Attr>,
+        /// The attributes layout cares about.
+        attrs: Attrs,
     },
-    /// Character data.
-    Text(String),
+    /// Character data (span of [`Document::text`]).
+    Text(Span),
 }
 
-/// One tree node; children are indices into [`Document::nodes`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One tree node, linked to its children and next sibling by index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Node {
     /// What the node is.
     pub kind: NodeKind,
-    /// Child node indices in document order.
-    pub children: Vec<usize>,
+    /// First child, or [`NO_NODE`].
+    pub first_child: u32,
+    /// Last child, or [`NO_NODE`].
+    pub last_child: u32,
+    /// Next sibling, or [`NO_NODE`].
+    pub next: u32,
 }
 
 /// A parsed page.
@@ -94,23 +161,64 @@ pub struct Node {
 pub struct Document {
     /// Node arena; index 0 is the root.
     pub nodes: Vec<Node>,
+    /// Decoded text and attribute values referenced by spans.
+    pub text: String,
     /// Contents of `<title>`, whitespace-collapsed.
     pub title: String,
     /// The node cap was hit and the rest of the page ignored.
     pub truncated: bool,
 }
 
+/// Iterator over the children of a node.
+pub struct Children<'a> {
+    doc: &'a Document,
+    next: u32,
+}
+
+impl Iterator for Children<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<usize> {
+        if self.next == NO_NODE {
+            return None;
+        }
+        let idx = self.next as usize;
+        self.next = self.doc.nodes.get(idx)?.next;
+        Some(idx)
+    }
+}
+
 impl Document {
-    /// Value of attribute `name` on element `idx`.
+    /// Children of node `idx` in document order.
+    #[must_use]
+    pub fn children(&self, idx: usize) -> Children<'_> {
+        let first = self.nodes.get(idx).map_or(NO_NODE, |n| n.first_child);
+        Children {
+            doc: self,
+            next: first,
+        }
+    }
+
+    /// Text of a span.
+    #[must_use]
+    pub fn str(&self, span: Span) -> &str {
+        span.get(&self.text)
+    }
+
+    /// Value of attribute `name` (`href`, `id`, `name` or `alt`) on element `idx`.
     #[must_use]
     pub fn attr(&self, idx: usize, name: &str) -> Option<&str> {
-        match &self.nodes.get(idx)?.kind {
-            NodeKind::Element { attrs, .. } => attrs
-                .iter()
-                .find(|a| a.name == name)
-                .map(|a| a.value.as_str()),
-            NodeKind::Text(_) => None,
-        }
+        let NodeKind::Element { attrs, .. } = self.nodes.get(idx)?.kind else {
+            return None;
+        };
+        let span = match name {
+            "href" => attrs.href,
+            "id" => attrs.id,
+            "name" => attrs.name,
+            "alt" => attrs.alt,
+            _ => return None,
+        };
+        span.is_some().then(|| self.str(span))
     }
 }
 
@@ -183,60 +291,122 @@ fn closes_paragraph(tag: Tag) -> bool {
 }
 
 /// An element currently open while building.
-struct Open {
-    name: String,
+struct Open<'a> {
+    name: &'a str,
     tag: Tag,
-    /// Node created for this element; `None` once the depth cap flattened it.
-    node: Option<usize>,
+    /// Node created for this element; `NO_NODE` once the depth cap flattened it.
+    node: u32,
     /// Node that receives this element's children.
-    child_parent: usize,
+    child_parent: u32,
 }
 
-struct Builder {
+struct Builder<'a> {
     doc: Document,
-    stack: Vec<Open>,
+    stack: Vec<Open<'a>>,
     real_depth: usize,
-    title_node: Option<usize>,
+    title_node: u32,
 }
 
-impl Builder {
-    fn new() -> Self {
+/// Lowercase `name` into `buf` when it is short enough to be a known tag.
+fn lowered<'b>(name: &str, buf: &'b mut [u8; MAX_KNOWN_NAME]) -> &'b str {
+    if name.len() > MAX_KNOWN_NAME || !name.is_ascii() {
+        return "";
+    }
+    for (dst, src) in buf.iter_mut().zip(name.bytes()) {
+        *dst = src.to_ascii_lowercase();
+    }
+    core::str::from_utf8(&buf[..name.len()]).unwrap_or("")
+}
+
+/// The attributes the document keeps.
+#[derive(Clone, Copy)]
+enum AttrKey {
+    Href,
+    Id,
+    Name,
+    Alt,
+}
+
+impl AttrKey {
+    fn from_name(name: &str) -> Option<Self> {
+        let is = |n: &str| name.eq_ignore_ascii_case(n);
+        if is("href") {
+            Some(Self::Href)
+        } else if is("id") {
+            Some(Self::Id)
+        } else if is("name") {
+            Some(Self::Name)
+        } else if is("alt") {
+            Some(Self::Alt)
+        } else {
+            None
+        }
+    }
+
+    fn slot(self, attrs: &mut Attrs) -> &mut Span {
+        match self {
+            Self::Href => &mut attrs.href,
+            Self::Id => &mut attrs.id,
+            Self::Name => &mut attrs.name,
+            Self::Alt => &mut attrs.alt,
+        }
+    }
+}
+
+/// Longest tag name the classifier knows.
+const MAX_KNOWN_NAME: usize = 12;
+
+impl<'a> Builder<'a> {
+    fn new(capacity: usize) -> Self {
         let root = Node {
             kind: NodeKind::Element {
                 tag: Tag::Root,
-                attrs: Vec::new(),
+                attrs: Attrs::NONE,
             },
-            children: Vec::new(),
+            first_child: NO_NODE,
+            last_child: NO_NODE,
+            next: NO_NODE,
         };
+        let mut nodes = Vec::with_capacity(capacity);
+        nodes.push(root);
         Self {
             doc: Document {
-                nodes: alloc::vec![root],
+                nodes,
+                text: String::with_capacity(capacity * 4),
                 title: String::new(),
                 truncated: false,
             },
             stack: Vec::new(),
             real_depth: 0,
-            title_node: None,
+            title_node: NO_NODE,
         }
     }
 
-    fn parent(&self) -> usize {
+    fn parent(&self) -> u32 {
         self.stack.last().map_or(0, |o| o.child_parent)
     }
 
-    /// Add a node under the current parent; false once the node cap is hit.
-    fn add_node(&mut self, kind: NodeKind) -> Option<usize> {
+    /// Add a node under the current parent; `None` once the node cap is hit.
+    fn add_node(&mut self, kind: NodeKind) -> Option<u32> {
         if self.doc.nodes.len() >= MAX_NODES {
             self.doc.truncated = true;
             return None;
         }
-        let idx = self.doc.nodes.len();
-        let parent = self.parent();
+        let idx = self.doc.nodes.len() as u32;
+        let parent = self.parent() as usize;
         self.doc.nodes.push(Node {
             kind,
-            children: Vec::new(),
+            first_child: NO_NODE,
+            last_child: NO_NODE,
+            next: NO_NODE,
         });
-        self.doc.nodes[parent].children.push(idx);
+        let last = self.doc.nodes[parent].last_child;
+        if last == NO_NODE {
+            self.doc.nodes[parent].first_child = idx;
+        } else {
+            self.doc.nodes[last as usize].next = idx;
+        }
+        self.doc.nodes[parent].last_child = idx;
         Some(idx)
     }
 
@@ -244,7 +414,7 @@ impl Builder {
     fn close_to(&mut self, at: usize) {
         while self.stack.len() > at {
             if let Some(open) = self.stack.pop() {
-                if open.node.is_some() {
+                if open.node != NO_NODE {
                     self.real_depth -= 1;
                 }
             }
@@ -282,14 +452,41 @@ impl Builder {
         }
     }
 
-    fn start(&mut self, name: String, attrs: Vec<Attr>, self_closing: bool) {
-        let tag = classify(&name);
-        if name == "body" {
+    fn push_value(&mut self, raw: &str) -> Span {
+        let start = self.doc.text.len();
+        decode_entities_into(raw, &mut self.doc.text);
+        Span {
+            start: start as u32,
+            len: (self.doc.text.len() - start) as u32,
+        }
+    }
+
+    fn read_attrs(&mut self, raw: &str) -> Attrs {
+        let mut out = Attrs::NONE;
+        for (name, value) in attrs(raw) {
+            let Some(key) = AttrKey::from_name(name) else {
+                continue;
+            };
+            if key.slot(&mut out).is_some() {
+                continue;
+            }
+            let span = self.push_value(value);
+            *key.slot(&mut out) = span;
+        }
+        out
+    }
+
+    fn start(&mut self, name: &'a str, raw_attrs: &str, self_closing: bool) {
+        let mut buf = [0u8; MAX_KNOWN_NAME];
+        let lower = lowered(name, &mut buf);
+        let tag = classify(lower);
+        if lower == "body" {
             self.end("head");
         }
         self.apply_implied_end(tag);
-        let is_void = VOID_ELEMENTS.contains(&name.as_str());
+        let is_void = VOID_ELEMENTS.contains(&lower);
         let node = if self.real_depth < MAX_DEPTH || is_void {
+            let attrs = self.read_attrs(raw_attrs);
             self.add_node(NodeKind::Element { tag, attrs })
         } else {
             None
@@ -300,71 +497,80 @@ impl Builder {
         let child_parent = node.unwrap_or_else(|| self.parent());
         if node.is_some() {
             self.real_depth += 1;
-            if tag == Tag::Hidden && name == "title" && self.title_node.is_none() {
-                self.title_node = node;
+            if tag == Tag::Hidden && lower == "title" && self.title_node == NO_NODE {
+                self.title_node = child_parent;
             }
         }
         self.stack.push(Open {
             name,
             tag,
-            node,
+            node: node.unwrap_or(NO_NODE),
             child_parent,
         });
     }
 
     fn end(&mut self, name: &str) {
-        if let Some(at) = self.stack.iter().rposition(|o| o.name == name) {
+        if let Some(at) = self
+            .stack
+            .iter()
+            .rposition(|o| o.name.eq_ignore_ascii_case(name))
+        {
             self.close_to(at);
         }
     }
 
-    fn text(&mut self, text: String) {
-        if text.is_empty() {
+    fn text(&mut self, raw: &str) {
+        if raw.is_empty() {
             return;
         }
-        self.add_node(NodeKind::Text(text));
+        let span = self.push_value(raw);
+        if span.len > 0 && self.add_node(NodeKind::Text(span)).is_none() {
+            let new_len = span.start as usize;
+            self.doc.text.truncate(new_len);
+        }
     }
 
     fn finish(mut self) -> Document {
-        if let Some(t) = self.title_node {
-            let mut raw = String::new();
-            collect_text(&self.doc, t, &mut raw);
-            self.doc.title = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+        if self.title_node != NO_NODE {
+            let mut words = String::new();
+            let mut todo = alloc::vec![self.title_node as usize];
+            while let Some(i) = todo.pop() {
+                if let NodeKind::Text(span) = self.doc.nodes[i].kind {
+                    words.push_str(self.doc.str(span));
+                }
+                let kids: Vec<usize> = self.doc.children(i).collect();
+                todo.extend(kids.into_iter().rev());
+            }
+            self.doc.title = words.split_whitespace().collect::<Vec<_>>().join(" ");
         }
         self.doc
-    }
-}
-
-fn collect_text(doc: &Document, idx: usize, out: &mut String) {
-    let mut todo = alloc::vec![idx];
-    while let Some(i) = todo.pop() {
-        if let NodeKind::Text(t) = &doc.nodes[i].kind {
-            out.push_str(t);
-        }
-        todo.extend(doc.nodes[i].children.iter().rev());
     }
 }
 
 /// Parse `html` into a document.
 #[must_use]
 pub fn parse(html: &str) -> Document {
-    let mut builder = Builder::new();
-    for token in tokenize(html) {
+    let capacity = (html.len() / NODE_BYTES_ESTIMATE + 16).min(MAX_NODES);
+    let mut builder = Builder::new(capacity);
+    for token in Lexer::new(html) {
         if builder.doc.truncated {
             break;
         }
         match token {
-            Token::Start {
+            Tok::Start {
                 name,
                 attrs,
                 self_closing,
             } => builder.start(name, attrs, self_closing),
-            Token::End(name) => builder.end(&name),
-            Token::Text(text) => builder.text(text),
+            Tok::End(name) => builder.end(name),
+            Tok::Text(text) => builder.text(text),
         }
     }
     builder.finish()
 }
+
+/// Rough source bytes per node, to size the arena up front.
+const NODE_BYTES_ESTIMATE: usize = 24;
 
 #[cfg(all(test, feature = "std"))]
 mod tests {
@@ -372,18 +578,22 @@ mod tests {
     use alloc::format;
 
     fn tag_of(doc: &Document, idx: usize) -> Option<Tag> {
-        match &doc.nodes[idx].kind {
-            NodeKind::Element { tag, .. } => Some(*tag),
+        match doc.nodes[idx].kind {
+            NodeKind::Element { tag, .. } => Some(tag),
             NodeKind::Text(_) => None,
         }
     }
 
+    fn kids(doc: &Document, idx: usize) -> Vec<usize> {
+        doc.children(idx).collect()
+    }
+
     fn text_of(doc: &Document, idx: usize) -> String {
         let mut out = String::new();
-        if let NodeKind::Text(t) = &doc.nodes[idx].kind {
-            out.push_str(t);
+        if let NodeKind::Text(t) = doc.nodes[idx].kind {
+            out.push_str(doc.str(t));
         }
-        for &c in &doc.nodes[idx].children {
+        for c in doc.children(idx) {
             out.push_str(&text_of(doc, c));
         }
         out
@@ -409,7 +619,7 @@ mod tests {
     #[test]
     fn unclosed_paragraphs_become_siblings() {
         let doc = parse("<p>one<p>two<p>three");
-        let kids = &doc.nodes[0].children;
+        let kids = &kids(&doc, 0);
         assert_eq!(kids.len(), 3);
         assert!(kids.iter().all(|&k| tag_of(&doc, k) == Some(Tag::P)));
     }
@@ -417,15 +627,15 @@ mod tests {
     #[test]
     fn unclosed_list_items_become_siblings() {
         let doc = parse("<ul><li>a<li>b<li>c</ul>");
-        let ul = doc.nodes[0].children[0];
-        assert_eq!(doc.nodes[ul].children.len(), 3);
+        let ul = kids(&doc, 0)[0];
+        assert_eq!(kids(&doc, ul).len(), 3);
     }
 
     #[test]
     fn nested_lists_keep_inner_items_inside_the_outer_item() {
         let doc = parse("<ul><li>a<ul><li>b</li></ul></li><li>c</li></ul>");
-        let ul = doc.nodes[0].children[0];
-        assert_eq!(doc.nodes[ul].children.len(), 2);
+        let ul = kids(&doc, 0)[0];
+        assert_eq!(kids(&doc, ul).len(), 2);
     }
 
     #[test]
@@ -444,15 +654,15 @@ mod tests {
     fn void_elements_have_no_children() {
         let doc = parse("a<br>b<hr>c<img src=x>d");
         assert_eq!(all_text(&doc), "abcd");
-        let br = doc.nodes[0].children[1];
+        let br = kids(&doc, 0)[1];
         assert_eq!(tag_of(&doc, br), Some(Tag::Br));
-        assert!(doc.nodes[br].children.is_empty());
+        assert!(kids(&doc, br).is_empty());
     }
 
     #[test]
     fn script_and_style_elements_are_hidden() {
         let doc = parse("<script>x</script><style>y</style>z");
-        let first = doc.nodes[0].children[0];
+        let first = kids(&doc, 0)[0];
         assert_eq!(tag_of(&doc, first), Some(Tag::Hidden));
         assert_eq!(all_text(&doc), "z");
     }
@@ -460,16 +670,16 @@ mod tests {
     #[test]
     fn table_cells_close_each_other() {
         let doc = parse("<table><tr><td>a<td>b<tr><td>c</table>");
-        let table = doc.nodes[0].children[0];
-        assert_eq!(doc.nodes[table].children.len(), 2);
-        let row0 = doc.nodes[table].children[0];
-        assert_eq!(doc.nodes[row0].children.len(), 2);
+        let table = kids(&doc, 0)[0];
+        assert_eq!(kids(&doc, table).len(), 2);
+        let row0 = kids(&doc, table)[0];
+        assert_eq!(kids(&doc, row0).len(), 2);
     }
 
     #[test]
     fn attributes_are_reachable() {
         let doc = parse("<a href=\"/x\" id=top>t</a>");
-        let a = doc.nodes[0].children[0];
+        let a = kids(&doc, 0)[0];
         assert_eq!(doc.attr(a, "href"), Some("/x"));
         assert_eq!(doc.attr(a, "id"), Some("top"));
         assert_eq!(doc.attr(a, "name"), None);
@@ -499,20 +709,14 @@ mod tests {
     fn body_start_closes_an_unclosed_head() {
         let doc = parse("<head><title>t</title><body>shown");
         assert_eq!(all_text(&doc), "tshown");
-        let body = doc.nodes[0].children[1];
+        let body = kids(&doc, 0)[1];
         assert_eq!(tag_of(&doc, body), Some(Tag::Div));
     }
 
     #[test]
     fn heading_levels_are_kept() {
         let doc = parse("<h1>a</h1><h4>b</h4>");
-        assert_eq!(
-            tag_of(&doc, doc.nodes[0].children[0]),
-            Some(Tag::Heading(1))
-        );
-        assert_eq!(
-            tag_of(&doc, doc.nodes[0].children[1]),
-            Some(Tag::Heading(4))
-        );
+        assert_eq!(tag_of(&doc, kids(&doc, 0)[0]), Some(Tag::Heading(1)));
+        assert_eq!(tag_of(&doc, kids(&doc, 0)[1]), Some(Tag::Heading(4)));
     }
 }

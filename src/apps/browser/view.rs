@@ -1,7 +1,7 @@
 //! Drawing of the browser window with the shared controls.
 
 use super::layout::{Run, NO_LINK};
-use super::state::Browser;
+use super::state::{Browser, Page};
 use super::url;
 use crate::display::icons::Glyph;
 use crate::display::text::{self, Face, TextStyle};
@@ -123,9 +123,9 @@ fn run_style(r: &Run) -> TextStyle {
     }
 }
 
-fn draw_run(ui: &Ui, r: &Run) {
+fn draw_run(ui: &Ui, p: &Page, r: &Run) {
     let st = run_style(r);
-    ui.text((r.x + r.pad) as i32, r.y as i32, &r.text, &st);
+    ui.text((r.x + r.pad) as i32, r.y as i32, p.layout.run_text(r), &st);
     if r.underline {
         let y = r.y as i32 + text::ascent(&st) as i32 + UNDERLINE_OFFSET;
         ui.fill(Rect::new(r.x as i32, y, r.w, 1), r.color);
@@ -154,7 +154,7 @@ fn page(ui: &mut Ui, b: &Browser, view: Rect) {
     let first = p.layout.runs.partition_point(|r| r.bottom <= top);
     let mut regions = 0;
     for r in p.layout.runs[first..].iter().take_while(|r| r.top < bottom) {
-        draw_run(ui, r);
+        draw_run(ui, p, r);
         if r.link != NO_LINK && regions < MAX_LINK_REGIONS {
             let area = Rect::new(r.x as i32, r.top as i32, r.w, r.bottom - r.top);
             ui.register(KEY_LINK_BASE + r.link, area, HitKind::Custom, false);
@@ -185,7 +185,7 @@ fn hovered_url(b: &Browser, client: (u32, u32), view: Rect) -> Option<String> {
     }
     let px = lx as u32;
     let py = (ly - view.y + b.scroll) as u32;
-    let href = p.layout.links.get(p.layout.link_at(px, py)? as usize)?;
+    let href = p.layout.href(p.layout.link_at(px, py)?);
     Some(url::resolve(&b.url, href))
 }
 
