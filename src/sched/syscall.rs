@@ -164,6 +164,11 @@ pub const SYS_WIN_MAP: u64 = 115;
 /// Maximum syscall number
 const MAX_SYSCALL: u64 = 115;
 
+/// getrandom(2), at its Linux AArch64 number. It lies above [`MAX_SYSCALL`],
+/// so it is routed before the range check; without this an EL0 program (or a
+/// libc) could never reach the CSPRNG.
+const GETRANDOM_NR: u64 = 278;
+
 // Global pointer to current trap frame during syscall handling (for sigreturn)
 static mut CURRENT_TRAP_FRAME: *mut TrapFrame = core::ptr::null_mut();
 
@@ -186,6 +191,9 @@ pub fn get_current_trap_frame() -> *mut TrapFrame {
 ///
 /// Returns the value to put in x0 of the calling process.
 pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
+    if syscall_num == GETRANDOM_NR {
+        return sys_getrandom(args[0], args[1] as usize, args[2] as u32);
+    }
     if syscall_num > MAX_SYSCALL {
         println!(
             "[syscall] Invalid syscall #{} from PID {}",
@@ -762,7 +770,7 @@ mod linux_compat {
     const LINUX_MUNMAP: u64 = 215;
     const LINUX_MPROTECT: u64 = 226;
     const LINUX_BRK: u64 = 214;
-    const LINUX_GETRANDOM: u64 = 278;
+    const LINUX_GETRANDOM: u64 = super::GETRANDOM_NR;
     const LINUX_SOCKET: u64 = 198;
     const LINUX_BIND: u64 = 200;
     const LINUX_LISTEN: u64 = 201;
@@ -2092,5 +2100,23 @@ mod getrandom_tests {
     #[test]
     fn getrandom_of_zero_bytes_succeeds() {
         assert_eq!(sys_getrandom(KERNEL_ADDRESS, 0, 0), 0);
+    }
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    const EFAULT: u64 = u64::MAX - 13;
+
+    #[test]
+    fn getrandom_is_reachable_through_dispatch_despite_the_range_check() {
+        let args = [0xFFFF_0000_0010_0000, 16, 0, 0, 0, 0];
+        assert_eq!(dispatch(GETRANDOM_NR, &args), EFAULT);
+    }
+
+    #[test]
+    fn unknown_high_syscalls_are_still_rejected() {
+        assert_eq!(dispatch(GETRANDOM_NR + 1, &[0; 6]), u64::MAX);
     }
 }
