@@ -14,6 +14,8 @@ use alloc::vec::Vec;
 pub const ROW_ICON: u32 = 16;
 /// Side of the large icon in a grid tile.
 pub const TILE_ICON: u32 = 48;
+/// Room a sort arrow takes beside a header label.
+const ARROW_W: u32 = 20;
 /// Horizontal text inset inside a row or header cell.
 const CELL_PAD: i32 = 10;
 /// Gap between a row icon and its name.
@@ -137,23 +139,29 @@ impl Ui<'_> {
             }
             let s = style(Face::UiBold, CELL_PX, th.label_text_dim);
             let top = cell.y + (cell.h.saturating_sub(text::line_height(&s)) / 2) as i32;
-            let arrow = if col.sorted.is_some() { 20 } else { 0 };
-            let label_w = col.w.saturating_sub(2 * CELL_PAD as u32 + arrow);
-            self.text_fitted(cell.x + CELL_PAD, top, label_w, col.label, &s);
+            let arrow = if col.sorted.is_some() { ARROW_W } else { 0 };
+            let inner = col.w.saturating_sub(2 * CELL_PAD as u32 + arrow);
+            let label_w = text::width(col.label, &s).min(inner);
+            let x = if col.right {
+                cell.right() - CELL_PAD - (label_w + arrow) as i32
+            } else {
+                cell.x + CELL_PAD
+            };
+            self.text_fitted(x, top, inner, col.label, &s);
             if let Some(descending) = col.sorted {
-                self.sort_arrow(cell, descending, text::width(col.label, &s).min(label_w));
+                self.sort_arrow(cell, descending, x, label_w);
             }
             self.register(col.key, cell, HitKind::Button, false);
         }
     }
 
-    fn sort_arrow(&self, cell: Rect, descending: bool, label_w: u32) {
+    fn sort_arrow(&self, cell: Rect, descending: bool, label_x: i32, label_w: u32) {
         let glyph = if descending {
             icons::Glyph::ChevronDown
         } else {
             icons::Glyph::ChevronUp
         };
-        let at = Rect::new(cell.x + CELL_PAD + label_w as i32 + 2, cell.y, 16, cell.h);
+        let at = Rect::new(label_x + label_w as i32 + 2, cell.y, 16, cell.h);
         self.glyph(glyph, 16, at, theme::current().label_text_dim);
     }
 
@@ -168,7 +176,15 @@ impl Ui<'_> {
         selected: bool,
     ) {
         let th = theme::current();
-        self.item_wash(r, selected);
+        self.item_wash(
+            Rect::new(
+                r.x + 4,
+                r.y + 1,
+                r.w.saturating_sub(8),
+                r.h.saturating_sub(2),
+            ),
+            selected,
+        );
         let icon_box = Rect::new(r.x + CELL_PAD, r.y, ROW_ICON, r.h);
         self.icon(icon, ROW_ICON, icon_box);
         let name_s = style(Face::Ui, NAME_PX, th.label_text);

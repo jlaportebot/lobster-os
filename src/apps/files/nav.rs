@@ -100,7 +100,7 @@ pub fn navigate(st: &mut State, path: &str) {
         super::ops::alert(
             st,
             "Cannot open folder",
-            &alloc::format!("{target} is not a folder."),
+            &alloc::format!("{target} is not a folder or does not exist."),
         );
         return;
     }
@@ -111,6 +111,7 @@ pub fn navigate(st: &mut State, path: &str) {
 
 fn enter(st: &mut State) {
     st.selection.clear();
+    st.clicks.reset();
     st.scroll = 0;
     load(st);
     crate::wm::dirty::mark();
