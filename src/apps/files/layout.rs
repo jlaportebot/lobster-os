@@ -69,10 +69,17 @@ pub struct Layout {
     pub status: Rect,
 }
 
-/// Lay out a client area of `w` x `h` px.
-#[must_use]
-pub fn compute(w: u32, h: u32, view: ViewMode) -> Layout {
-    let toolbar = Rect::new(0, 0, w, TOOLBAR_H.min(h));
+/// The toolbar controls for a client area `w` px wide.
+struct ToolbarRects {
+    back: Rect,
+    forward: Rect,
+    up: Rect,
+    crumbs: Rect,
+    new_folder: Rect,
+    view_toggle: Rect,
+}
+
+fn toolbar_rects(w: u32) -> ToolbarRects {
     let btn_y = ((TOOLBAR_H - NAV_BTN) / 2) as i32;
     let nav = |i: u32| {
         Rect::new(
@@ -86,6 +93,20 @@ pub fn compute(w: u32, h: u32, view: ViewMode) -> Layout {
     let new_x = toggle_x - (GAP + NEW_FOLDER_W) as i32;
     let crumbs_x = (GAP + 3 * (NAV_BTN + NAV_GAP)) as i32;
     let crumbs_w = (new_x - GAP as i32 - crumbs_x).max(0) as u32;
+    ToolbarRects {
+        back: nav(0),
+        forward: nav(1),
+        up: nav(2),
+        crumbs: Rect::new(crumbs_x, btn_y, crumbs_w, NAV_BTN),
+        new_folder: Rect::new(new_x, btn_y, NEW_FOLDER_W, NAV_BTN),
+        view_toggle: Rect::new(toggle_x, btn_y, TOGGLE_W, NAV_BTN),
+    }
+}
+
+/// Lay out a client area of `w` x `h` px.
+#[must_use]
+pub fn compute(w: u32, h: u32, view: ViewMode) -> Layout {
+    let bar = toolbar_rects(w);
     let sidebar_w = SIDEBAR_W.min(w / 3);
     let main_w = w - sidebar_w;
     let status_y = h.saturating_sub(STATUS_H);
@@ -94,13 +115,13 @@ pub fn compute(w: u32, h: u32, view: ViewMode) -> Layout {
     let body_h = status_y.saturating_sub(body_y);
     let bar_w = SCROLL_W.min(main_w);
     Layout {
-        toolbar,
-        back: nav(0),
-        forward: nav(1),
-        up: nav(2),
-        crumbs: Rect::new(crumbs_x, btn_y, crumbs_w, NAV_BTN),
-        new_folder: Rect::new(new_x, btn_y, NEW_FOLDER_W, NAV_BTN),
-        view_toggle: Rect::new(toggle_x, btn_y, TOGGLE_W, NAV_BTN),
+        toolbar: Rect::new(0, 0, w, TOOLBAR_H.min(h)),
+        back: bar.back,
+        forward: bar.forward,
+        up: bar.up,
+        crumbs: bar.crumbs,
+        new_folder: bar.new_folder,
+        view_toggle: bar.view_toggle,
         sidebar: Rect::new(
             0,
             TOOLBAR_H as i32,
