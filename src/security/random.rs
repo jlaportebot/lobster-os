@@ -201,7 +201,7 @@ fn gather_seed() -> SeedBuf {
     seed
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), feature = "qemu_raspi5b"))]
 fn push_host_entropy(seed: &mut SeedBuf) -> u32 {
     let mut any = false;
     for _ in 0..HOST_ENTROPY_WORDS {
@@ -244,21 +244,41 @@ fn read_counter() -> u64 {
 #[cfg(not(feature = "std"))]
 fn push_platform_words(seed: &mut SeedBuf) -> u32 {
     let mut used = SRC_COUNTERS;
-    let midr: u64;
-    // SAFETY: MIDR_EL1 is a read-only identification register readable at EL1.
-    unsafe { core::arch::asm!("mrs {}, midr_el1", out(reg) midr) };
-    seed.push(&midr.to_le_bytes());
-    seed.push(&crate::arch::cpu::Cpu::mpidr().to_le_bytes());
-    used |= SRC_CPUID;
-    if let Some((epoch, offset)) = crate::drivers::lobster_sys::wall_clock() {
-        seed.push(&epoch.to_le_bytes());
-        seed.push(&offset.to_le_bytes());
-        used |= SRC_RTC;
+    let (midr, mpidr): (u64, u64);
+    // SAFETY: MIDR_EL1 and MPIDR_EL1 are read-only identification registers
+    // readable at EL1.
+    unsafe {
+        core::arch::asm!("mrs {}, midr_el1", out(reg) midr);
+        core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr);
     }
+    seed.push(&midr.to_le_bytes());
+    seed.push(&mpidr.to_le_bytes());
+    used |= SRC_CPUID | push_rtc(seed);
     seed.push(&read_counter().to_le_bytes());
     seed.push(&crate::arch::timer::Timer::system_time_us().to_le_bytes());
     seed.push(&crate::arch::timer::Timer::uptime_ms().to_le_bytes());
     used
+}
+
+#[cfg(feature = "qemu_raspi5b")]
+fn push_rtc(seed: &mut SeedBuf) -> u32 {
+    let Some((epoch, offset)) = crate::drivers::lobster_sys::wall_clock() else {
+        return 0;
+    };
+    seed.push(&epoch.to_le_bytes());
+    seed.push(&offset.to_le_bytes());
+    SRC_RTC
+}
+
+#[cfg(all(not(feature = "std"), not(feature = "qemu_raspi5b")))]
+fn push_rtc(_seed: &mut SeedBuf) -> u32 {
+    0
+}
+
+/// Builds without the emulator's platform controller have no host source.
+#[cfg(all(not(feature = "std"), not(feature = "qemu_raspi5b")))]
+fn push_host_entropy(_seed: &mut SeedBuf) -> u32 {
+    0
 }
 
 /// Host test builds have no platform registers: the seed comes from the
