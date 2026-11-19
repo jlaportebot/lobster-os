@@ -336,6 +336,13 @@ fn handle_key_press(scancode: u8, _extended: bool) {
         }
     }
 
+    // Browser: address editing, scrolling and shortcuts when its window is focused
+    if crate::wm::window::get_title(crate::wm::window::focused_id()) == crate::apps::browser::TITLE
+        && crate::apps::browser::handle_key(scancode, ch)
+    {
+        return;
+    }
+
     // Settings: navigation, focus and text entry when its window is focused
     if crate::wm::window::get_title(crate::wm::window::focused_id()) == crate::apps::settings::TITLE
         && crate::apps::settings::handle_key(scancode, ch)

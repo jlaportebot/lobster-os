@@ -21,6 +21,7 @@ pub mod dns;
 pub mod dns_cache;
 #[cfg(target_arch = "aarch64")]
 pub mod eth;
+pub mod fetch;
 #[cfg(target_arch = "aarch64")]
 pub mod genet;
 #[cfg(target_arch = "aarch64")]
@@ -260,6 +261,33 @@ pub fn fetch_url(url: &str) -> Option<(u16, alloc::vec::Vec<u8>)> {
     {
         let _ = url;
         None
+    }
+}
+
+/// Unified status-aware fetch: any HTTP status comes back as a [`fetch::Response`];
+/// only transport failures are errors. Picks the backend like [`fetch_url`].
+pub fn fetch(url: &str) -> Result<fetch::Response, fetch::FetchError> {
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        if crate::drivers::lobster_net::is_available() {
+            return crate::drivers::lobster_net::http_fetch_response(url);
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        let resp = crate::net::http::http_get(url).ok_or(fetch::FetchError::Failed)?;
+        Ok(fetch::Response {
+            status: resp.status_code,
+            body: alloc::vec::Vec::from(&resp.body[..resp.body_len]),
+            truncated: false,
+        })
+    }
+
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let _ = url;
+        Err(fetch::FetchError::NoNetwork)
     }
 }
 
