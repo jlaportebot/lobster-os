@@ -504,9 +504,10 @@ pub fn init() {
     crate::fs::vfs::create_dir("/dev/pts").ok();
     println!("[devfs] Created /dev/pts directory");
 
-    // Seed PRNG with timer value
+    // Seed PRNG with the architectural counter (the BCM system timer is not
+    // implemented on every platform, reading it faults on the host).
     unsafe {
-        PRNG_STATE ^= crate::arch::ArchTimer::system_time_us();
+        PRNG_STATE ^= crate::arch::ArchTimer::uptime_ms();
     }
 
     println!(

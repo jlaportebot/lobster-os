@@ -126,6 +126,14 @@ pub fn build_root_listing() {
     }
 }
 
+/// The current /proc root entries (rebuild with [`build_root_listing`] first).
+pub fn root_entries() -> &'static [ProcDirEntry] {
+    // SAFETY: the table is only written by build_root_listing from task
+    // context, never concurrently with a reader, and PROC_ROOT_COUNT never
+    // exceeds the array length.
+    unsafe { &(&*core::ptr::addr_of!(PROC_ROOT_ENTRIES))[..PROC_ROOT_COUNT] }
+}
+
 /// Convert u64 to ASCII string, returns &str into the provided buffer
 fn uitoa(val: u64, buf: &mut [u8; 32]) -> &str {
     if val == 0 {

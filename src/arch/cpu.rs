@@ -32,13 +32,21 @@ mod arm64 {
     /// Enable IRQs (unmask in DAIF)
     #[inline]
     pub fn enable_irqs() {
-        unsafe { core::arch::asm!("msr DAIFClr, #2") }
+        // Host tests run in user space, where DAIF is not accessible.
+        #[cfg(not(all(test, feature = "std")))]
+        unsafe {
+            core::arch::asm!("msr DAIFClr, #2")
+        }
     }
 
     /// Disable IRQs (mask in DAIF)
     #[inline]
     pub fn disable_irqs() {
-        unsafe { core::arch::asm!("msr DAIFSet, #2") }
+        // Host tests run in user space, where DAIF is not accessible.
+        #[cfg(not(all(test, feature = "std")))]
+        unsafe {
+            core::arch::asm!("msr DAIFSet, #2")
+        }
     }
 
     /// Enable FIQs
