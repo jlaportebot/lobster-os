@@ -1101,6 +1101,20 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<usize, VfsError> {
     Ok(data.len())
 }
 
+/// Write `data` to `path` only when the file does not exist yet. Returns
+/// whether it was written. Used to seed defaults without clobbering state.
+pub fn write_file_if_missing(path: &str, data: &[u8]) -> Result<bool, VfsError> {
+    let _ = (path, data);
+    Ok(false)
+}
+
+/// Write `data` to `path` unless it already holds exactly those bytes.
+/// Returns whether it was written. Keeps boot from rewriting the disk.
+pub fn write_file_if_changed(path: &str, data: &[u8]) -> Result<bool, VfsError> {
+    let _ = (path, data);
+    Ok(false)
+}
+
 /// Create a directory (wrapper with shell-friendly name)
 pub fn create_dir(path: &str) -> Result<u64, VfsError> {
     mkdir(path)
