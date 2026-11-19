@@ -2,7 +2,7 @@
 //!
 //! The desktop background is a vertical (or diagonal) gradient sampled per
 //! scanline. A set of named presets cycle via the desktop context menu;
-//! the active preset persists to /sd/etc/wallpaper.conf so it survives
+//! the active preset persists to /sd/etc/settings.conf so it survives
 //! reboots.
 
 use crate::display::fb::get_info;
@@ -106,31 +106,8 @@ pub fn set_by_name(name: &str) -> bool {
     false
 }
 
-/// Load the persisted choice from /sd/etc/wallpaper.conf (best effort).
-pub fn load_persisted() {
-    let data = match crate::fs::vfs::read_file("/sd/etc/wallpaper.conf") {
-        Ok(d) => d,
-        Err(_) => return,
-    };
-    let text = core::str::from_utf8(&data).unwrap_or("");
-    // Format: "wallpaper=Nord Dusk"
-    for line in text.lines() {
-        if let Some(val) = line.strip_prefix("wallpaper=") {
-            if set_by_name(val.trim()) {
-                crate::println!("[wallpaper] Restored '{}' from /sd", val.trim());
-            }
-            return;
-        }
-    }
-}
-
 fn persist() {
-    let p = active();
-    let conf = alloc::format!("wallpaper={}\n", p.name);
-    // Best effort — the /sd mount may not be up yet.
-    if crate::fs::vfs::write_file("/sd/etc/wallpaper.conf", conf.as_bytes()).is_ok() {
-        crate::println!("[wallpaper] Saved '{}' to /sd", p.name);
-    }
+    crate::apps::settings::store::save();
 }
 
 /// Paint the wallpaper into the back buffer (row-fill gradient, QEMU-optimized).

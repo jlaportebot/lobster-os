@@ -1516,6 +1516,13 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                 if argc >= 2 && args[1] == "next" {
                     crate::apps::settings::cycle_page();
                     crate::println!("settings: page cycled");
+                } else if let Some(page) = args
+                    .get(1)
+                    .filter(|_| argc >= 2)
+                    .and_then(|name| crate::apps::settings::Page::from_name(name))
+                {
+                    let id = crate::apps::settings::open_page(page);
+                    crate::println!("settings: window {} on {}", id, page.name());
                 } else {
                     let id = crate::apps::settings::open_window();
                     crate::println!("settings: window {}", id);

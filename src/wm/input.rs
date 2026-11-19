@@ -336,6 +336,13 @@ fn handle_key_press(scancode: u8, _extended: bool) {
         }
     }
 
+    // Settings: navigation, focus and text entry when its window is focused
+    if crate::wm::window::get_title(crate::wm::window::focused_id()) == crate::apps::settings::TITLE
+        && crate::apps::settings::handle_key(scancode, ch)
+    {
+        return;
+    }
+
     // WM keyboard shortcuts (Super+arrow, Super+D, Alt+F4, Alt+1-4)
     crate::wm::handle_shortcut(scancode);
 
@@ -407,6 +414,9 @@ fn handle_mouse_move(dx: i16, dy: i16) {
 
     // Handle quick settings slider drag
     let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
+    if crate::wm::controls::drag::on_pointer_move(cx, cy) {
+        return;
+    }
     if tray_popups::handle_drag(cx, cy) {
         return;
     }
@@ -439,6 +449,7 @@ fn handle_mouse_button(left: bool, right: bool, middle: bool) {
         let (cx, cy) = unsafe { (CURSOR_X, CURSOR_Y) };
         // Ends a quick-settings slider drag; a no-op unless that popup is open.
         tray_popups::handle_release(cx, cy);
+        crate::wm::controls::drag::end();
         end_user_click(cx, cy);
     }
 
@@ -485,13 +496,12 @@ pub(super) fn handle_context_action(action: u32) {
             crate::apps::sysmon::init();
         }
         10 => {
-            // Change wallpaper: cycle through the built-in gradients
-            crate::wm::wallpaper::next();
-            crate::wm::compositor::mark_full_redraw();
+            // Change wallpaper: open Settings on the wallpaper gallery
+            crate::apps::settings::open_page(crate::apps::settings::Page::Appearance);
         }
         32 => {
-            // Display Settings: open the Settings app
-            crate::wm::start_menu::launch_by_name("Settings");
+            // Display Settings: open Settings on the Display page
+            crate::apps::settings::open_page(crate::apps::settings::Page::Display);
         }
         33 => {
             // Toggle Dark/Light theme

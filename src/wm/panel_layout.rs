@@ -43,8 +43,6 @@ pub const SHOW_DESKTOP_W: u32 = 10;
 pub const PINNED_APPS: [&str; 4] = ["Terminal", "Files", "Browser", "Settings"];
 /// Largest unread count shown literally on the bell badge.
 const BADGE_MAX: usize = 9;
-/// There is no 12/24 h setting yet; the clock is 24 h until one exists.
-pub const USE_24_HOUR: bool = true;
 
 /// An axis-aligned screen rectangle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
