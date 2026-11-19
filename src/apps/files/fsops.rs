@@ -9,6 +9,8 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+/// Mount point of the host shared folder.
+const SHARE_ROOT: &str = "/share";
 /// Deepest folder nesting a recursive operation follows (guards cycles).
 const MAX_DEPTH: usize = 32;
 
@@ -238,6 +240,34 @@ fn entry_of(name: &str, path: &str, is_dir: bool, size: u64) -> Entry {
     }
 }
 
+/// The host shared folder is not part of the VFS node tree: `/share` is a
+/// folder when the device is present and its children are plain files.
+/// `None` means the path is not under `/share` at all.
+fn share_entry(path: &str) -> Option<Option<Entry>> {
+    let rel = if path == SHARE_ROOT {
+        ""
+    } else {
+        path.strip_prefix("/share/")?
+    };
+    let name = paths::file_name(path).to_string();
+    if rel.is_empty() {
+        let present = crate::drivers::lobster_share::detect();
+        return Some(present.then_some(Entry {
+            name,
+            is_dir: true,
+            size: 0,
+            mtime: 0,
+        }));
+    }
+    let size = crate::drivers::lobster_share::stat(rel);
+    Some(size.map(|size| Entry {
+        name,
+        is_dir: false,
+        size,
+        mtime: 0,
+    }))
+}
+
 impl Fs for VfsFs {
     fn list(&self, dir: &str) -> Result<Vec<Entry>, VfsError> {
         let listed = vfs::list_dir(dir)?;
@@ -256,6 +286,9 @@ impl Fs for VfsFs {
     }
 
     fn stat(&self, path: &str) -> Option<Entry> {
+        if let Some(entry) = share_entry(path) {
+            return entry;
+        }
         let meta = vfs::stat(path)?;
         let is_dir = meta.file_type == vfs::FileType::Directory;
         Some(Entry {

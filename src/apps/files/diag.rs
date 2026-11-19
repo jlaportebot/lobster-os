@@ -7,7 +7,7 @@ use super::{actions, fsops, nav, ops};
 use crate::println;
 use alloc::string::ToString;
 
-const USAGE: &str = "fm: usage: fm <state|ls|nav|up|back|forward|refresh|select|sel|view|sort|open|copy|move|del|rename|clip> [...]";
+const USAGE: &str = "fm: usage: fm <state|ls|nav|up|back|forward|refresh|select|click|sel|view|sort|open|copy|move|del|rename|clip> [...]";
 /// Most entries `fm ls` prints.
 const LS_LIMIT: usize = 40;
 
@@ -141,6 +141,7 @@ pub fn run(args: &[&str]) {
         Some("forward") => nav::go_forward(st),
         Some("refresh") => nav::refresh(st),
         Some("select") => select(st, arg),
+        Some("click") => click(st, arg, args.get(2).copied().unwrap_or("")),
         Some("sel") => select_index(st, arg),
         Some(sub @ ("view" | "sort")) => view_and_sort(st, sub, arg),
         Some("open") => actions::open_selection(st),
@@ -157,6 +158,15 @@ pub fn run(args: &[&str]) {
     ) {
         println!("fm: cwd {}", st.cwd().to_string());
     }
+}
+
+fn click(st: &mut State, index: &str, mods: &str) {
+    let mods = actions::Mods {
+        ctrl: mods == "ctrl",
+        shift: mods == "shift",
+    };
+    actions::click_item(st, index.parse::<usize>().ok(), mods);
+    println!("fm: selected={}", st.selection.count());
 }
 
 fn select_index(st: &mut State, arg: &str) {

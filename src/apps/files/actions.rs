@@ -50,19 +50,37 @@ pub fn item_at_hit(st: &State, hit: &Hit) -> Option<usize> {
     item_at(st, hit.local_x, hit.local_y)
 }
 
-fn body_press(st: &mut State, hit: &Hit) {
-    let (ctrl, shift) = (hid::ctrl_held(), hid::shift_held());
-    let Some(i) = item_at(st, hit.local_x, hit.local_y) else {
-        if !ctrl && !shift {
+/// Modifier keys held during a click.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Mods {
+    pub ctrl: bool,
+    pub shift: bool,
+}
+
+impl Mods {
+    /// The modifiers held right now.
+    #[must_use]
+    pub fn held() -> Self {
+        Self {
+            ctrl: hid::ctrl_held(),
+            shift: hid::shift_held(),
+        }
+    }
+}
+
+/// A click on item `hit` (`None` = empty space) with `mods` held.
+pub fn click_item(st: &mut State, hit: Option<usize>, mods: Mods) {
+    let Some(i) = hit else {
+        if !mods.ctrl && !mods.shift {
             st.selection.clear();
         }
         st.clicks.reset();
         return;
     };
     st.reveal = Some(i);
-    if ctrl {
+    if mods.ctrl {
         st.selection.toggle(i);
-    } else if shift {
+    } else if mods.shift {
         st.selection.extend_to(i);
     } else {
         st.selection.click(i);
@@ -90,7 +108,7 @@ pub fn press(st: &mut State, hit: &Hit) -> bool {
             st.sort = st.sort.after_click(key);
             nav::resort(st);
         }
-        Target::Body => body_press(st, hit),
+        Target::Body => click_item(st, item_at(st, hit.local_x, hit.local_y), Mods::held()),
         Target::Scrollbar => begin_scroll_drag(st, hit),
     }
     crate::wm::dirty::mark();
