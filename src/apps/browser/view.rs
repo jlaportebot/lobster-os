@@ -186,6 +186,9 @@ fn hovered_url(b: &Browser, client: (u32, u32), view: Rect) -> Option<String> {
     let px = lx as u32;
     let py = (ly - view.y + b.scroll) as u32;
     let href = p.layout.href(p.layout.link_at(px, py)?);
+    if href == super::pages::RETRY_HREF {
+        return Some(String::from("Try loading this page again"));
+    }
     Some(url::resolve(&b.url, href))
 }
 
