@@ -11,6 +11,8 @@
 #define STDOUT_FD 1
 #define SAMPLE_LEN 16
 #define KERNEL_POINTER 0xFFFF000000100000UL
+#define KERNEL_TEXT_POINTER 0x80000UL
+#define KERNEL_HEAP_POINTER 0xFFFF900000001000UL
 #define LINE_BUF_SIZE 96
 #define HEX_DIGITS "0123456789abcdef"
 
@@ -68,11 +70,15 @@ void _start(void) {
     long got1 = lobster_syscall(SYS_GETRANDOM, (long)first, SAMPLE_LEN, 0);
     long got2 = lobster_syscall(SYS_GETRANDOM, (long)second, SAMPLE_LEN, 0);
     long kernel = lobster_syscall(SYS_GETRANDOM, (long)KERNEL_POINTER, SAMPLE_LEN, 0);
+    long text = lobster_syscall(SYS_GETRANDOM, (long)KERNEL_TEXT_POINTER, SAMPLE_LEN, 0);
+    long heap = lobster_syscall(SYS_GETRANDOM, (long)KERNEL_HEAP_POINTER, SAMPLE_LEN, 0);
     print_sample("getrandom_test: first  = ", first);
     print_sample("getrandom_test: second = ", second);
     print_result("getrandom_test: lengths ", (got1 == SAMPLE_LEN && got2 == SAMPLE_LEN) ? "ok" : "FAIL");
     print_result("getrandom_test: samples differ: ", samples_differ(first, second) ? "yes" : "NO");
     print_result("getrandom_test: kernel pointer: ", kernel == -14 ? "rejected (-EFAULT)" : "ACCEPTED");
+    print_result("getrandom_test: kernel text 0x80000: ", text == -14 ? "rejected (-EFAULT)" : "ACCEPTED");
+    print_result("getrandom_test: kernel heap address: ", heap == -14 ? "rejected (-EFAULT)" : "ACCEPTED");
     lobster_syscall(SYS_EXIT, 0, 0, 0);
     for (;;) {
     }

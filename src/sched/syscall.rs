@@ -2089,12 +2089,10 @@ mod getrandom_tests {
     }
 
     #[test]
-    fn getrandom_fills_a_user_buffer_with_different_bytes() {
-        let _guard = crate::test_support::serial_guard();
-        let (mut a, mut b) = ([0u8; 32], [0u8; 32]);
-        assert_eq!(sys_getrandom(a.as_mut_ptr() as u64, 32, 0), 32);
-        assert_eq!(sys_getrandom(b.as_mut_ptr() as u64, 32, 0), 32);
-        assert_ne!(a, b);
+    fn getrandom_rejects_kernel_text_and_host_stack_addresses() {
+        let local = [0u8; 8];
+        assert_eq!(sys_getrandom(0x8_0000, 64, 0), EFAULT);
+        assert_eq!(sys_getrandom(local.as_ptr() as u64, 8, 0), EFAULT);
     }
 
     #[test]
