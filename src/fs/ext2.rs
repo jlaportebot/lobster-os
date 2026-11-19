@@ -2867,3 +2867,27 @@ pub fn mkfs(
 #[cfg(all(test, feature = "std"))]
 #[path = "ext2_tests.rs"]
 mod tests;
+
+/// Block and inode usage of the mounted ext2 volume.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ext2Usage {
+    pub block_size: u32,
+    pub blocks_total: u64,
+    pub blocks_free: u64,
+    pub inodes_total: u32,
+    pub inodes_free: u32,
+}
+
+/// Usage counts from the in-memory superblock, or `None` when no ext2
+/// volume is mounted.
+pub fn usage() -> Option<Ext2Usage> {
+    // SAFETY: the filesystem instance is only touched from the single VFS thread.
+    let fs = unsafe { (*core::ptr::addr_of!(EXT2_INSTANCE)).as_ref()? };
+    Some(Ext2Usage {
+        block_size: fs.block_size,
+        blocks_total: u64::from(u32::from_le(fs.superblock.s_blocks_count)),
+        blocks_free: u64::from(u32::from_le(fs.superblock.s_free_blocks_count)),
+        inodes_total: u32::from_le(fs.superblock.s_inodes_count),
+        inodes_free: u32::from_le(fs.superblock.s_free_inodes_count),
+    })
+}

@@ -330,7 +330,7 @@ pub fn current_name() -> &'static str {
     }
 }
 
-/// User-selected accent color (ARGB), persisted in theme.conf.
+/// User-selected accent color (ARGB), persisted in settings.conf.
 static mut ACCENT: u32 = 0xFF5E81AC; // Nord blue default
 
 /// Accent presets for the picker (name → ARGB)
@@ -393,44 +393,15 @@ pub fn toggle() {
     );
 }
 
-/// Persist the active theme to /sd/etc/theme.conf (best effort).
+/// Persist the preferences to the settings file (best effort).
 fn persist() {
-    let conf = alloc::format!(
-        "theme={}\naccent={:#010x}\n",
-        current_name(),
-        accent_color()
-    );
-    if crate::fs::vfs::write_file("/sd/etc/theme.conf", conf.as_bytes()).is_ok() {
-        crate::println!("[theme] Saved to /sd");
-    }
+    crate::apps::settings::store::save();
 }
 
-/// Restore the persisted theme from /sd/etc/theme.conf (best effort).
-pub fn load_persisted() {
-    let data = match crate::fs::vfs::read_file("/sd/etc/theme.conf") {
-        Ok(d) => d,
-        Err(_) => return,
-    };
-    let text = core::str::from_utf8(&data).unwrap_or("");
-    for line in text.lines() {
-        if let Some(val) = line.strip_prefix("theme=") {
-            let name = val.trim();
-            let id = match name {
-                "Light" => ThemeId::Light,
-                "Dark" => ThemeId::Dark,
-                _ => continue,
-            };
-            set(id);
-            crate::println!("[theme] Restored '{}' from /sd", name);
-        }
-        if let Some(val) = line.strip_prefix("accent=") {
-            if let Ok(c) = u32::from_str_radix(val.trim().trim_start_matches("0x"), 16) {
-                unsafe {
-                    ACCENT = c;
-                }
-                crate::println!("[theme] Restored accent {:#010x} from /sd", c);
-            }
-        }
+/// Adopt an accent colour read from the settings file (no persistence).
+pub fn restore_accent(argb: u32) {
+    unsafe {
+        ACCENT = argb;
     }
 }
 

@@ -125,24 +125,13 @@ impl PackageDatabase {
 
     /// Save database to disk
     pub fn save(&self) -> Result<(), InstallError> {
-        use crate::fs::vfs::{create, create_dir, open, write};
+        use crate::fs::vfs::create_dir;
 
         // Ensure the full parent chain exists (VFS mkdir is
         // non-recursive; /var and /var/lib are not guaranteed).
         let _ = create_dir("/var");
         let _ = create_dir("/var/lib");
         let _ = create_dir("/var/lib/pkg");
-
-        // Create or open the database file
-        let _ = create(PKG_DB_PATH);
-        let fd = match open(PKG_DB_PATH, 1) {
-            // O_WRONLY
-            Ok(fd) => fd,
-            Err(e) => {
-                crate::println!("[pkg] Failed to open database for writing: {:?}", e);
-                return Err(InstallError::IoError);
-            }
-        };
 
         // Build database content using to_db_string format (includes file paths)
         let mut content = String::new();
@@ -153,8 +142,12 @@ impl PackageDatabase {
             content.push('\n');
         }
 
-        // Write to file
-        write(fd, content.as_bytes());
+        // write_file truncates: a shorter database must not keep stale
+        // entries from the previous, longer one.
+        crate::fs::vfs::write_file(PKG_DB_PATH, content.as_bytes()).map_err(|e| {
+            crate::println!("[pkg] Failed to write database: {:?}", e);
+            InstallError::IoError
+        })?;
         Ok(())
     }
 
