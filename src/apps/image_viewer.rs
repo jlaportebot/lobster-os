@@ -240,6 +240,12 @@ pub mod bmp_view {
         })
     }
 
+    /// Size of a newly opened viewer window.
+    const VIEWER_W: u32 = 640;
+    const VIEWER_H: u32 = 520;
+    /// Screen height kept free for the taskbar when centring the window.
+    const TASKBAR_ALLOWANCE: u32 = 48;
+
     static mut IMAGE: Option<BmpImage> = None;
     static mut SOURCE: alloc::string::String = alloc::string::String::new();
 
@@ -256,9 +262,14 @@ pub mod bmp_view {
                 window::focus(id);
                 Ok(())
             }
-            None => window::create(820, 540, 640, 520, "Image Viewer")
-                .map(|_| ())
-                .ok_or("window create failed"),
+            None => {
+                let screen = crate::display::fb::get_info();
+                let x = screen.width.saturating_sub(VIEWER_W) / 2;
+                let y = screen.height.saturating_sub(VIEWER_H + TASKBAR_ALLOWANCE) / 2;
+                window::create(x, y, VIEWER_W, VIEWER_H, "Image Viewer")
+                    .map(|_| ())
+                    .ok_or("window create failed")
+            }
         }
     }
 

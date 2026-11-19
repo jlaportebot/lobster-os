@@ -350,6 +350,11 @@ fn handle_key_press(scancode: u8, _extended: bool) {
         return;
     }
 
+    // Files: navigation, selection and file operations when focused
+    if crate::apps::files::handle_key(scancode) {
+        return;
+    }
+
     // WM keyboard shortcuts (Super+arrow, Super+D, Alt+F4, Alt+1-4)
     crate::wm::handle_shortcut(scancode);
 
@@ -361,11 +366,6 @@ fn handle_key_press(scancode: u8, _extended: bool) {
 
     // Desktop: Enter opens the selected icon when no window has focus.
     if crate::wm::desktop_icons::handle_key(scancode) {
-        return;
-    }
-
-    // GUI file manager: keyboard shortcuts when the Files window is focused.
-    if crate::wm::gui_files::handle_key(scancode) {
         return;
     }
 
@@ -487,8 +487,8 @@ pub(super) fn handle_context_action(action: u32) {
             crate::apps::terminal::init();
         }
         2 => {
-            // File Manager
-            crate::apps::file_manager::init();
+            // Files
+            crate::apps::files::open_window();
         }
         3 => {
             // Settings
@@ -524,7 +524,9 @@ pub(super) fn handle_context_action(action: u32) {
             println!("[wm] LobsterOS v0.2 — Bare-metal Rust OS for Pi 5");
         }
         other => {
-            crate::wm::desktop_icons::handle_action(other);
+            if !crate::apps::files::handle_context_action(other) {
+                crate::wm::desktop_icons::handle_action(other);
+            }
         }
     }
 }

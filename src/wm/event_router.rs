@@ -144,6 +144,9 @@ pub fn route_right_press(x: u32, y: u32) {
         context_menu::hide();
         return;
     }
+    if crate::apps::files::right_click(x, y) {
+        return;
+    }
     if is_bare_desktop(x, y) {
         desktop_icons::right_click(x, y);
     }
