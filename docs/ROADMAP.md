@@ -29,7 +29,7 @@ Gate every push on `tools/gui_test.py` in the emulator repo.
 
 ## 0. Where things stand
 
-**2026-11-18 (evening):** execution-order steps 1–2 are done (desktop core incl. fonts, icons, taskbar, start menu), plus desktop icons O3.4 (rubber-band left), caches + KVM, `lobstervm --accel kvm`, portable QEMU builds E3.1; in flight: VFS directory fidelity (O6.1 follow-up), Settings O4.1, Browser v2 O4.3, installers E3.3/E3.4; next: Files O4.2, App Store O4.6, lock screen O3.8. The list below is the original 2026-11-09 baseline, kept for reference.
+**2026-11-19:** execution-order steps 1–2 are done (desktop core incl. fonts, icons, taskbar, start menu), plus Settings O4.1, persistent system state (ADR 0001), desktop icons O3.4 (rubber-band left), caches + KVM, portable QEMU builds E3.1 and portable `lobstervm` E3.2; in flight: Browser v2 O4.3, Files O4.2, installers E3.3/E3.4, cursor O2.8, QEMU device hardening; next: lock screen O3.8 + CSPRNG O1.5, mouse wheel, App Store O4.6. The list below is the original 2026-11-09 baseline, kept for reference.
 
 ### Baseline (verified 2026-11-09)
 
@@ -248,6 +248,7 @@ and tested by CI; nothing is hand-assembled.
       run button (compile + run with output pane) (audit Q8, Q16).
 - [ ] **O4.6 App Store**: real catalogue from the package index, install/remove/update with
       progress, installed apps appear in the start menu (audit Q11).
+      *2026-11-18:* `pkg install`ed apps and the package database now persist across reboot (ADR 0001, abdcb1c); the GUI is still to do.
 - [x] **O4.7 Calculator**: mouse input, decimals, history, shared window frame (audit Q17).
       *Verified 2026-11-16:* mouse keypad through hit regions, decimals, history line; `5 % 0` does not panic.
 - [ ] **O4.8 Task Manager**: per-process CPU/memory, end task, performance graphs.
@@ -349,3 +350,5 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-18 | QEMU input modifiers translated to the HID layout (Shift/Ctrl were swapped); `lobstervm --accel kvm`; `/bin/spin` test programs on the base image; QEMU fork builds portably (E3.1, `qemu-nightly`) | gate 396 tests + harness (Shift path, Esc now asserted) + CI 4/4 platforms |
 | 2026-11-18 | O6.1 done: VFS directory fidelity (no node/entry/name caps, metadata on listing, timestamps); heap expansion no longer allocates while full | gate 407 tests + harness 12/12 + guest-vs-debugfs repro |
 | 2026-11-18 | O4.1 Settings app + shared controls library; pkg database save truncates (uninstall sticks) | gate 480 tests + harness 12/12 + screenshots of every page |
+| 2026-11-18 | Persistent system state: one prefix map puts `/bin /etc /var /usr /apps /opt /root /home` on the disk (ADR 0001); pkg installs, users and settings survive reboot; `/dev`, `/proc`, `/sys` reachable | gate 495 tests + harness 12/12 + reboot persistence check (pkg list, /etc file, e2fsck clean) |
+| 2026-11-19 | QEMU: HMP `lclick` honours the button mask, so `lobstervm click --right` and the harness can right-click (39e2987) | harness 12/12 + live desktop right-click menu |
