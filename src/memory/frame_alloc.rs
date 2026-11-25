@@ -79,12 +79,30 @@ impl Drop for Frame {
     }
 }
 
+/// Size of one core's boot stack (matches `boot.S`: core N's stack is
+/// `__stack_start + N * 4MB`).
+const CORE_STACK_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Cores that get a boot stack right after the kernel image.
+const STACK_CORES: u64 = 4;
+
+/// Bytes after `__kernel_end` that belong to the boot stacks, not to the
+/// frame allocator. Handing these out lets the heap overwrite live stacks.
+pub const BOOT_STACK_RESERVE: u64 = CORE_STACK_BYTES * STACK_CORES;
+
+/// First physical address the frame allocator may hand out: past the kernel
+/// image and the boot stacks that the linker places directly after it.
+pub fn first_allocatable_phys(kernel_end_phys: u64) -> u64 {
+    kernel_end_phys + BOOT_STACK_RESERVE
+}
+
 /// Initialize the frame allocator
 /// `ram_size`: total physical RAM in bytes
-/// `kernel_end_phys`: first free physical address after the kernel
+/// `kernel_end_phys`: end of the kernel image (the boot stacks follow it)
 pub unsafe fn init(ram_size: u64, kernel_end_phys: u64) {
     TOTAL_FRAMES = (ram_size / PAGE_SIZE as u64) as usize;
-    FIRST_FREE_FRAME = ((kernel_end_phys + PAGE_SIZE - 1) / PAGE_SIZE as u64) as usize;
+    let first_free = first_allocatable_phys(kernel_end_phys);
+    FIRST_FREE_FRAME = first_free.div_ceil(PAGE_SIZE) as usize;
 
     // Mark all frames as allocated initially
     for i in 0..(TOTAL_FRAMES + 63) / 64 {
@@ -259,4 +277,23 @@ pub fn stats() -> (usize, usize, usize) {
         unsafe { (TOTAL_FRAMES, ALLOCATED_FRAMES, FIRST_FREE_FRAME) };
     unlock();
     (total, allocated, first_free)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_allocatable_skips_all_core_stacks() {
+        let kernel_end = 0x3c7000;
+        let first = first_allocatable_phys(kernel_end);
+        assert_eq!(first, kernel_end + 16 * 1024 * 1024);
+    }
+
+    #[test]
+    fn heap_of_any_size_below_stack_reserve_never_reaches_core0_stack_top() {
+        let kernel_end = 0x3c7000u64;
+        let core0_stack_top = kernel_end + CORE_STACK_BYTES;
+        assert!(first_allocatable_phys(kernel_end) >= core0_stack_top);
+    }
 }
