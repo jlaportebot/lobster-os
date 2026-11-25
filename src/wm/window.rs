@@ -643,7 +643,7 @@ fn resize_edge_at(cx: u32, cy: u32, x: u32, y: u32, w: u32, h: u32) -> Option<u8
 
 /// Handle a keyboard press
 fn handle_keypress(scancode: u8) {
-    if crate::usb::hid::alt_held() && scancode == 0x2B {
+    if crate::usb::hid::alt_held() && scancode == crate::wm::shortcuts::SC_TAB {
         cycle_focus();
         return;
     }

@@ -33,6 +33,7 @@ pub mod notifications;
 pub mod panel;
 pub mod panel_layout;
 pub mod scene;
+pub mod shortcuts;
 pub mod start_menu;
 pub mod theme;
 pub mod tray_popups;
@@ -242,66 +243,27 @@ fn tick_hardware() {
 /// Handle keyboard shortcuts (called from input module)
 pub fn handle_shortcut(scancode: u8) {
     use crate::usb::hid;
+    use crate::wm::shortcuts::{lookup, Shortcut};
     use crate::wm::window::SnapPosition;
 
-    // Mod + key shortcuts
-    let mod_key = hid::gui_held();
-
-    if mod_key {
-        match scancode {
-            // Super+D: minimize all / show desktop
-            0x07 => {
-                for id in 1..=window::max_id() {
-                    if window::exists(id) {
-                        window::minimize(id);
-                    }
+    let Some(action) = lookup(scancode, hid::gui_held(), hid::alt_held()) else {
+        return;
+    };
+    let focused = window::focused_id();
+    match action {
+        Shortcut::ShowDesktop => {
+            for id in 1..=window::max_id() {
+                if window::exists(id) {
+                    window::minimize(id);
                 }
             }
-            // Super+Left: snap focused window left
-            0x50 => {
-                let fid = window::focused_id();
-                if fid != 0 {
-                    window::snap(fid, SnapPosition::Left);
-                }
-            }
-            // Super+Right: snap focused window right
-            0x4F => {
-                let fid = window::focused_id();
-                if fid != 0 {
-                    window::snap(fid, SnapPosition::Right);
-                }
-            }
-            // Super+Up: snap focused window top half
-            0x52 => {
-                let fid = window::focused_id();
-                if fid != 0 {
-                    window::snap(fid, SnapPosition::Full);
-                }
-            }
-            // Super+Down: minimize focused window or restore from snapped
-            0x51 => {
-                let fid = window::focused_id();
-                if fid != 0 {
-                    window::minimize(fid);
-                }
-            }
-            // Ctrl+Alt+1..4: switch workspace
-            _ if hid::alt_held() => match scancode {
-                0x1E => workspace::switch_to(0), // 1
-                0x1F => workspace::switch_to(1), // 2
-                0x20 => workspace::switch_to(2), // 3
-                0x21 => workspace::switch_to(3), // 4
-                _ => {}
-            },
-            _ => {}
         }
-    }
-
-    // Alt+F4: close focused window
-    if hid::alt_held() && scancode == 0x29 {
-        let fid = window::focused_id();
-        if fid != 0 {
-            window::destroy(fid);
-        }
+        Shortcut::SnapLeft if focused != 0 => window::snap(focused, SnapPosition::Left),
+        Shortcut::SnapRight if focused != 0 => window::snap(focused, SnapPosition::Right),
+        Shortcut::Maximize if focused != 0 => window::snap(focused, SnapPosition::Full),
+        Shortcut::Minimize if focused != 0 => window::minimize(focused),
+        Shortcut::CloseWindow if focused != 0 => window::destroy(focused),
+        Shortcut::Workspace(index) => workspace::switch_to(index),
+        _ => {}
     }
 }
