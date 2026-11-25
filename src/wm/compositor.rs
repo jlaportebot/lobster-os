@@ -1981,6 +1981,16 @@ fn blit_rect(fb: FramebufferInfo, dst: *mut u32, src: *mut u32, rect: &DirtyRect
 
 /// Get the framebuffer info the compositor is using
 pub fn fb_info() -> Option<FramebufferInfo> {
+    // The QEMU scene compositor follows display mode changes through the
+    // device framebuffer; the copy taken at `init` would keep reporting the
+    // boot resolution to hit-testing, dialogs and the taskbar.
+    #[cfg(feature = "qemu_raspi5b")]
+    {
+        let device = crate::display::fb::device_info();
+        if device.width != 0 {
+            return Some(device);
+        }
+    }
     let guard = FB_INFO.lock();
     guard.map(|x| x)
 }
