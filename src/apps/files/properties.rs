@@ -103,10 +103,14 @@ fn size_row(d: &Details) -> String {
         return format!("{} ({} bytes)", size_text(d.summary.bytes), d.summary.bytes);
     }
     let more = if d.summary.truncated { "+" } else { "" };
+    let count = d.summary.items();
+    let noun = if count == 1 && more.is_empty() {
+        "item"
+    } else {
+        "items"
+    };
     format!(
-        "{}{} items, {}{}",
-        d.summary.items(),
-        more,
+        "{count}{more} {noun}, {}{}",
         size_text(d.summary.bytes),
         more
     )
@@ -246,6 +250,18 @@ mod tests {
         };
         let r = rows(&details(true, s));
         assert_eq!(r[3].1, "4+ items, 2.0 KB+");
+    }
+
+    #[test]
+    fn a_folder_with_one_item_says_item_not_items() {
+        let s = Summary {
+            files: 1,
+            folders: 0,
+            bytes: 9,
+            truncated: false,
+        };
+        let r = rows(&details(true, s));
+        assert_eq!(r[3].1, "1 item, 9 B");
     }
 
     #[test]
