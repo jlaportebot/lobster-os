@@ -3,6 +3,7 @@
 pub mod install;
 pub mod package;
 pub mod repo;
+pub mod version;
 
 #[allow(unused_imports)]
 pub use package::{

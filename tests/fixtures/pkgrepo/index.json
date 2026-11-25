@@ -1,0 +1,40 @@
+{
+  "name": "lobster-main",
+  "url": "http://127.0.0.1:8000",
+  "packages": [
+    {
+      "name": "alpha",
+      "version": "1.10.0",
+      "arch": "aarch64",
+      "description": "Fixture package alpha.",
+      "details": "Longer text for alpha.",
+      "category": "Games",
+      "icon": "AppGeneric",
+      "kind": "gui",
+      "exec": "/apps/alpha",
+      "dependencies": [],
+      "size": 11,
+      "installed_size": 22,
+      "checksum": "5a3e7f88a95a7c50c6d0cd9b2c21aef98a5f9edd95c90d9dc411c77ada94c36c",
+      "download_url": "http://127.0.0.1:8000/alpha-1.10.0.lobpkg"
+    },
+    {
+      "name": "beta",
+      "version": "2.0.0",
+      "arch": "aarch64",
+      "description": "Fixture package beta.",
+      "details": "Longer text for beta.",
+      "category": "Developer",
+      "icon": "AppGeneric",
+      "kind": "cli",
+      "exec": "/apps/beta",
+      "dependencies": [
+        "alpha"
+      ],
+      "size": 9,
+      "installed_size": 18,
+      "checksum": "59049758d7a97e6ff970d49a3c77e7bbb7ba07ae71b5499194c5d395e11128ac",
+      "download_url": "http://127.0.0.1:8000/beta-2.0.0.lobpkg"
+    }
+  ]
+}

@@ -114,6 +114,35 @@ pub struct RepoPackage {
     pub size: u64,
     pub checksum: [u8; 32],
     pub download_url: String,
+    /// Catalogue fields the App Store shows; empty for plain indexes.
+    pub store: StoreMeta,
+}
+
+/// How a catalogue app is started from the store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AppKind {
+    /// Opens its own window.
+    #[default]
+    Gui,
+    /// Runs in the Terminal.
+    Cli,
+}
+
+/// Store-facing metadata of a repository package (all optional in an index).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StoreMeta {
+    /// Paragraph for the details pane.
+    pub details: String,
+    /// Category name (Games, Utilities, Developer, System).
+    pub category: String,
+    /// Name of an `icons::Icon` variant, e.g. `AppPython`.
+    pub icon: String,
+    /// How "Open" starts the program.
+    pub kind: AppKind,
+    /// Absolute path of the program "Open" starts.
+    pub exec: String,
+    /// Bytes the package occupies once installed.
+    pub installed_size: u64,
 }
 
 /// Full package (with file data) — parsed from .lobpkg file
@@ -470,6 +499,7 @@ mod tests {
             size: 1024,
             checksum: [0; 32],
             download_url: "https://example.com/vim.lobpkg".to_string(),
+            store: Default::default(),
         });
         index.add_package(RepoPackage {
             name: "coreutils".to_string(),
@@ -480,6 +510,7 @@ mod tests {
             size: 2048,
             checksum: [0; 32],
             download_url: "https://example.com/coreutils.lobpkg".to_string(),
+            store: Default::default(),
         });
 
         let results = index.search("vim");
