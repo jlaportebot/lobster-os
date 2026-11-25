@@ -20,9 +20,21 @@ pub struct Place {
     pub create: bool,
 }
 
-/// The sidebar places, in display order.
+/// Trash folders of the logged-in user.
 #[must_use]
-pub fn places() -> Vec<Place> {
+pub fn trash_dirs() -> super::trash::Dirs {
+    super::trash::dirs(&crate::users::home_path())
+}
+
+/// Whether the folder being shown is the trash.
+#[must_use]
+pub fn in_trash(st: &State) -> bool {
+    st.cwd() == trash_dirs().files
+}
+
+/// The sidebar places, in display order; `trash_full` picks the Trash icon.
+#[must_use]
+pub fn places(trash_full: bool) -> Vec<Place> {
     let home = crate::users::home_path();
     let sub = |name: &str| paths::join(&home, name);
     let mut out = alloc::vec![
@@ -41,6 +53,12 @@ pub fn places() -> Vec<Place> {
             false,
         ));
     }
+    let icon = if trash_full {
+        Icon::FileTrashFull
+    } else {
+        Icon::FileTrashEmpty
+    };
+    out.push(place(TRASH_LABEL, trash_dirs().files, icon, true));
     out
 }
 
@@ -54,7 +72,7 @@ fn place(label: &'static str, path: String, icon: Icon, create: bool) -> Place {
     }
 }
 
-/// Name of the Trash entry (phase 2 enables it).
+/// Name of the Trash entry.
 pub const TRASH_LABEL: &str = "Trash";
 
 /// Folder the app opens in: the user's home when it exists, else the root.
@@ -91,6 +109,10 @@ pub fn load(st: &mut State) {
         }
     }
     st.selection.retain_below(st.entries.len());
+    st.trash_full = !VfsFs
+        .list(&trash_dirs().files)
+        .unwrap_or_default()
+        .is_empty();
 }
 
 /// Show `path`, recording history. Refuses paths that are not folders.
@@ -112,6 +134,7 @@ pub fn navigate(st: &mut State, path: &str) {
 fn enter(st: &mut State) {
     st.selection.clear();
     st.clicks.reset();
+    st.drag = super::dnd::DragState::Idle;
     st.scroll = 0;
     load(st);
     crate::wm::dirty::mark();
@@ -121,7 +144,7 @@ fn enter(st: &mut State) {
 /// per-user folder that does not exist yet.
 pub fn open_place(st: &mut State, place: &Place) {
     if place.create && VfsFs.stat(&place.path).is_none() {
-        let _ = VfsFs.mkdir(&place.path);
+        let _ = super::trash::ensure_dir(&mut VfsFs, &place.path);
     }
     navigate(st, &place.path);
 }

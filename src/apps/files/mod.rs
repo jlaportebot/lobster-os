@@ -9,6 +9,7 @@
 
 pub mod actions;
 pub mod diag;
+pub mod dnd;
 pub mod fsops;
 pub mod history;
 pub mod keys;
@@ -18,10 +19,15 @@ pub mod model;
 pub mod nav;
 pub mod ops;
 pub mod paths;
+pub mod properties;
 mod render;
 pub mod selection;
 pub mod state;
 pub mod targets;
+#[cfg(all(test, feature = "std"))]
+mod testfs;
+pub mod trash;
+pub mod typeahead;
 
 use crate::wm::controls::Ui;
 use crate::wm::hit_region::{self, Hit};
@@ -83,6 +89,8 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
     );
     hit_region::set_handler(win_id, on_hit);
     ops::tick(st);
+    actions::drag_tick(st);
+    st.client_origin = (cx, cy);
     let mut ui = Ui::new(&target, win_id, (cx, cy), (cw, ch), state::controls());
     render::frame(&mut ui, st, (cw, ch));
     ui.finish();

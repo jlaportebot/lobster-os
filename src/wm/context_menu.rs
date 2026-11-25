@@ -25,6 +25,8 @@ pub struct MenuItem {
     action_id: u32,
     /// Hover state
     hovered: bool,
+    /// Greyed out and not clickable
+    disabled: bool,
 }
 
 impl MenuItem {
@@ -34,6 +36,7 @@ impl MenuItem {
             text_len: 0,
             action_id: 0,
             hovered: false,
+            disabled: false,
         }
     }
 
@@ -77,6 +80,15 @@ static MENU: Spinlock<MenuState> = Spinlock::new(MenuState {
 
 /// Show a context menu at (x, y) with the given items
 pub fn show(x: u32, y: u32, items: &[(&str, u32)]) {
+    let entries: alloc::vec::Vec<(&str, u32, bool)> = items
+        .iter()
+        .map(|(label, id)| (*label, *id, false))
+        .collect();
+    show_with_state(x, y, &entries);
+}
+
+/// Show a context menu whose items may be disabled: `(label, id, disabled)`.
+pub fn show_with_state(x: u32, y: u32, items: &[(&str, u32, bool)]) {
     let mut menu = MENU.lock();
     menu.visible = true;
     menu.x = x;
@@ -84,10 +96,11 @@ pub fn show(x: u32, y: u32, items: &[(&str, u32)]) {
     menu.item_count = items.len().min(MAX_ITEMS);
     menu.width = MENU_W;
 
-    for (i, (label, action_id)) in items.iter().enumerate().take(MAX_ITEMS) {
+    for (i, (label, action_id, disabled)) in items.iter().enumerate().take(MAX_ITEMS) {
         menu.items[i] = MenuItem::empty();
         menu.items[i].set_label(label);
         menu.items[i].action_id = *action_id;
+        menu.items[i].disabled = *disabled;
     }
     drop(menu);
     crate::wm::compositor::mark_full_redraw();
@@ -135,7 +148,7 @@ pub fn handle_click(cx: u32, cy: u32) -> Option<u32> {
         let hit = menu
             .items
             .get(idx)
-            .filter(|_| inside && idx < menu.item_count);
+            .filter(|item| inside && idx < menu.item_count && !item.disabled);
         hit.map(|item| item.action_id).filter(|id| *id > 0)
     };
     hide();
@@ -153,7 +166,7 @@ pub fn handle_hover(cx: u32, cy: u32) {
     let hovered_idx = inside.then(|| (cy.saturating_sub(menu.y + MENU_PAD) / ITEM_H) as usize);
     let mut changed = false;
     for i in 0..menu.item_count {
-        let now = hovered_idx == Some(i);
+        let now = hovered_idx == Some(i) && !menu.items[i].disabled;
         changed |= menu.items[i].hovered != now;
         menu.items[i].hovered = now;
     }
@@ -200,7 +213,12 @@ pub fn draw(fb: &FramebufferInfo) {
 
         // Item text
         let label = menu.items[i].label();
-        let style = theme::chrome_text(Face::Ui, ITEM_TEXT_PX, theme.menu_item_text, ITEM_H);
+        let color = if menu.items[i].disabled {
+            theme.label_text_dim
+        } else {
+            theme.menu_item_text
+        };
+        let style = theme::chrome_text(Face::Ui, ITEM_TEXT_PX, color, ITEM_H);
         let text_y = theme::centered_line_y(item_y, ITEM_H, &style);
         text::draw_fitted(fb, x + 12, text_y, w.saturating_sub(24), label, &style);
     }

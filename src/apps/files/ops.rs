@@ -3,7 +3,9 @@
 
 use super::fsops::{self, Fs, OpError, VfsFs};
 use super::paths::{self, NameError};
-use super::state::{Ask, Clipboard, Pending, Queued, State};
+use super::properties::{self, Details, Summary};
+use super::state::{Ask, Clipboard, Pending, PropsPanel, Queued, State};
+use super::trash;
 use crate::wm::dialog::{self, DialogResult};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -43,6 +45,14 @@ fn op_alert(st: &mut State, title: &str, err: &OpError) {
 
 /// Ask for the name of a new folder or text file.
 pub fn ask_new(st: &mut State, is_dir: bool) {
+    if is_dir && fsops::is_share(st.cwd()) {
+        alert(
+            st,
+            "Shared folder",
+            &fsops::share_unsupported("creating folders"),
+        );
+        return;
+    }
     let taken = |n: &str| st.has_name(n);
     let (title, default, pending) = if is_dir {
         let name = paths::unique_default(NEW_FOLDER_NAME, &taken);
@@ -77,8 +87,16 @@ pub fn ask_rename(st: &mut State) {
 }
 
 /// Ask before permanently deleting the selection.
-pub fn ask_delete(st: &mut State) {
+pub fn ask_delete_permanent(st: &mut State) {
     let paths = st.selected_paths();
+    if paths.iter().any(|p| fsops::is_share(p)) {
+        alert(
+            st,
+            "Shared folder",
+            &fsops::share_unsupported("deleting items"),
+        );
+        return;
+    }
     let message = match paths.as_slice() {
         [] => return,
         [one] => alloc::format!("Delete \"{}\" permanently?", paths::file_name(one)),
@@ -173,8 +191,15 @@ fn finish(st: &mut State, select: &str) {
 }
 
 fn delete_all(st: &mut State, targets: &[String]) {
+    let dirs = super::nav::trash_dirs();
+    let in_trash = super::nav::in_trash(st);
     for path in targets {
-        if let Err(err) = fsops::remove_tree(&mut VfsFs, path) {
+        let done = if in_trash {
+            trash::purge(&mut VfsFs, &dirs, paths::file_name(path))
+        } else {
+            fsops::remove_tree(&mut VfsFs, path)
+        };
+        if let Err(err) = done {
             op_alert(st, "Delete failed", &err);
             break;
         }
@@ -191,6 +216,7 @@ pub fn resolve(st: &mut State, pending: Pending, result: Option<DialogResult>) {
         (Pending::NewFile, Some(DialogResult::Prompt(Some(n)))) => create(st, &n, false),
         (Pending::Rename(path), Some(DialogResult::Prompt(Some(n)))) => rename(st, &path, &n),
         (Pending::Delete(targets), Some(DialogResult::Confirm(true))) => delete_all(st, &targets),
+        (Pending::EmptyTrash, Some(DialogResult::Confirm(true))) => empty_trash(st),
         _ => {}
     }
 }
@@ -218,4 +244,162 @@ pub fn tick(st: &mut State) {
         Ask::Alert => dialog::alert(&next.title, &next.message),
     }
     st.awaiting = Some(next.pending);
+}
+
+/// Local time now as the `DeletionDate` text.
+fn trash_time() -> String {
+    let up = crate::arch::ArchTimer::uptime_ms();
+    let local = crate::clock::epoch_secs_at(up)
+        .map_or(0, |s| s as i64 + i64::from(crate::clock::utc_offset_secs()));
+    trash::iso_time(local.max(0) as u64)
+}
+
+/// Delete key: move the selection to the Trash (inside the Trash itself it
+/// asks to delete permanently instead).
+pub fn delete_selection(st: &mut State) {
+    let targets = st.selected_paths();
+    if targets.is_empty() {
+        return;
+    }
+    if super::nav::in_trash(st) {
+        ask_delete_permanent(st);
+        return;
+    }
+    if targets.iter().any(|p| fsops::is_share(p)) {
+        alert(
+            st,
+            "Shared folder",
+            &fsops::share_unsupported("deleting items"),
+        );
+        return;
+    }
+    let dirs = super::nav::trash_dirs();
+    let when = trash_time();
+    for path in &targets {
+        if let Err(err) = trash::trash_item(&mut VfsFs, &dirs, path, &when, FILE_CAP) {
+            op_alert(st, "Move to Trash failed", &err);
+            break;
+        }
+    }
+    st.selection.clear();
+    super::nav::load(st);
+    crate::wm::notifications::info(
+        "Files",
+        &alloc::format!("Moved {} item(s) to Trash", targets.len()),
+    );
+    crate::wm::dirty::mark();
+}
+
+/// Restore the selected trash items to where they came from.
+pub fn restore_selection(st: &mut State) {
+    if !super::nav::in_trash(st) {
+        return;
+    }
+    let dirs = super::nav::trash_dirs();
+    for path in st.selected_paths() {
+        let name = paths::file_name(&path).to_string();
+        if let Err(err) = trash::restore(&mut VfsFs, &dirs, &name, FILE_CAP) {
+            op_alert(st, "Restore failed", &err);
+            break;
+        }
+    }
+    st.selection.clear();
+    super::nav::load(st);
+    crate::wm::dirty::mark();
+}
+
+/// Ask before emptying the trash.
+pub fn ask_empty_trash(st: &mut State) {
+    if st.entries.is_empty() {
+        return;
+    }
+    ask(
+        st,
+        Ask::Confirm,
+        "Empty Trash",
+        "Permanently delete everything in the Trash?",
+        Pending::EmptyTrash,
+    );
+}
+
+fn empty_trash(st: &mut State) {
+    if let Err(err) = trash::empty(&mut VfsFs, &super::nav::trash_dirs()) {
+        op_alert(st, "Empty Trash failed", &err);
+    }
+    st.selection.clear();
+    super::nav::load(st);
+    crate::wm::dirty::mark();
+}
+
+fn owner_names(uid: u32, gid: u32) -> (String, String) {
+    let user =
+        crate::users::passwd::find_user_by_uid(uid).map_or_else(|| uid.to_string(), |u| u.username);
+    let group =
+        crate::users::group::find_group_by_gid(gid).map_or_else(|| gid.to_string(), |g| g.name);
+    (user, group)
+}
+
+fn details_of(path: &str) -> Option<Details> {
+    let entry = VfsFs.stat(path)?;
+    let meta = crate::fs::vfs::stat(path);
+    let (owner, group) = meta.map_or_else(
+        || (String::from("-"), String::from("-")),
+        |m| owner_names(m.uid, m.gid),
+    );
+    let local = i64::from(crate::clock::utc_offset_secs());
+    Some(Details {
+        name: entry.name.clone(),
+        kind: super::model::type_label(&entry),
+        path: path.to_string(),
+        is_dir: entry.is_dir,
+        summary: properties::summarize(&VfsFs, path, properties::WALK_LIMIT),
+        modified: (entry.mtime as i64 + local).max(0) as u64 * u64::from(entry.mtime != 0),
+        owner,
+        group,
+        mode: meta.map_or(0, |m| m.permissions),
+    })
+}
+
+/// Open the Properties panel for the selection.
+pub fn show_properties(st: &mut State) {
+    let targets = st.selected_paths();
+    let rows = match targets.as_slice() {
+        [] => return,
+        [one] => details_of(one).map(|d| properties::rows(&d)),
+        many => {
+            let mut total = Summary::default();
+            for p in many {
+                total.merge(properties::summarize(&VfsFs, p, properties::WALK_LIMIT));
+            }
+            Some(properties::multi_rows(many.len(), total, st.cwd()))
+        }
+    };
+    if let Some(rows) = rows {
+        st.props = Some(PropsPanel {
+            title: String::from("Properties"),
+            rows,
+        });
+    }
+    crate::wm::dirty::mark();
+}
+
+/// Move the selection into folder `dir` (drag and drop).
+pub fn move_selection(st: &mut State, dir: &str) {
+    let mut moved = 0usize;
+    for src in st.selected_paths() {
+        match fsops::move_item(&mut VfsFs, &src, dir, FILE_CAP) {
+            Ok(_) => moved += 1,
+            Err(err) => {
+                op_alert(st, "Move failed", &err);
+                break;
+            }
+        }
+    }
+    st.selection.clear();
+    super::nav::load(st);
+    if moved > 0 {
+        let note = alloc::format!("Moved {moved} item(s) to {}", paths::file_name(dir));
+        crate::wm::notifications::info("Files", &note);
+    }
+    crate::wm::dirty::mark();
 }

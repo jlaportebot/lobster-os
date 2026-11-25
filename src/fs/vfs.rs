@@ -1055,6 +1055,12 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<usize, VfsError> {
     if data.len() > MAX_FILE_DATA {
         return Err(VfsError::OutOfMemory);
     }
+    if let Some(rel) = share_rel_path(path) {
+        if rel.is_empty() {
+            return Err(VfsError::NotAFile);
+        }
+        return crate::drivers::lobster_share::write_file(rel, data).map_err(|_| VfsError::IOError);
+    }
     let inode_id = match resolve_path(path) {
         Ok(id) => {
             // Hydrate ext2-backed files first so truncation applies to the

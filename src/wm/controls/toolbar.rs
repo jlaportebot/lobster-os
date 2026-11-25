@@ -58,15 +58,17 @@ impl Ui<'_> {
 
     /// Breadcrumb bar over `r`: a field holding clickable segments
     /// separated by chevrons. `items` are laid out left to right.
-    pub fn breadcrumbs(&mut self, r: Rect, items: &[CrumbItem]) {
+    pub fn breadcrumbs(&mut self, r: Rect, items: &[CrumbItem]) -> alloc::vec::Vec<Rect> {
         let th = theme::current();
         self.ring(r, RADIUS, 1, th.input_border, th.input_bg);
         let mut x = r.x + 4;
         let last = items.len().saturating_sub(1);
+        let mut rects = alloc::vec::Vec::new();
         for (i, item) in items.iter().enumerate() {
             let w = Self::crumb_width(item.label).min((r.right() - x).max(0) as u32);
             let seg = Rect::new(x, r.y + 3, w, r.h.saturating_sub(6));
             self.crumb(seg, item, i == last);
+            rects.push(seg);
             x += w as i32;
             if i != last {
                 let sep = Rect::new(x, r.y, SEP_W, r.h);
@@ -74,6 +76,7 @@ impl Ui<'_> {
                 x += SEP_W as i32;
             }
         }
+        rects
     }
 
     fn crumb(&mut self, seg: Rect, item: &CrumbItem, current: bool) {

@@ -17,6 +17,10 @@ pub enum Target {
     /// The whole item area (items are resolved from the press position).
     Body,
     Scrollbar,
+    /// OK button of the Properties panel.
+    PropsOk,
+    /// Click-catcher behind the Properties panel.
+    Backdrop,
 }
 
 const PLACE_BASE: u32 = 0x100;
@@ -45,6 +49,8 @@ impl Target {
             Target::ViewIcons => 6,
             Target::Body => 7,
             Target::Scrollbar => 8,
+            Target::PropsOk => 9,
+            Target::Backdrop => 10,
             Target::Place(i) => PLACE_BASE + (i as u32).min(SLOTS - 1),
             Target::Crumb(i) => CRUMB_BASE + (i as u32).min(SLOTS - 1),
             Target::Header(k) => {
@@ -66,6 +72,8 @@ impl Target {
             6 => Target::ViewIcons,
             7 => Target::Body,
             8 => Target::Scrollbar,
+            9 => Target::PropsOk,
+            10 => Target::Backdrop,
             _ => {
                 if let Some(i) = slot(PLACE_BASE) {
                     Target::Place(i)
@@ -94,6 +102,8 @@ mod tests {
             Target::ViewIcons,
             Target::Body,
             Target::Scrollbar,
+            Target::PropsOk,
+            Target::Backdrop,
             Target::Place(0),
             Target::Place(6),
             Target::Crumb(0),

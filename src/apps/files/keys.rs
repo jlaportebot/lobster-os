@@ -24,6 +24,8 @@ const SC_END: u8 = 0x4F;
 const SC_DOWN: u8 = 0x50;
 const SC_PAGE_DOWN: u8 = 0x51;
 const SC_DELETE: u8 = 0x53;
+/// Punctuation that may also start a type-to-select jump.
+const TYPEAHEAD_EXTRA: &[char] = &['.', '-', '_'];
 /// Rows a Page Up / Page Down moves when the real page size is unknown.
 const DEFAULT_PAGE_ROWS: usize = 8;
 
@@ -44,6 +46,9 @@ fn cursor_move(scancode: u8) -> Option<Move> {
 /// Handle a key press; true when the Files window consumed it.
 pub fn handle(st: &mut State, scancode: u8) -> bool {
     let (ctrl, alt, shift) = (hid::ctrl_held(), hid::alt_held(), hid::shift_held());
+    if st.props.is_some() {
+        return close_props_key(st, scancode);
+    }
     let consumed = if ctrl {
         ctrl_key(st, scancode, shift)
     } else if alt {
@@ -69,8 +74,17 @@ fn ctrl_key(st: &mut State, scancode: u8, shift: bool) -> bool {
     true
 }
 
+fn close_props_key(st: &mut State, scancode: u8) -> bool {
+    if matches!(scancode, SC_ESC | SC_ENTER) {
+        st.props = None;
+        crate::wm::dirty::mark();
+    }
+    true
+}
+
 fn alt_key(st: &mut State, scancode: u8) -> bool {
     match scancode {
+        SC_ENTER => ops::show_properties(st),
         SC_LEFT => nav::go_back(st),
         SC_RIGHT => nav::go_forward(st),
         SC_UP => nav::go_up(st),
@@ -87,11 +101,29 @@ fn plain_key(st: &mut State, scancode: u8, shift: bool) -> bool {
     match scancode {
         SC_ENTER => super::actions::open_selection(st),
         SC_BACKSPACE => nav::go_up(st),
-        SC_DELETE => ops::ask_delete(st),
+        SC_DELETE if shift => ops::ask_delete_permanent(st),
+        SC_DELETE => ops::delete_selection(st),
         SC_F2 => ops::ask_rename(st),
         SC_F5 => nav::refresh(st),
         SC_ESC => st.selection.clear(),
-        _ => return false,
+        _ => return type_ahead(st, scancode, shift),
+    }
+    true
+}
+
+/// Typed letters jump to the next item with that name prefix.
+fn type_ahead(st: &mut State, scancode: u8, shift: bool) -> bool {
+    let Some(c) = hid::scancode_to_ascii(scancode, shift) else {
+        return false;
+    };
+    if !(c.is_ascii_alphanumeric() || TYPEAHEAD_EXTRA.contains(&c)) {
+        return false;
+    }
+    let now = crate::arch::ArchTimer::uptime_ms();
+    let lead = st.selection.lead();
+    if let Some(i) = st.typeahead.type_char(c, now, &st.entries, lead) {
+        st.selection.click(i);
+        st.reveal = Some(i);
     }
     true
 }

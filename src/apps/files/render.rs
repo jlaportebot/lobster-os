@@ -4,7 +4,7 @@ use super::layout::{self, Layout};
 use super::model::{self, Entry, SortKey, ViewMode};
 use super::nav::{self, Place};
 use super::paths;
-use super::state::State;
+use super::state::{DropTarget, PropsPanel, State};
 use super::targets::Target;
 use crate::display::icons::{Glyph, Icon};
 use crate::display::text::{self, Face};
@@ -29,6 +29,21 @@ const STATUS_PAD: i32 = 12;
 const STATUS_PX: u32 = LABEL_PX - 1;
 /// Text size of the empty-folder notice.
 const EMPTY_PX: u32 = LABEL_PX + 1;
+/// Alpha of the drop-target wash.
+const DROP_ALPHA: u8 = 90;
+/// Size and offset of the drag count label.
+const LABEL_H: u32 = 26;
+const LABEL_PAD: u32 = 10;
+const LABEL_OFFSET: i32 = 14;
+/// Alpha of the dimming veil behind the Properties panel.
+const SCRIM_ALPHA: u8 = 110;
+/// Properties panel metrics.
+const PANEL_W: u32 = 520;
+const PANEL_HEADER: u32 = 52;
+const PANEL_ROW_H: u32 = 26;
+const PANEL_FOOTER: u32 = 64;
+const PANEL_PAD: i32 = 20;
+const PANEL_KEY_W: i32 = 110;
 /// Padding inside the breadcrumb field.
 const CRUMB_FIELD_PAD: u32 = 8;
 
@@ -43,9 +58,13 @@ pub fn frame(ui: &mut Ui, st: &mut State, client: (u32, u32)) {
     toolbar(ui, &l, st);
     sidebar(ui, &l, st);
     status(ui, &l, st);
+    drop_feedback(ui, &l, st);
+    if let Some(panel) = &st.props {
+        props_panel(ui, client, panel);
+    }
 }
 
-fn toolbar(ui: &mut Ui, l: &Layout, st: &State) {
+fn toolbar(ui: &mut Ui, l: &Layout, st: &mut State) {
     let th = theme::current();
     ui.fill(l.toolbar, th.panel_bg);
     ui.fill(
@@ -70,11 +89,16 @@ fn toolbar(ui: &mut Ui, l: &Layout, st: &State) {
         Glyph::ArrowUp,
         st.cwd() != paths::ROOT,
     );
-    breadcrumbs(ui, l.crumbs, st.cwd());
+    st.crumb_rects = breadcrumbs(ui, l.crumbs, st.cwd());
+    let label = if nav::in_trash(st) {
+        "Empty trash"
+    } else {
+        "New folder"
+    };
     ui.button(
         Target::NewFolder.key(),
         l.new_folder,
-        "New folder",
+        label,
         ButtonKind::Secondary,
         true,
     );
@@ -83,47 +107,45 @@ fn toolbar(ui: &mut Ui, l: &Layout, st: &State) {
     ui.segmented(&keys, &["List", "Icons"], l.view_toggle, selected);
 }
 
-fn breadcrumbs(ui: &mut Ui, r: Rect, cwd: &str) {
+fn breadcrumbs(ui: &mut Ui, r: Rect, cwd: &str) -> Vec<(Rect, usize)> {
     let crumbs = paths::crumbs(cwd);
     let widths: Vec<u32> = crumbs.iter().map(|c| Ui::crumb_width(&c.label)).collect();
     let avail = r.w.saturating_sub(CRUMB_FIELD_PAD);
     let first = paths::first_visible_crumb(&widths, SEP_W, Ui::crumb_width("\u{2026}"), avail);
     let mut items: Vec<CrumbItem> = Vec::new();
+    let mut indices: Vec<usize> = Vec::new();
     if first > 0 {
+        indices.push(first - 1);
         items.push(CrumbItem {
             key: Target::Crumb(first - 1).key(),
             label: "\u{2026}",
         });
     }
     for (i, crumb) in crumbs.iter().enumerate().skip(first) {
+        indices.push(i);
         items.push(CrumbItem {
             key: Target::Crumb(i).key(),
             label: &crumb.label,
         });
     }
-    ui.breadcrumbs(r, &items);
+    let rects = ui.breadcrumbs(r, &items);
+    rects.into_iter().zip(indices).collect()
 }
 
-fn sidebar(ui: &mut Ui, l: &Layout, st: &State) {
+fn sidebar(ui: &mut Ui, l: &Layout, st: &mut State) {
     let th = theme::current();
     ui.fill(l.sidebar, th.panel_bg);
     ui.fill(
         Rect::new(l.sidebar.right() - 1, l.sidebar.y, 1, l.sidebar.h),
         th.panel_border,
     );
-    let places = nav::places();
+    let places = nav::places(st.trash_full);
+    st.place_rects.clear();
     for (i, place) in places.iter().enumerate() {
         let r = layout::place_rect(l, i);
+        st.place_rects.push((r, i));
         place_row(ui, r, place, place.path == st.cwd(), Some(Target::Place(i)));
     }
-    let trash = Place {
-        label: nav::TRASH_LABEL,
-        path: String::new(),
-        icon: Icon::FileTrashEmpty,
-        enabled: false,
-        create: false,
-    };
-    place_row(ui, layout::place_rect(l, places.len()), &trash, false, None);
 }
 
 fn place_row(ui: &mut Ui, r: Rect, place: &Place, current: bool, target: Option<Target>) {
@@ -307,4 +329,69 @@ fn free_text() -> String {
         }
         None => String::from("No disk mounted"),
     }
+}
+
+/// Accent wash on the drop target and a count label beside the pointer.
+fn drop_feedback(ui: &mut Ui, l: &Layout, st: &State) {
+    let Some(target) = st.drop else { return };
+    let accent = theme::accent_color();
+    let full = Rect::new(0, 0, l.status.w, l.status.bottom() as u32);
+    let rect = match target {
+        DropTarget::Item(i) => {
+            ui.set_view(l.body, (0, -st.scroll));
+            layout::item_rect(st.view, i, st.cols, l.body.w).offset(l.body.x, l.body.y)
+        }
+        DropTarget::Crumb(i) => lookup(&st.crumb_rects, i),
+        DropTarget::Place(i) => lookup(&st.place_rects, i),
+    };
+    ui.blend(rect, 6, accent, DROP_ALPHA);
+    ui.outline(rect, accent);
+    ui.set_view(full, (0, 0));
+    drag_label(ui, st);
+}
+
+fn lookup(rects: &[(Rect, usize)], tag: usize) -> Rect {
+    rects
+        .iter()
+        .find(|(_, t)| *t == tag)
+        .map_or(Rect::new(0, 0, 0, 0), |(r, _)| *r)
+}
+
+fn drag_label(ui: &Ui, st: &State) {
+    let th = theme::current();
+    let (px, py) = crate::wm::input::cursor_pos();
+    let (ox, oy) = st.client_origin;
+    let text = alloc::format!("Move {} item(s)", st.selection.count());
+    let s = style(Face::UiBold, LABEL_PX - 1, th.label_text);
+    let w = text::width(&text, &s) + 2 * LABEL_PAD;
+    let x = px as i32 - ox as i32 + LABEL_OFFSET;
+    let at = Rect::new(x, py as i32 - oy as i32 + LABEL_OFFSET, w, LABEL_H);
+    ui.ring(at, 6, 1, theme::accent_color(), th.menu_bg);
+    ui.text_centered(at, &text, &s);
+}
+
+fn props_panel(ui: &mut Ui, client: (u32, u32), panel: &PropsPanel) {
+    let th = theme::current();
+    let full = Rect::new(0, 0, client.0, client.1);
+    ui.set_view(full, (0, 0));
+    ui.blend(full, 0, 0x000000, SCRIM_ALPHA);
+    ui.register(Target::Backdrop.key(), full, HitKind::Custom, false);
+    let h = PANEL_HEADER + panel.rows.len() as u32 * PANEL_ROW_H + PANEL_FOOTER;
+    let w = client.0.min(PANEL_W);
+    let top = client.1.saturating_sub(h) as i32 / 2;
+    let card = Rect::new((client.0 - w) as i32 / 2, top, w, h);
+    ui.ring(card, 10, 1, th.panel_border, th.menu_bg);
+    let title = style(Face::UiBold, LABEL_PX + 3, th.label_text);
+    ui.text(card.x + PANEL_PAD, card.y + 16, &panel.title, &title);
+    let key = style(Face::UiBold, LABEL_PX - 1, th.label_text_dim);
+    let val = style(Face::Ui, LABEL_PX, th.label_text);
+    let mut y = card.y + PANEL_HEADER as i32;
+    let val_w = w.saturating_sub((PANEL_KEY_W + PANEL_PAD) as u32);
+    for (k, v) in &panel.rows {
+        ui.text(card.x + PANEL_PAD, y, k, &key);
+        ui.text_fitted(card.x + PANEL_KEY_W, y, val_w, v, &val);
+        y += PANEL_ROW_H as i32;
+    }
+    let ok = Rect::new(card.right() - 96 - PANEL_PAD, card.bottom() - 48, 96, 32);
+    ui.button(Target::PropsOk.key(), ok, "OK", ButtonKind::Primary, true);
 }

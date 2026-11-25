@@ -11,6 +11,18 @@ use alloc::vec::Vec;
 
 /// Mount point of the host shared folder.
 const SHARE_ROOT: &str = "/share";
+/// Whether `path` is the host shared folder or inside it.
+#[must_use]
+pub fn is_share(path: &str) -> bool {
+    path == SHARE_ROOT || path.starts_with("/share/")
+}
+
+/// Alert text for an operation the host share device cannot do.
+#[must_use]
+pub fn share_unsupported(what: &str) -> String {
+    format!("The shared folder does not support {what}.")
+}
+
 /// Deepest folder nesting a recursive operation follows (guards cycles).
 const MAX_DEPTH: usize = 32;
 
@@ -58,6 +70,9 @@ impl OpError {
             }
             OpError::Missing(name) => format!("\"{name}\" no longer exists."),
             OpError::TooDeep(name) => format!("\"{name}\" is nested too deeply."),
+            OpError::Fs { path, err } if is_share(path) && *err == VfsError::ReadOnly => {
+                share_unsupported("creating folders, renaming or deleting items")
+            }
             OpError::Fs { path, err } => format!("{path}: {err}"),
         }
     }
@@ -207,6 +222,24 @@ fn remove_depth(fs: &mut dyn Fs, path: &str, depth: usize) -> Result<(), OpError
     fs.remove(path).map_err(|e| fs_err(path, e))
 }
 
+/// Move `src` to the exact path `dest` with a rename, falling back to copy
+/// + delete. Folders cannot move into themselves.
+pub fn move_to_path(fs: &mut dyn Fs, src: &str, dest: &str, cap: u64) -> Result<(), OpError> {
+    if is_share(src) {
+        return Err(fs_err(src, VfsError::ReadOnly));
+    }
+    let is_dir = fs.stat(src).is_some_and(|e| e.is_dir);
+    if is_dir && paths::is_same_or_inside(dest, src) {
+        return Err(OpError::IntoSelf(paths::file_name(src).to_string()));
+    }
+    if fs.rename(src, dest).is_ok() {
+        return Ok(());
+    }
+    let plan = plan_copy(fs, src, dest, cap)?;
+    execute(fs, &plan)?;
+    remove_tree(fs, src)
+}
+
 /// Move `src` into `dest_dir` (a free name is chosen on conflict). Uses a
 /// rename and falls back to copy + delete; returns the new path.
 pub fn move_item(fs: &mut dyn Fs, src: &str, dest_dir: &str, cap: u64) -> Result<String, OpError> {
@@ -214,16 +247,7 @@ pub fn move_item(fs: &mut dyn Fs, src: &str, dest_dir: &str, cap: u64) -> Result
         return Ok(src.to_string());
     }
     let dest = destination_for(fs, src, dest_dir);
-    let is_dir = fs.stat(src).is_some_and(|e| e.is_dir);
-    if is_dir && paths::is_same_or_inside(&dest, src) {
-        return Err(OpError::IntoSelf(paths::file_name(src).to_string()));
-    }
-    if fs.rename(src, &dest).is_ok() {
-        return Ok(dest);
-    }
-    let plan = plan_copy(fs, src, &dest, cap)?;
-    execute(fs, &plan)?;
-    remove_tree(fs, src)?;
+    move_to_path(fs, src, &dest, cap)?;
     Ok(dest)
 }
 
@@ -308,14 +332,23 @@ impl Fs for VfsFs {
     }
 
     fn mkdir(&mut self, path: &str) -> Result<(), VfsError> {
+        if is_share(path) {
+            return Err(VfsError::ReadOnly);
+        }
         vfs::mkdir(path).map(|_| ())
     }
 
     fn remove(&mut self, path: &str) -> Result<(), VfsError> {
+        if is_share(path) {
+            return Err(VfsError::ReadOnly);
+        }
         vfs::remove(path)
     }
 
     fn rename(&mut self, from: &str, to: &str) -> Result<(), VfsError> {
+        if is_share(from) || is_share(to) {
+            return Err(VfsError::ReadOnly);
+        }
         vfs::rename(from, to)
     }
 }
@@ -323,101 +356,7 @@ impl Fs for VfsFs {
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
-    use alloc::collections::BTreeMap;
-
-    /// In-memory filesystem; `None` marks a folder.
-    #[derive(Default)]
-    struct MemFs {
-        nodes: BTreeMap<String, Option<Vec<u8>>>,
-        fail_write_containing: Option<&'static str>,
-        no_rename: bool,
-    }
-
-    impl MemFs {
-        fn with(items: &[(&str, Option<&str>)]) -> Self {
-            let mut fs = MemFs::default();
-            fs.nodes.insert("/".into(), None);
-            for (path, data) in items {
-                fs.nodes
-                    .insert((*path).into(), data.map(|d| d.as_bytes().to_vec()));
-            }
-            fs
-        }
-
-        fn paths(&self) -> Vec<String> {
-            self.nodes.keys().cloned().collect()
-        }
-    }
-
-    impl Fs for MemFs {
-        fn list(&self, dir: &str) -> Result<Vec<Entry>, VfsError> {
-            if !matches!(self.nodes.get(dir), Some(None)) {
-                return Err(VfsError::NotADirectory);
-            }
-            Ok(self
-                .nodes
-                .keys()
-                .filter(|p| p.as_str() != dir && paths::parent(p) == dir)
-                .filter_map(|p| self.stat(p))
-                .collect())
-        }
-
-        fn stat(&self, path: &str) -> Option<Entry> {
-            let node = self.nodes.get(path)?;
-            Some(Entry {
-                name: paths::file_name(path).into(),
-                is_dir: node.is_none(),
-                size: node.as_ref().map_or(0, |d| d.len() as u64),
-                mtime: 0,
-            })
-        }
-
-        fn read(&self, path: &str) -> Result<Vec<u8>, VfsError> {
-            match self.nodes.get(path) {
-                Some(Some(data)) => Ok(data.clone()),
-                Some(None) => Err(VfsError::NotAFile),
-                None => Err(VfsError::NotFound),
-            }
-        }
-
-        fn write(&mut self, path: &str, data: &[u8]) -> Result<(), VfsError> {
-            if self.fail_write_containing.is_some_and(|s| path.contains(s)) {
-                return Err(VfsError::IOError);
-            }
-            self.nodes.insert(path.into(), Some(data.to_vec()));
-            Ok(())
-        }
-
-        fn mkdir(&mut self, path: &str) -> Result<(), VfsError> {
-            self.nodes.insert(path.into(), None);
-            Ok(())
-        }
-
-        fn remove(&mut self, path: &str) -> Result<(), VfsError> {
-            self.nodes
-                .remove(path)
-                .map(|_| ())
-                .ok_or(VfsError::NotFound)
-        }
-
-        fn rename(&mut self, from: &str, to: &str) -> Result<(), VfsError> {
-            if self.no_rename {
-                return Err(VfsError::Busy);
-            }
-            let moved: Vec<String> = self
-                .nodes
-                .keys()
-                .filter(|p| paths::is_same_or_inside(p, from))
-                .cloned()
-                .collect();
-            for old in moved {
-                let node = self.nodes.remove(&old).unwrap_or(None);
-                let new = format!("{}{}", to, &old[from.len()..]);
-                self.nodes.insert(new, node);
-            }
-            Ok(())
-        }
-    }
+    use crate::apps::files::testfs::MemFs;
 
     const CAP: u64 = 1000;
 
@@ -540,6 +479,38 @@ mod tests {
         assert_eq!(move_item(&mut fs, "/a", "/dest", CAP), Ok("/dest/a".into()));
         assert!(fs.stat("/a").is_none());
         assert_eq!(fs.read("/dest/a/sub/two.txt"), Ok(b"22".to_vec()));
+    }
+
+    #[test]
+    fn moving_out_of_the_share_is_refused_before_copying() {
+        let mut fs = MemFs::with(&[
+            ("/share", None),
+            ("/share/a.txt", Some("x")),
+            ("/dest", None),
+        ]);
+        let err = move_item(&mut fs, "/share/a.txt", "/dest", CAP);
+        assert!(matches!(err, Err(OpError::Fs { .. })));
+        assert!(fs.stat("/dest/a.txt").is_none());
+    }
+
+    #[test]
+    fn share_errors_explain_what_is_unsupported() {
+        let err = OpError::Fs {
+            path: "/share/x".into(),
+            err: VfsError::ReadOnly,
+        };
+        assert!(err.text().starts_with("The shared folder does not support"));
+        assert!(is_share("/share") && is_share("/share/a") && !is_share("/shared"));
+    }
+
+    #[test]
+    fn move_to_path_moves_to_the_exact_name() {
+        let mut fs = tree();
+        assert_eq!(
+            move_to_path(&mut fs, "/note.txt", "/dest/renamed.txt", CAP),
+            Ok(())
+        );
+        assert!(fs.stat("/dest/renamed.txt").is_some() && fs.stat("/note.txt").is_none());
     }
 
     #[test]
