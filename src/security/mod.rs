@@ -11,6 +11,9 @@
 //! User processes start with a restricted capability set that can be
 //! expanded only by explicit grant from a capable process.
 
+pub mod hmac;
+pub mod random;
+
 use crate::println;
 use crate::sched::{self, find_task_index, Pid, TASK_TABLE};
 

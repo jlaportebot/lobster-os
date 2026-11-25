@@ -335,6 +335,15 @@ pub fn confirm(title: &str, message: &str) {
 
 /// Show a prompt dialog
 pub fn prompt(title: &str, message: &str, default: &str) {
+    prompt_with(title, message, default, false);
+}
+
+/// Show a prompt whose text is drawn as asterisks (passwords).
+pub fn prompt_secret(title: &str, message: &str) {
+    prompt_with(title, message, "", true);
+}
+
+fn prompt_with(title: &str, message: &str, default: &str, masked: bool) {
     let fb = match crate::wm::compositor::fb_info() {
         Some(fb) => fb,
         None => return,
@@ -354,6 +363,7 @@ pub fn prompt(title: &str, message: &str, default: &str) {
     input.h = INPUT_H;
     input.set_text(default);
     input.state = WidgetState::Focused;
+    input.masked = masked;
 
     let dialog = Dialog {
         kind: DialogKind::Prompt {
@@ -1079,16 +1089,14 @@ pub fn draw(fb: &FramebufferInfo) {
                 &inner,
                 input_x + INPUT_PAD_X,
                 text_y,
-                input.text_str(),
+                &input.shown_text(),
                 &input_style,
             );
         }
 
         if input.state == WidgetState::Focused {
-            let before =
-                core::str::from_utf8(&input.text[input.scroll_offset as usize..input.cursor_pos])
-                    .unwrap_or("");
-            let cursor_px = input_x + INPUT_PAD_X + text::width(before, &input_style);
+            let before = input.shown_before_cursor();
+            let cursor_px = input_x + INPUT_PAD_X + text::width(&before, &input_style);
             for dy in 2..(input.h - 2) {
                 graphics::draw_pixel(fb, cursor_px, input_y + dy, theme.input_cursor);
                 graphics::draw_pixel(fb, cursor_px + 1, input_y + dy, theme.input_cursor);

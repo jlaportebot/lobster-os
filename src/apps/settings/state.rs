@@ -28,6 +28,8 @@ pub enum Pending {
     AddUser,
     RemoveUser(String),
     Uninstall(String),
+    /// Change-password flow, one dialog per step.
+    Password(super::passwords::Step),
 }
 
 /// A dialog waiting for the mouse button to be released before it opens.
@@ -37,6 +39,8 @@ pub struct QueuedDialog {
     pub message: String,
     /// Text prompt (true) or yes/no confirmation (false).
     pub is_prompt: bool,
+    /// Prompt whose text is hidden (passwords).
+    pub is_secret: bool,
 }
 
 /// One installed package as shown on the Apps page.

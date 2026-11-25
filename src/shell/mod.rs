@@ -923,6 +923,11 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
             cmd_uptime(out);
             0
         }
+        c if crate::wm::lock::commands::NAMES.contains(&c) => {
+            let (code, text) = crate::wm::lock::commands::run_with_args(c, &args[..argc]);
+            out.puts(&text);
+            code
+        }
         "mem" | "memory" => {
             cmd_mem(out);
             0
@@ -3670,7 +3675,7 @@ fn cmd_passwd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     let target_user = if argc >= 2 { args[1] } else { "root" };
 
     // Check if target user exists
-    if !crate::users::passwd::user_exists(target_user) {
+    if !crate::users::auth::account_exists(target_user) {
         crate::println!("passwd: user '{}' does not exist", target_user);
         crate::println!("passwd: use 'useradd -m <username>' to create a new user first");
         return 1;
@@ -3702,14 +3707,16 @@ fn cmd_passwd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
         .unwrap_or("")
         .trim();
 
-    if new_password != confirm_password {
-        crate::println!("passwd: passwords do not match");
-        return 1;
-    }
-
-    if new_password.is_empty() {
-        crate::println!("passwd: password cannot be empty");
-        return 1;
+    match crate::users::policy::validate_change(new_password, confirm_password) {
+        Ok(crate::users::policy::Change::Set) => {}
+        Ok(crate::users::policy::Change::Remove) => {
+            crate::println!("passwd: password cannot be empty (use Settings to remove it)");
+            return 1;
+        }
+        Err(e) => {
+            crate::println!("passwd: {}", e.message());
+            return 1;
+        }
     }
 
     // Change password directly (bypass old password check for admin)
@@ -3862,9 +3869,9 @@ fn cmd_useradd(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     let user_entry =
         crate::users::passwd::PasswdEntry::new(username, next_uid, next_gid, &home, shell);
 
-    // Create shadow entry — use provided password or locked ("!")
-    let shadow_password = password.unwrap_or("!");
-    let shadow_entry = crate::users::shadow::ShadowEntry::new(username, shadow_password);
+    // Create shadow entry — hash the provided password, else no password
+    let shadow_hash = password.map_or(alloc::string::String::new(), crate::users::hash_password);
+    let shadow_entry = crate::users::shadow::ShadowEntry::new(username, &shadow_hash);
 
     // Create user's primary group
     let group_entry = crate::users::group::GroupEntry::new(username, next_gid);

@@ -1,9 +1,12 @@
 //! Authentication for LobsterOS
 
 use crate::users::passwd;
+use crate::users::password::{self, Verdict};
 use crate::users::shadow;
-use alloc::format;
 use alloc::string::String;
+
+/// Milliseconds in a day, for shadow-file day counts.
+const MS_PER_DAY: u64 = 86_400_000;
 
 /// Authentication errors
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,80 +42,118 @@ impl core::fmt::Display for AuthError {
     }
 }
 
-/// Hash a password using Argon2id
-/// Returns hash in format: $argon2id$v=19$m=65536,t=3,p=4$salt$hash
+/// Hash a password for storage: PBKDF2-HMAC-SHA-256 with a random salt
+/// (`$pbkdf2-sha256$<iterations>$<salt>$<hash>`, see [`crate::users::password`]).
 pub fn hash_password(password: &str) -> String {
-    // In a real implementation, this would use argon2 crate
-    // For now, use a simple placeholder hash format
-    // Real implementation would be:
-    // let salt = generate_salt();
-    // let hash = argon2::hash(password, &salt);
-    // format!("$argon2id$v=19$m=65536,t=3,p=4${}${}$", salt_b64, hash_b64)
-
-    // Placeholder: simple hash using SHA256
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(password.as_bytes());
-    let hash = hasher.finalize();
-    format!("$sha256${}", encode_hex(&hash))
+    password::hash(password)
 }
 
-fn encode_hex(bytes: &[u8]) -> String {
-    let mut result = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        result.push(char::from_digit((b >> 4) as u32, 16).unwrap());
-        result.push(char::from_digit((b & 0xF) as u32, 16).unwrap());
-    }
-    result
-}
-
-/// Verify a password against a hash
-/// Supports: $argon2id$... and $sha256$...
+/// Verify a password against a stored hash (current or legacy `$sha256$`).
 pub fn verify_password(password: &str, hash: &str) -> bool {
-    if hash.starts_with("$argon2id$") {
-        // Argon2id verification would go here
-        // For now, just compare
-        hash_password(password) == hash
-    } else if hash.starts_with("$sha256$") {
-        hash_password(password) == hash
-    } else {
-        // Legacy or unknown format
-        false
+    password::verify(password, hash) != Verdict::Mismatch
+}
+
+/// True when the stored hash means "no password set" (empty field).
+pub fn is_passwordless(stored_hash: &str) -> bool {
+    stored_hash.is_empty()
+}
+
+/// Whether an account needs a password, derived from its stored hash field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordState {
+    /// No password: an empty entry (or the legacy `!` placeholder written by
+    /// older Settings and `useradd` builds) unlocks with an empty password.
+    None,
+    /// A password hash is stored.
+    Set,
+    /// Login disabled (`*`, or `!` in front of a hash).
+    Locked,
+}
+
+impl PasswordState {
+    /// Classify a shadow hash field.
+    #[must_use]
+    pub fn from_hash(stored: &str) -> Self {
+        match stored {
+            "" | "!" => Self::None,
+            s if s.starts_with('*') || s.starts_with('!') => Self::Locked,
+            _ => Self::Set,
+        }
+    }
+}
+
+/// True if `name` is the implicit desktop user or has a passwd entry.
+pub fn account_exists(name: &str) -> bool {
+    name == crate::users::DEFAULT_USER || passwd::user_exists(name)
+}
+
+/// Password state of an account; accounts without a shadow entry have none.
+pub fn password_state(username: &str) -> PasswordState {
+    shadow::find_shadow(username).map_or(PasswordState::None, |e| {
+        PasswordState::from_hash(&e.password_hash)
+    })
+}
+
+/// Pure decision of [`check_password`]: what to do with `password` given the
+/// account's stored hash field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// Accept as is.
+    Accept,
+    /// Accept, and re-hash the stored value in the current format.
+    AcceptAndRehash,
+    /// Refuse for this reason.
+    Reject(AuthError),
+}
+
+/// Judge `password` against a stored hash field without touching the disk.
+/// A passwordless account accepts only the empty password.
+#[must_use]
+pub fn decide(stored: &str, password: &str) -> Decision {
+    match PasswordState::from_hash(stored) {
+        PasswordState::Locked => Decision::Reject(AuthError::AccountLocked),
+        PasswordState::None if password.is_empty() => Decision::Accept,
+        PasswordState::None => Decision::Reject(AuthError::InvalidPassword),
+        PasswordState::Set => match password::verify(password, stored) {
+            Verdict::Mismatch => Decision::Reject(AuthError::InvalidPassword),
+            Verdict::Match => Decision::Accept,
+            Verdict::MatchNeedsRehash => Decision::AcceptAndRehash,
+        },
+    }
+}
+
+/// Check `password` for `username` (desktop and shell share this). A correct
+/// password stored in the legacy format is transparently re-hashed.
+pub fn check_password(username: &str, password: &str) -> Result<(), AuthError> {
+    if !account_exists(username) {
+        return Err(AuthError::UserNotFound);
+    }
+    let stored = shadow::find_shadow(username)
+        .map(|e| e.password_hash)
+        .unwrap_or_default();
+    match decide(&stored, password) {
+        Decision::Accept => Ok(()),
+        Decision::Reject(why) => Err(why),
+        Decision::AcceptAndRehash => {
+            if set_password(username, password).is_err() {
+                crate::println!("[auth] could not upgrade hash for {}", username);
+            }
+            Ok(())
+        }
     }
 }
 
 /// Login a user with username and password
 pub fn login_user(username: &str, password: &str) -> Result<passwd::PasswdEntry, AuthError> {
-    // Find user in /etc/passwd
     let user = passwd::find_user(username).ok_or(AuthError::UserNotFound)?;
-
-    // Find shadow entry
-    let shadow_entry = shadow::find_shadow(username).ok_or(AuthError::ShadowMismatch)?;
-
-    // Check if account is locked
-    if shadow_entry.is_locked() {
-        return Err(AuthError::AccountLocked);
-    }
-
-    // Check if account is expired
-    let current_day = (crate::arch::timer::Timer::uptime_ms() / 86400000) as i64;
-    if shadow_entry.is_expired(current_day) {
+    check_password(username, password)?;
+    let Some(entry) = shadow::find_shadow(username) else {
+        return Ok(user);
+    };
+    let current_day = (crate::arch::timer::Timer::uptime_ms() / MS_PER_DAY) as i64;
+    if entry.is_expired(current_day) {
         return Err(AuthError::AccountExpired);
     }
-
-    // Verify password
-    if !verify_password(password, &shadow_entry.password_hash) {
-        return Err(AuthError::InvalidPassword);
-    }
-
-    // Check if password is expired
-    if shadow_entry.last_change > 0 && shadow_entry.max_age > 0 {
-        let expiry = shadow_entry.last_change + shadow_entry.max_age;
-        if current_day > expiry {
-            return Err(AuthError::PasswordExpired);
-        }
-    }
-
     Ok(user)
 }
 
@@ -122,27 +163,8 @@ pub fn change_password(
     old_password: &str,
     new_password: &str,
 ) -> Result<(), AuthError> {
-    // Verify old password first
-    login_user(username, old_password)?;
-
-    // Hash new password
-    let new_hash = hash_password(new_password);
-
-    // Update /etc/shadow
-    let mut entries = crate::users::shadow::read_shadow_file().unwrap_or_default();
-    for entry in &mut entries {
-        if entry.username == username {
-            entry.password_hash = new_hash;
-            entry.last_change = (crate::arch::timer::Timer::uptime_ms() / 86400000) as i64; // Approximate days since epoch
-            break;
-        }
-    }
-    crate::users::shadow::write_shadow_file(&entries)?;
-    crate::println!(
-        "[auth] Password changed for {} and written to /etc/shadow",
-        username
-    );
-    Ok(())
+    check_password(username, old_password)?;
+    set_password(username, new_password)
 }
 
 /// Check if user is root (UID 0)
@@ -151,33 +173,28 @@ pub fn is_root(uid: u32) -> bool {
 }
 
 /// Set password directly (admin mode, skips old password verification).
-/// Used by `passwd` command when running as root.
+/// An empty `new_password` removes the password. The hash is salted PBKDF2
+/// and is written to /etc/shadow, which the persistent prefix map keeps on
+/// the disk.
 pub fn set_password(username: &str, new_password: &str) -> Result<(), AuthError> {
-    // Verify user exists
-    if passwd::find_user(username).is_none() {
+    if !account_exists(username) {
         return Err(AuthError::UserNotFound);
     }
-
-    // Hash new password
-    let new_hash = hash_password(new_password);
-
-    // Update /etc/shadow
-    let mut entries = crate::users::shadow::read_shadow_file().unwrap_or_default();
-    let mut found = false;
-    for entry in &mut entries {
-        if entry.username == username {
+    let new_hash = if new_password.is_empty() {
+        String::new()
+    } else {
+        hash_password(new_password)
+    };
+    let today = (crate::arch::timer::Timer::uptime_ms() / MS_PER_DAY) as i64;
+    let mut entries = shadow::read_shadow_file().unwrap_or_default();
+    match entries.iter_mut().find(|e| e.username == username) {
+        Some(entry) => {
             entry.password_hash = new_hash;
-            entry.last_change = (crate::arch::timer::Timer::uptime_ms() / 86400000) as i64;
-            found = true;
-            break;
+            entry.last_change = today;
         }
+        None => entries.push(shadow::ShadowEntry::new(username, &new_hash)),
     }
-    if !found {
-        // User exists in passwd but not shadow — add entry
-        let shadow_entry = crate::users::shadow::ShadowEntry::new(username, new_password);
-        entries.push(shadow_entry);
-    }
-    crate::users::shadow::write_shadow_file(&entries)?;
+    shadow::write_shadow_file(&entries)?;
     Ok(())
 }
 
@@ -203,4 +220,68 @@ pub fn sudo_uid(username: &str, target_user: Option<&str>) -> Result<u32, AuthEr
     let target_entry = passwd::find_user(target).ok_or(AuthError::UserNotFound)?;
 
     Ok(target_entry.uid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_state_classifies_hash_fields() {
+        assert_eq!(PasswordState::from_hash(""), PasswordState::None);
+        assert_eq!(PasswordState::from_hash("!"), PasswordState::None);
+        assert_eq!(PasswordState::from_hash("*"), PasswordState::Locked);
+        assert_eq!(
+            PasswordState::from_hash("!$pbkdf2-sha256$1$a$b"),
+            PasswordState::Locked
+        );
+        assert_eq!(
+            PasswordState::from_hash("$pbkdf2-sha256$1$a$b"),
+            PasswordState::Set
+        );
+    }
+
+    #[test]
+    fn passwordless_account_accepts_only_empty_password() {
+        assert_eq!(decide("", ""), Decision::Accept);
+        assert_eq!(
+            decide("", "x"),
+            Decision::Reject(AuthError::InvalidPassword)
+        );
+    }
+
+    #[test]
+    fn locked_account_rejects_everything() {
+        assert_eq!(decide("*", ""), Decision::Reject(AuthError::AccountLocked));
+    }
+
+    #[test]
+    fn set_password_hash_accepts_right_and_rejects_wrong() {
+        let stored = hash_password("s3cret");
+        assert_eq!(decide(&stored, "s3cret"), Decision::Accept);
+        assert_eq!(
+            decide(&stored, "S3cret"),
+            Decision::Reject(AuthError::InvalidPassword)
+        );
+        assert_eq!(
+            decide(&stored, ""),
+            Decision::Reject(AuthError::InvalidPassword)
+        );
+    }
+
+    #[test]
+    fn legacy_hash_is_accepted_and_flagged_for_rehash() {
+        let legacy = "$sha256$5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8";
+        assert_eq!(decide(legacy, "password"), Decision::AcceptAndRehash);
+        assert!(verify_password("password", legacy));
+        assert!(!verify_password("nope", legacy));
+    }
+
+    #[test]
+    fn garbage_hash_never_authenticates() {
+        assert_eq!(
+            decide("garbage", "garbage"),
+            Decision::Reject(AuthError::InvalidPassword)
+        );
+    }
 }

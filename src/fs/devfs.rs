@@ -111,52 +111,24 @@ fn dev_zero_write(_dev_idx: usize, _buf: *const u8, len: usize) -> usize {
     len
 }
 
-/// /dev/urandom: simple xorshift64 PRNG (not cryptographically secure)
-static mut PRNG_STATE: u64 = 0x12345678_9ABCDEF0;
-
-fn xorshift64() -> u64 {
-    unsafe {
-        let mut x = PRNG_STATE;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        PRNG_STATE = x;
-        x
-    }
-}
-
+/// /dev/urandom: bytes from the kernel CSPRNG (`security::random`).
 fn dev_urandom_read(_dev_idx: usize, buf: *mut u8, len: usize) -> usize {
-    let mut off = 0usize;
-    while off + 8 <= len {
-        let val = xorshift64();
-        unsafe {
-            core::ptr::copy_nonoverlapping(&val as *const u64 as *const u8, buf.add(off), 8);
-        }
-        off += 8;
+    if len == 0 {
+        return 0;
     }
-    // Remaining bytes
-    if off < len {
-        let val = xorshift64();
-        let remaining = len - off;
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                &val as *const u64 as *const u8,
-                buf.add(off),
-                remaining,
-            );
-        }
-    }
+    // SAFETY: the VFS device layer passes a buffer valid for `len` writable bytes.
+    let out = unsafe { core::slice::from_raw_parts_mut(buf, len) };
+    crate::security::random::fill(out);
     len
 }
 
+/// Writes are mixed into the generator state; they never replace it, so a
+/// writer cannot force a known sequence.
 fn dev_urandom_write(_dev_idx: usize, buf: *const u8, len: usize) -> usize {
-    // Writing to urandom seeds the PRNG
-    if len >= 8 {
-        unsafe {
-            let mut seed = 0u64;
-            core::ptr::copy_nonoverlapping(buf, &mut seed as *mut u64 as *mut u8, 8);
-            PRNG_STATE = seed;
-        }
+    if len > 0 {
+        // SAFETY: the VFS device layer passes a buffer valid for `len` readable bytes.
+        let data = unsafe { core::slice::from_raw_parts(buf, len) };
+        crate::security::random::add_entropy(data);
     }
     len
 }
@@ -503,12 +475,6 @@ pub fn init() {
     // when PTY pairs are allocated via /dev/ptmx
     crate::fs::vfs::create_dir("/dev/pts").ok();
     println!("[devfs] Created /dev/pts directory");
-
-    // Seed PRNG with the architectural counter (the BCM system timer is not
-    // implemented on every platform, reading it faults on the host).
-    unsafe {
-        PRNG_STATE ^= crate::arch::ArchTimer::uptime_ms();
-    }
 
     println!(
         "[devfs] /dev virtual filesystem initialized ({} devices)",

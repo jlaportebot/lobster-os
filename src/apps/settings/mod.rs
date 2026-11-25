@@ -14,6 +14,7 @@ pub mod format;
 pub mod layout;
 pub mod model;
 mod pages;
+pub mod passwords;
 mod render;
 pub mod resolution;
 pub mod sound;

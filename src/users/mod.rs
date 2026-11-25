@@ -6,8 +6,11 @@ use alloc::vec::Vec;
 pub mod auth;
 pub mod group;
 pub mod passwd;
+pub mod password;
+pub mod policy;
 pub mod session;
 pub mod shadow;
+pub mod throttle;
 
 #[allow(unused_imports)]
 pub use auth::{change_password, hash_password, login_user, verify_password, AuthError};

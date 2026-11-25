@@ -190,6 +190,8 @@ pub struct TextInput {
     pub cursor_pos: usize,
     pub state: WidgetState,
     pub scroll_offset: u32,
+    /// Draw the text as asterisks (password entry).
+    pub masked: bool,
 }
 
 impl TextInput {
@@ -203,6 +205,7 @@ impl TextInput {
         cursor_pos: 0,
         state: WidgetState::Normal,
         scroll_offset: 0,
+        masked: false,
     };
 
     pub fn text_str(&self) -> &str {
@@ -260,7 +263,8 @@ impl TextInput {
         // Text content (with scroll offset)
         if self.text_len > 0 {
             let visible = &self.text[self.scroll_offset as usize..self.text_len];
-            let visible_str = core::str::from_utf8(visible).unwrap_or("");
+            let shown = self.displayed(visible);
+            let visible_str = shown.as_str();
             let style = widget_text(Face::Ui, theme.input_text, self.h);
             let inner = fb.clipped(
                 px + TEXT_PAD_X / 2,
@@ -276,7 +280,8 @@ impl TextInput {
         if self.state == WidgetState::Focused {
             let style = widget_text(Face::Ui, theme.input_text, self.h);
             let before = &self.text[self.scroll_offset as usize..self.cursor_pos];
-            let before = core::str::from_utf8(before).unwrap_or("");
+            let before = self.displayed(before);
+            let before = before.as_str();
             let cursor_px = px + TEXT_PAD_X + text::width(before, &style);
             // Draw 2px wide cursor line
             for dy in 2..(self.h - 2) {
@@ -284,6 +289,24 @@ impl TextInput {
                 graphics::draw_pixel(fb, cursor_px + 1, py + dy, theme.input_cursor);
             }
         }
+    }
+
+    /// The visible text as drawn (asterisks when masked).
+    pub fn shown_text(&self) -> alloc::string::String {
+        self.displayed(&self.text[self.scroll_offset as usize..self.text_len])
+    }
+
+    /// The visible text left of the cursor as drawn, for cursor placement.
+    pub fn shown_before_cursor(&self) -> alloc::string::String {
+        self.displayed(&self.text[self.scroll_offset as usize..self.cursor_pos])
+    }
+
+    /// The text as drawn: the bytes themselves, or one `*` per byte when masked.
+    fn displayed(&self, bytes: &[u8]) -> alloc::string::String {
+        if self.masked {
+            return "*".repeat(bytes.len());
+        }
+        alloc::string::String::from(core::str::from_utf8(bytes).unwrap_or(""))
     }
 
     pub fn hit_test(&self, px: u32, py: u32) -> bool {
@@ -853,4 +876,26 @@ pub fn register_hit_region(
 /// Call at the start of each frame or when the window is destroyed.
 pub fn clear_hit_regions(win_id: u32) {
     crate::wm::hit_region::clear(win_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn masked_input_shows_one_asterisk_per_byte() {
+        let mut input = TextInput::ZERO;
+        input.set_text("abcd");
+        input.masked = true;
+        assert_eq!(input.shown_text(), "****");
+        assert_eq!(input.shown_before_cursor(), "****");
+        assert_eq!(input.text_str(), "abcd");
+    }
+
+    #[test]
+    fn unmasked_input_shows_the_text() {
+        let mut input = TextInput::ZERO;
+        input.set_text("abcd");
+        assert_eq!(input.shown_text(), "abcd");
+    }
 }
