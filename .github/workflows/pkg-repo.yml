@@ -7,7 +7,7 @@ name: pkg-repo
 #   other refs        -> build, sign, upload a workflow artifact only
 on:
   push:
-    branches: [master]
+    branches: [master, feature/o46-app-store]
     paths:
       - 'packages/**'
       - 'tools/pkgrepo.py'
