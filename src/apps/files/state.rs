@@ -1,10 +1,12 @@
 //! Mutable state of the Files window, kept between frames.
 
+use super::dnd::DragState;
 use super::history::History;
 use super::layout::Layout;
 use super::model::{Entry, Sort, ViewMode};
 use super::selection::Selection;
-use crate::wm::controls::ControlState;
+use super::typeahead::TypeAhead;
+use crate::wm::controls::{ControlState, Rect};
 use crate::wm::desktop_layout::ClickTracker;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -23,7 +25,24 @@ pub enum Pending {
     NewFolder,
     NewFile,
     Rename(String),
+    /// Permanent deletion of these paths.
     Delete(Vec<String>),
+    EmptyTrash,
+}
+
+/// Where a drag would drop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropTarget {
+    Item(usize),
+    Crumb(usize),
+    Place(usize),
+}
+
+/// Rows of the Properties panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PropsPanel {
+    pub title: String,
+    pub rows: Vec<(String, String)>,
 }
 
 /// Shape of a dialog waiting for its turn.
@@ -66,6 +85,18 @@ pub struct State {
     pub clicks: ClickTracker,
     /// Item to scroll into view on the next frame.
     pub reveal: Option<usize>,
+    /// The trash holds something (drives its icon).
+    pub trash_full: bool,
+    pub props: Option<PropsPanel>,
+    pub drag: DragState,
+    pub drop: Option<DropTarget>,
+    /// Breadcrumb segments and places of the last frame (client coords)
+    /// with the index they stand for, for drop hit-testing.
+    pub crumb_rects: Vec<(Rect, usize)>,
+    pub place_rects: Vec<(Rect, usize)>,
+    /// Screen position of the client area's top-left corner.
+    pub client_origin: (u32, u32),
+    pub typeahead: TypeAhead,
 }
 
 impl State {
@@ -87,6 +118,14 @@ impl State {
             awaiting: None,
             clicks: ClickTracker::new(),
             reveal: None,
+            trash_full: false,
+            props: None,
+            drag: DragState::Idle,
+            drop: None,
+            crumb_rects: Vec::new(),
+            place_rects: Vec::new(),
+            client_origin: (0, 0),
+            typeahead: TypeAhead::new(),
         }
     }
 

@@ -89,6 +89,8 @@ pub fn render_to_windows(fb: &crate::display::fb::FramebufferInfo) {
     );
     hit_region::set_handler(win_id, on_hit);
     ops::tick(st);
+    actions::drag_tick(st);
+    st.client_origin = (cx, cy);
     let mut ui = Ui::new(&target, win_id, (cx, cy), (cw, ch), state::controls());
     render::frame(&mut ui, st, (cw, ch));
     ui.finish();
