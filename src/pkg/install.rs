@@ -286,42 +286,30 @@ impl Installer {
 
         let buffer = body;
 
-        // Verify checksum
-        if !verify_checksum(&buffer, &repo_checksum) {
-            return Err(InstallError::ChecksumMismatch);
-        }
+        let package = verify_blob(&buffer, &repo_checksum)?;
+        self.install_package(package)
+    }
 
-        // Parse package
-        let package = parse_package(&buffer)?;
-
-        // Verify package integrity
-        if !package.verify() {
-            return Err(InstallError::ChecksumMismatch);
-        }
-
-        // Check for conflicts
+    /// Install an already verified package: refuse conflicts, replace an
+    /// older installed version, extract the files, run the install script
+    /// and record it in the database.
+    pub fn install_package(&mut self, package: Package) -> Result<(), InstallError> {
         for conflict in &package.metadata.conflicts {
             if self.db.is_installed(conflict) {
                 return Err(InstallError::ConflictDetected);
             }
         }
-
-        // Extract files
+        if self.db.is_installed(&package.metadata.name) {
+            self.remove(&package.metadata.name)?;
+        }
         extract_package(&package)?;
-
-        // Run install script if present
         if let Some(script) = &package.metadata.install_script {
             run_script(script)?;
         }
-
-        // Add to database
         let install_time = crate::arch::ArchTimer::uptime_ms();
         let installed = InstalledPackage::from_package(package, install_time);
         self.db.add(installed, true);
-
-        // Save database
         self.db.save()?;
-
         Ok(())
     }
 
@@ -406,8 +394,7 @@ impl Installer {
         for pkg in installed {
             // Find latest version in repositories
             if let Some((_repo, repo_pkg)) = self.repo_manager.find_package(&pkg.metadata.name) {
-                // Compare versions (simple string comparison for now)
-                if repo_pkg.version != pkg.metadata.version {
+                if crate::pkg::version::is_newer(&repo_pkg.version, &pkg.metadata.version) {
                     crate::println!(
                         "[pkg] Upgrading {} from {} to {}",
                         pkg.metadata.name,
@@ -445,6 +432,19 @@ impl Default for Installer {
 }
 
 /// Parse package from raw bytes
+/// Check a downloaded `.lobpkg` against the checksum the index promised,
+/// parse it and check the checksum of its file data.
+pub fn verify_blob(blob: &[u8], expected_checksum: &[u8; 32]) -> Result<Package, InstallError> {
+    if !verify_checksum(blob, expected_checksum) {
+        return Err(InstallError::ChecksumMismatch);
+    }
+    let package = parse_package(blob)?;
+    if !package.verify() {
+        return Err(InstallError::ChecksumMismatch);
+    }
+    Ok(package)
+}
+
 fn parse_package(data: &[u8]) -> Result<Package, InstallError> {
     // Verify magic
     if data.len() < 8 || &data[0..4] != LOBPKG_MAGIC {
@@ -1503,6 +1503,7 @@ mod tests {
                     size: 100,
                     checksum: [0; 32],
                     download_url: "https://example.com/a.lobpkg".to_string(),
+                    store: Default::default(),
                 },
             ),
             (
@@ -1516,6 +1517,7 @@ mod tests {
                     size: 100,
                     checksum: [0; 32],
                     download_url: "https://example.com/b.lobpkg".to_string(),
+                    store: Default::default(),
                 },
             ),
         ];
@@ -1541,6 +1543,7 @@ mod tests {
                     size: 100,
                     checksum: [0; 32],
                     download_url: "https://example.com/a.lobpkg".to_string(),
+                    store: Default::default(),
                 },
             ),
             (
@@ -1554,6 +1557,7 @@ mod tests {
                     size: 100,
                     checksum: [0; 32],
                     download_url: "https://example.com/b.lobpkg".to_string(),
+                    store: Default::default(),
                 },
             ),
         ];
@@ -1577,6 +1581,7 @@ mod tests {
                     size: 100,
                     checksum: [0; 32],
                     download_url: "https://example.com/a.lobpkg".to_string(),
+                    store: Default::default(),
                 },
             ),
             (
@@ -1590,6 +1595,7 @@ mod tests {
                     size: 100,
                     checksum: [0; 32],
                     download_url: "https://example.com/b.lobpkg".to_string(),
+                    store: Default::default(),
                 },
             ),
         ];

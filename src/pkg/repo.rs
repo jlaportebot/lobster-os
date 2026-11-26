@@ -5,7 +5,7 @@
 //! - HTTP index download with JSON parsing
 //! - Ed25519 signature verification for repository authenticity
 
-use crate::pkg::package::{PackageArch, RepoPackage, RepositoryIndex};
+use crate::pkg::package::{AppKind, PackageArch, RepoPackage, RepositoryIndex, StoreMeta};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -15,6 +15,20 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 const ED25519_PUBKEY_LEN: usize = 32;
 /// Maximum signature size (Ed25519 = 64 bytes)
 const ED25519_SIG_LEN: usize = 64;
+
+/// Name of the repository every install starts with.
+pub const DEFAULT_REPO_NAME: &str = "lobster-main";
+/// Where the CI workflow publishes the catalogue (GitHub release `pkg-repo`).
+pub const DEFAULT_REPO_URL: &str =
+    "https://github.com/jlaportebot/lobster-os/releases/download/pkg-repo";
+/// Ed25519 public key (hex) the catalogue index is signed with; the private
+/// half is the `PKG_SIGNING_KEY` secret of the pkg-repo workflow.
+pub const DEFAULT_REPO_KEY_HEX: &str =
+    "fe09e6d0b0b94b7dd72b5ceaf358fb27c28e7981b4193f833602e888e2bd57bc";
+/// File next to `index.json` holding the hex signature over its exact bytes.
+pub const INDEX_SIGNATURE_FILE: &str = "index.json.sig";
+/// Priority of the default repository.
+const DEFAULT_REPO_PRIORITY: i32 = 10;
 
 /// Repository configuration
 #[derive(Debug, Clone)]
@@ -150,6 +164,8 @@ impl RepositoryManager {
         };
 
         let content = core::str::from_utf8(&data).unwrap_or("");
+        // The file is the whole truth: loading twice must not duplicate repos.
+        self.repos.clear();
         for line in content.lines() {
             if line.is_empty() || line.starts_with('#') {
                 continue;
@@ -170,64 +186,95 @@ impl RepositoryManager {
         Ok(())
     }
 
-    /// Update repository index (fetch from remote)
+    /// Fetch `index.json` of repository `name` and, when the repository
+    /// verifies signatures, its detached signature. Nothing is stored.
     #[cfg(target_arch = "aarch64")]
-    pub fn update_index(&mut self, name: &str) -> Result<(), RepoError> {
+    pub fn fetch_index_files(&self, name: &str) -> Result<IndexFiles, RepoError> {
         let repo = self
             .repos
             .iter()
             .find(|r| r.name == name && r.enabled)
             .ok_or(RepoError::NotFound)?;
-
-        // HTTP GET the index file from repo.url/index.json
         let index_url = format!("{}/index.json", repo.url);
+        let signature_url = format!("{}/{}", repo.url, INDEX_SIGNATURE_FILE);
         crate::println!("[pkg] Updating repository index from {}", index_url);
-
-        // Unified fetch — uses lobster-net MMIO in QEMU, TCP/IP on real hardware
-        let (status_code, body) =
-            crate::net::fetch_url(&index_url).ok_or(RepoError::NetworkError)?;
-
-        if status_code != 200 {
-            crate::println!("[pkg] HTTP error: {}", status_code);
-            return Err(RepoError::HttpError(status_code));
-        }
-
-        // Verify signature if public key is configured
-        if repo.verify_signatures {
-            if let Some(pubkey) = repo.public_key {
-                let json_str = core::str::from_utf8(&body).map_err(|_| RepoError::ParseError)?;
-                verify_repository_signature(json_str, &pubkey)?;
-                crate::println!("[pkg] Repository signature verified");
-            } else {
-                crate::println!(
-                    "[pkg] WARNING: verify_signatures=true but no public key configured"
-                );
-            }
-        }
-
-        // Parse JSON index
-        let json_data = core::str::from_utf8(&body).map_err(|_| RepoError::ParseError)?;
-
-        // Parse JSON - simple manual parsing for no_std
-        let mut index =
-            parse_repository_index(json_data, &repo.name.to_string(), &repo.url.to_string())?;
-
-        index.timestamp = crate::arch::timer::Timer::uptime_ms();
-
-        // Replace or add index
-        if let Some(pos) = self.indices.iter().position(|i| i.name == name) {
-            self.indices[pos] = index;
+        let body = fetch_ok(&index_url)?;
+        let signature = if repo.verify_signatures {
+            Some(fetch_ok(&signature_url).map_err(|_| RepoError::SignatureError)?)
         } else {
-            self.indices.push(index);
-        }
+            None
+        };
+        Ok(IndexFiles { body, signature })
+    }
 
-        Ok(())
+    /// Update repository index (fetch from remote)
+    #[cfg(target_arch = "aarch64")]
+    pub fn update_index(&mut self, name: &str) -> Result<(), RepoError> {
+        let files = self.fetch_index_files(name)?;
+        self.ingest_index(
+            name,
+            &files.body,
+            files.signature.as_deref(),
+            crate::arch::timer::Timer::uptime_ms(),
+        )
     }
 
     /// Update repository index (x86_64 stub)
     #[cfg(target_arch = "x86_64")]
     pub fn update_index(&mut self, _name: &str) -> Result<(), RepoError> {
         Err(RepoError::NotImplemented)
+    }
+
+    /// Make sure the default repository exists and carries the catalogue
+    /// signing key. A repository configured before signing existed (same
+    /// name and URL, no key) is upgraded in place. Returns true when the
+    /// configuration changed and should be saved.
+    pub fn ensure_default_repo(&mut self) -> bool {
+        if self.repos.is_empty() {
+            let mut repo = RepositoryConfig::new(DEFAULT_REPO_NAME, DEFAULT_REPO_URL);
+            repo.priority = DEFAULT_REPO_PRIORITY;
+            let _ = repo.set_public_key(DEFAULT_REPO_KEY_HEX);
+            self.repos.push(repo);
+            return true;
+        }
+        let Some(repo) = self.repos.iter_mut().find(|r| {
+            r.name == DEFAULT_REPO_NAME && r.url.trim_end_matches('/') == DEFAULT_REPO_URL
+        }) else {
+            return false;
+        };
+        if repo.public_key.is_some() {
+            return false;
+        }
+        repo.verify_signatures = true;
+        repo.set_public_key(DEFAULT_REPO_KEY_HEX).is_ok()
+    }
+
+    /// Check `body` against its detached `signature` (when the repository
+    /// demands one), parse it and store it as the cached index of `name`.
+    pub fn ingest_index(
+        &mut self,
+        name: &str,
+        body: &[u8],
+        signature: Option<&[u8]>,
+        now_ms: u64,
+    ) -> Result<(), RepoError> {
+        let repo = self
+            .repos
+            .iter()
+            .find(|r| r.name == name && r.enabled)
+            .ok_or(RepoError::NotFound)?;
+        if repo.verify_signatures {
+            let key = repo.public_key.ok_or(RepoError::SignatureError)?;
+            verify_detached_signature(body, signature.ok_or(RepoError::SignatureError)?, &key)?;
+        }
+        let json = core::str::from_utf8(body).map_err(|_| RepoError::ParseError)?;
+        let mut index = parse_repository_index(json, &repo.name, &repo.url)?;
+        index.timestamp = now_ms;
+        match self.indices.iter().position(|i| i.name == name) {
+            Some(pos) => self.indices[pos] = index,
+            None => self.indices.push(index),
+        }
+        Ok(())
     }
 
     /// Get index for a repository
@@ -268,6 +315,13 @@ impl Default for RepositoryManager {
     }
 }
 
+/// The two files a repository serves for its catalogue.
+#[derive(Debug, Clone)]
+pub struct IndexFiles {
+    pub body: Vec<u8>,
+    pub signature: Option<Vec<u8>>,
+}
+
 /// Repository errors
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoError {
@@ -306,103 +360,45 @@ pub fn verify_checksum(data: &[u8], expected: &[u8]) -> bool {
     result.as_slice() == expected
 }
 
-/// Verify Ed25519 signature of repository index JSON
-/// {
-///   "name": "repo-name",
-///   "url": "https://...",
-///   "packages": [...],
-///   "signature": "hex-encoded-64-byte-signature"
-/// }
-/// The signature is computed over the canonical JSON without the signature field.
-fn verify_repository_signature(
-    json: &str,
+/// Verify the detached Ed25519 signature of a repository index.
+///
+/// `signature` is the content of `index.json.sig`: 128 hex characters (the
+/// 64-byte signature) optionally followed by whitespace. It signs the exact
+/// bytes of `index.json`, so nothing is re-serialised before checking.
+pub fn verify_detached_signature(
+    data: &[u8],
+    signature: &[u8],
     pubkey: &[u8; ED25519_PUBKEY_LEN],
 ) -> Result<(), RepoError> {
-    // Extract signature field from JSON
-    let sig_field = "\"signature\"";
-    let sig_start = json.find(sig_field).ok_or(RepoError::SignatureError)?;
-    let colon_pos = json[sig_start..]
-        .find(':')
-        .ok_or(RepoError::SignatureError)?
-        + sig_start;
-    let value_start = json[colon_pos + 1..].trim_start();
-
-    if !value_start.starts_with('"') {
+    let text = core::str::from_utf8(signature)
+        .map_err(|_| RepoError::SignatureError)?
+        .trim();
+    if text.len() != ED25519_SIG_LEN * 2 || !text.is_ascii() {
         return Err(RepoError::SignatureError);
     }
-
-    let sig_end = value_start[1..]
-        .find('"')
-        .ok_or(RepoError::SignatureError)?
-        + 1;
-    let sig_hex = &value_start[1..sig_end];
-
-    if sig_hex.len() != 128 {
-        return Err(RepoError::SignatureError); // 64 bytes = 128 hex chars
-    }
-
-    // Parse signature hex
     let mut sig_bytes = [0u8; ED25519_SIG_LEN];
-    for i in 0..ED25519_SIG_LEN {
-        let byte_str = &sig_hex[i * 2..i * 2 + 2];
-        sig_bytes[i] = u8::from_str_radix(byte_str, 16).map_err(|_| RepoError::SignatureError)?;
+    for (i, byte) in sig_bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16)
+            .map_err(|_| RepoError::SignatureError)?;
     }
-
-    // Reconstruct the signed data (JSON without signature field)
-    // Find the signature field position in the original JSON and remove it
-    let signed_data = remove_signature_field(json).ok_or(RepoError::SignatureError)?;
-
-    // Verify signature
     let verifying_key = VerifyingKey::from_bytes(pubkey).map_err(|_| RepoError::SignatureError)?;
-    let signature = Signature::from_bytes(&sig_bytes);
     verifying_key
-        .verify(signed_data.as_bytes(), &signature)
-        .map_err(|_| RepoError::SignatureError)?;
-
-    Ok(())
+        .verify(data, &Signature::from_bytes(&sig_bytes))
+        .map_err(|_| RepoError::SignatureError)
 }
 
-/// Remove the "signature" field from JSON for verification
-/// Returns the JSON string without the signature field
-fn remove_signature_field(json: &str) -> Option<String> {
-    let sig_field = "\"signature\"";
-    let sig_start = json.find(sig_field)?;
-    // Find the start of the field (including potential whitespace/comma before)
-    let field_start = sig_start;
-    // Find the end of the value (after the closing quote of the signature value)
-    let colon_pos = json[field_start..].find(':')? + field_start;
-    let value_start = json[colon_pos + 1..].trim_start();
-    if !value_start.starts_with('"') {
-        return None;
+/// GET `url`, accepting only HTTP 200 and a complete body.
+#[cfg(target_arch = "aarch64")]
+fn fetch_ok(url: &str) -> Result<Vec<u8>, RepoError> {
+    let response = crate::net::fetch(url).map_err(|_| RepoError::NetworkError)?;
+    if response.status != 200 {
+        crate::println!("[pkg] HTTP error: {} for {}", response.status, url);
+        return Err(RepoError::HttpError(response.status));
     }
-    let sig_end_rel = value_start[1..].find('"')? + 1;
-    let _value_end =
-        colon_pos + 1 + (value_start.as_ptr() as usize - json.as_ptr() as usize) + sig_end_rel;
-    // Actually, let's do this more carefully with byte offsets
-    let value_part = &json[colon_pos + 1..];
-    let value_trimmed = value_part.trim_start();
-    if !value_trimmed.starts_with('"') {
-        return None;
+    if response.truncated {
+        return Err(RepoError::ParseError);
     }
-    let quote_end = value_trimmed[1..].find('"')? + 1;
-    let field_end = colon_pos
-        + 1
-        + (value_trimmed.as_ptr() as usize - value_part.as_ptr() as usize)
-        + quote_end
-        + 1;
-
-    // Now we need to find the comma before or after
-    let mut result = String::with_capacity(json.len());
-    result.push_str(&json[..field_start]);
-    // Skip the field, check for trailing comma
-    let after_field = &json[field_end..].trim_start();
-    let after_field = if after_field.starts_with(',') {
-        &after_field[1..]
-    } else {
-        after_field
-    };
-    result.push_str(after_field);
-    Some(result)
+    Ok(response.body)
 }
 
 /// Simple JSON parser for repository index
@@ -462,76 +458,96 @@ fn parse_repository_index(json: &str, name: &str, url: &str) -> Result<Repositor
     Ok(index)
 }
 
-/// Parse a single RepoPackage from JSON object
-fn parse_repo_package(json: &str) -> Option<RepoPackage> {
-    // Simple JSON field extractor for no_std
-    let get_field = |json: &str, field: &str| -> Option<String> {
-        let search = alloc::format!("\"{}\"", field);
-        let start = json.find(&search)?;
-        let colon = json[start..].find(':')? + start;
-        let value_start = colon + 1;
-        let value_part = &json[value_start..].trim_start();
+/// Value of `"key": ...` in a flat JSON object: the text of a string, or the
+/// raw token of a number. Arrays give an empty string (see [`string_array`]).
+fn json_field(json: &str, key: &str) -> Option<String> {
+    let search = format!("\"{}\"", key);
+    let start = json.find(&search)?;
+    let colon = json[start..].find(':')? + start;
+    let value = json[colon + 1..].trim_start();
+    if let Some(rest) = value.strip_prefix('"') {
+        return Some(rest[..rest.find('"')?].to_string());
+    }
+    if value.starts_with('[') {
+        return Some(String::new());
+    }
+    let end = value
+        .find(|c: char| [',', '}', ']'].contains(&c))
+        .unwrap_or(value.len());
+    Some(value[..end].trim().to_string())
+}
 
-        if value_part.starts_with('"') {
-            // String value
-            let end = value_part[1..].find('"')? + 1;
-            Some(value_part[1..end].to_string())
-        } else if value_part.starts_with('[') {
-            // Array - for dependencies, return empty for now
-            Some(String::new())
-        } else {
-            // Number or boolean
-            let end = value_part
-                .find(|c: char| [',', '}', ']'].contains(&c))
-                .unwrap_or(value_part.len());
-            Some(value_part[..end].trim().to_string())
-        }
+/// Elements of `"key": ["a", "b"]`; empty when the key or array is absent.
+fn string_array(json: &str, key: &str) -> Vec<String> {
+    let search = format!("\"{}\"", key);
+    let Some(start) = json.find(&search) else {
+        return Vec::new();
     };
+    let Some(open) = json[start..].find('[').map(|i| i + start) else {
+        return Vec::new();
+    };
+    let Some(close) = json[open..].find(']').map(|i| i + open) else {
+        return Vec::new();
+    };
+    json[open + 1..close]
+        .split(',')
+        .map(|item| item.trim().trim_matches('"'))
+        .filter(|item| !item.is_empty())
+        .map(String::from)
+        .collect()
+}
 
-    let name = get_field(json, "name")?;
-    let version = get_field(json, "version")?;
-    let arch_str = get_field(json, "arch").unwrap_or_else(|| "aarch64".to_string());
-    let arch = match arch_str.as_str() {
+fn parse_hex_checksum(hex: &str) -> Option<[u8; 32]> {
+    let mut checksum = [0u8; 32];
+    if hex.len() != 64 || !hex.is_ascii() {
+        return Some(checksum);
+    }
+    for (i, byte) in checksum.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(checksum)
+}
+
+fn parse_arch(name: &str) -> PackageArch {
+    match name {
         "aarch64" => PackageArch::Aarch64,
         "x86_64" => PackageArch::X86_64,
         "armv7" => PackageArch::Armv7,
         "riscv64" => PackageArch::Riscv64,
         _ => PackageArch::Any,
-    };
-    let description = get_field(json, "description").unwrap_or_default();
-    let dependencies = get_field(json, "dependencies")
-        .map(|s| {
-            s.split(',')
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default();
-    let size = get_field(json, "size")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-
-    // Parse checksum hex string
-    let checksum_str = get_field(json, "checksum").unwrap_or_default();
-    let mut checksum = [0u8; 32];
-    if checksum_str.len() == 64 {
-        for i in 0..32 {
-            let byte_str = &checksum_str[i * 2..i * 2 + 2];
-            checksum[i] = u8::from_str_radix(byte_str, 16).ok()?;
-        }
     }
+}
 
-    let download_url = get_field(json, "download_url").unwrap_or_default();
+/// The optional catalogue fields of an index entry.
+fn parse_store_meta(json: &str) -> StoreMeta {
+    let text = |key: &str| json_field(json, key).unwrap_or_default();
+    StoreMeta {
+        details: text("details"),
+        category: text("category"),
+        icon: text("icon"),
+        kind: if text("kind") == "cli" {
+            AppKind::Cli
+        } else {
+            AppKind::Gui
+        },
+        exec: text("exec"),
+        installed_size: text("installed_size").parse().unwrap_or(0),
+    }
+}
 
+/// Parse a single RepoPackage from JSON object
+fn parse_repo_package(json: &str) -> Option<RepoPackage> {
+    let text = |key: &str| json_field(json, key);
     Some(RepoPackage {
-        name,
-        version,
-        arch,
-        description,
-        dependencies,
-        size,
-        checksum,
-        download_url,
+        name: text("name")?,
+        version: text("version")?,
+        arch: parse_arch(&text("arch").unwrap_or_else(|| "aarch64".to_string())),
+        description: text("description").unwrap_or_default(),
+        dependencies: string_array(json, "dependencies"),
+        size: text("size").and_then(|s| s.parse().ok()).unwrap_or(0),
+        checksum: parse_hex_checksum(&text("checksum").unwrap_or_default())?,
+        download_url: text("download_url").unwrap_or_default(),
+        store: parse_store_meta(json),
     })
 }
 
@@ -837,5 +853,138 @@ mod tests {
         assert_eq!(RepoError::IoError.to_string(), "I/O error");
         assert_eq!(RepoError::HttpError(404).to_string(), "HTTP error: 404");
         assert_eq!(RepoError::NotImplemented.to_string(), "Not implemented");
+    }
+
+    const FIXTURE_INDEX: &[u8] = include_bytes!("../../tests/fixtures/pkgrepo/index.json");
+    const FIXTURE_SIG: &[u8] = include_bytes!("../../tests/fixtures/pkgrepo/index.json.sig");
+    const FIXTURE_KEY: &str = include_str!("../../tests/fixtures/pkgrepo/public-key.hex");
+
+    fn fixture_manager(verify: bool, key: Option<&str>) -> RepositoryManager {
+        let mut repo = RepositoryConfig::new("lobster-main", "http://127.0.0.1:8000");
+        repo.verify_signatures = verify;
+        if let Some(key) = key {
+            repo.set_public_key(key.trim()).expect("fixture key");
+        }
+        let mut manager = RepositoryManager::new();
+        manager.add_repo(repo);
+        manager
+    }
+
+    #[test]
+    fn signed_index_from_pkgrepo_is_accepted_and_parsed() {
+        let mut manager = fixture_manager(true, Some(FIXTURE_KEY));
+        manager
+            .ingest_index("lobster-main", FIXTURE_INDEX, Some(FIXTURE_SIG), 7)
+            .expect("good signature");
+        let index = manager.get_index("lobster-main").expect("cached");
+        assert_eq!(index.packages.len(), 2);
+        assert_eq!(index.timestamp, 7);
+        let beta = index.find_package("beta").expect("beta");
+        assert_eq!(beta.dependencies, vec!["alpha".to_string()]);
+        assert_eq!(beta.store.kind, AppKind::Cli);
+        assert_eq!(beta.store.exec, "/apps/beta");
+        assert_eq!(beta.store.installed_size, beta.size * 2);
+        let alpha = index.find_package("alpha").expect("alpha");
+        assert_eq!(alpha.version, "1.10.0");
+        assert_eq!(alpha.store.category, "Games");
+        assert_eq!(alpha.store.icon, "AppGeneric");
+        assert_eq!(alpha.store.kind, AppKind::Gui);
+        assert!(alpha.dependencies.is_empty());
+    }
+
+    #[test]
+    fn flipped_index_byte_is_rejected_and_not_cached() {
+        let mut manager = fixture_manager(true, Some(FIXTURE_KEY));
+        let mut tampered = FIXTURE_INDEX.to_vec();
+        tampered[20] ^= 0x01;
+        let result = manager.ingest_index("lobster-main", &tampered, Some(FIXTURE_SIG), 1);
+        assert_eq!(result, Err(RepoError::SignatureError));
+        assert!(manager.get_index("lobster-main").is_none());
+    }
+
+    #[test]
+    fn missing_signature_is_rejected_when_verification_is_on() {
+        let mut manager = fixture_manager(true, Some(FIXTURE_KEY));
+        let result = manager.ingest_index("lobster-main", FIXTURE_INDEX, None, 1);
+        assert_eq!(result, Err(RepoError::SignatureError));
+    }
+
+    #[test]
+    fn verification_without_a_key_is_rejected() {
+        let mut manager = fixture_manager(true, None);
+        let result = manager.ingest_index("lobster-main", FIXTURE_INDEX, Some(FIXTURE_SIG), 1);
+        assert_eq!(result, Err(RepoError::SignatureError));
+    }
+
+    #[test]
+    fn signature_by_another_key_is_rejected() {
+        let other = "fe09e6d0b0b94b7dd72b5ceaf358fb27c28e7981b4193f833602e888e2bd57bc";
+        let mut manager = fixture_manager(true, Some(other));
+        let result = manager.ingest_index("lobster-main", FIXTURE_INDEX, Some(FIXTURE_SIG), 1);
+        assert_eq!(result, Err(RepoError::SignatureError));
+    }
+
+    #[test]
+    fn malformed_signature_text_is_rejected() {
+        let mut manager = fixture_manager(true, Some(FIXTURE_KEY));
+        for bad in [&b"abcd"[..], &b""[..], &[0xFF; 128][..], &[b'z'; 128][..]] {
+            let result = manager.ingest_index("lobster-main", FIXTURE_INDEX, Some(bad), 1);
+            assert_eq!(result, Err(RepoError::SignatureError));
+        }
+    }
+
+    #[test]
+    fn unsigned_index_is_accepted_when_verification_is_off() {
+        let mut manager = fixture_manager(false, None);
+        manager
+            .ingest_index("lobster-main", FIXTURE_INDEX, None, 1)
+            .expect("verify off");
+        assert!(manager.has_indices());
+    }
+
+    #[test]
+    fn default_repo_is_added_to_an_empty_config_with_the_key() {
+        let mut manager = RepositoryManager::new();
+        assert!(manager.ensure_default_repo());
+        let repo = manager.get_repo(DEFAULT_REPO_NAME).expect("default repo");
+        assert_eq!(repo.url, DEFAULT_REPO_URL);
+        assert!(repo.verify_signatures);
+        assert_eq!(repo.public_key_hex().as_deref(), Some(DEFAULT_REPO_KEY_HEX));
+    }
+
+    #[test]
+    fn old_default_repo_without_a_key_gets_the_key() {
+        let mut manager = RepositoryManager::new();
+        manager.add_repo(RepositoryConfig::new(DEFAULT_REPO_NAME, DEFAULT_REPO_URL));
+        assert!(manager.ensure_default_repo());
+        let repo = manager.get_repo(DEFAULT_REPO_NAME).expect("repo");
+        assert_eq!(repo.public_key_hex().as_deref(), Some(DEFAULT_REPO_KEY_HEX));
+        assert!(
+            !manager.ensure_default_repo(),
+            "second call changes nothing"
+        );
+    }
+
+    #[test]
+    fn custom_repositories_are_left_alone() {
+        let mut manager = RepositoryManager::new();
+        manager.add_repo(RepositoryConfig::new(
+            DEFAULT_REPO_NAME,
+            "http://127.0.0.1:8000",
+        ));
+        assert!(!manager.ensure_default_repo());
+        assert!(manager
+            .get_repo(DEFAULT_REPO_NAME)
+            .expect("repo")
+            .public_key
+            .is_none());
+    }
+
+    #[test]
+    fn dependencies_array_parses_to_names() {
+        let json = r#"{"name":"x","version":"1","dependencies": ["a", "b"],"size":3}"#;
+        let pkg = parse_repo_package(json).expect("parses");
+        assert_eq!(pkg.dependencies, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(pkg.size, 3);
     }
 }

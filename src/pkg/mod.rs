@@ -3,6 +3,7 @@
 pub mod install;
 pub mod package;
 pub mod repo;
+pub mod version;
 
 #[allow(unused_imports)]
 pub use package::{
@@ -11,7 +12,9 @@ pub use package::{
 };
 
 #[allow(unused_imports)]
-pub use repo::{download_package, verify_checksum, RepoError, RepositoryConfig, RepositoryManager};
+pub use repo::{
+    download_package, verify_checksum, IndexFiles, RepoError, RepositoryConfig, RepositoryManager,
+};
 
 #[allow(unused_imports)]
 pub use install::{

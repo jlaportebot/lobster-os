@@ -791,18 +791,11 @@ pub fn kernel_main(dtb_ptr: *const u8) -> ! {
         if let Err(e) = repo_mgr.load_config() {
             crate::println!("[pkg] Failed to load repo config: {:?}", e);
         }
-        // Add default repository if none configured
-        if repo_mgr.list_repos().is_empty() {
-            let mut default_repo = crate::pkg::repo::RepositoryConfig::new(
-                "lobster-main",
-                "https://github.com/jlaportebot/lobster-os/releases/download/pkg-repo",
-            );
-            default_repo.enabled = true;
-            default_repo.priority = 10;
-            repo_mgr.add_repo(default_repo);
-            // Save default config
+        // First boot: add the default repository; older installs get its
+        // signing key (the config before O4.6 had none).
+        if repo_mgr.ensure_default_repo() {
             let _ = repo_mgr.save_config();
-            crate::println!("[pkg] Added default repository");
+            crate::println!("[pkg] Default repository configured");
         }
     }
 

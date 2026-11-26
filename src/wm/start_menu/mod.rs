@@ -84,9 +84,7 @@ pub static APPS: &[AppEntry] = &[
     AppEntry {
         name: "App Store",
         launch: || {
-            focus_or_create("App Store", 460, 320, || {
-                let _ = window::create(260, 240, 460, 320, "App Store");
-            });
+            crate::apps::app_store::open_window();
         },
     },
     AppEntry {
