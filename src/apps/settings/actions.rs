@@ -109,9 +109,7 @@ fn play_test_sound(st: &mut State) {
 }
 
 fn toggle_resolution_menu(st: &mut State) {
-    let (w, h) = display::current();
-    let selected = super::resolution::index_of(w, h).unwrap_or(0);
-    st.resolution_menu.toggle(selected);
+    st.resolution_menu.toggle();
 }
 
 fn pick_resolution(st: &mut State, index: u8) {

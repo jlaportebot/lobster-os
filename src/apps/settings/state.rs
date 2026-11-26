@@ -6,8 +6,6 @@ use crate::wm::controls::{ControlState, Dropdown};
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Number of selectable resolutions (rows of the dropdown).
-const RESOLUTION_COUNT: usize = super::resolution::RESOLUTIONS.len();
 /// URL the connection test starts with.
 pub const DEFAULT_TEST_URL: &str = "http://example.com";
 
@@ -77,7 +75,7 @@ impl State {
             page: Page::Appearance,
             scroll: 0,
             content_h: 0,
-            resolution_menu: Dropdown::new(RESOLUTION_COUNT),
+            resolution_menu: Dropdown::new(),
             confirm: Confirm::new(),
             net_test: NetTest::Idle,
             url: String::new(),
