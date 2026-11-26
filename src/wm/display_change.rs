@@ -129,7 +129,15 @@ mod tests {
             h: 900,
         };
         let out = clamp_window(big, 800, 600, PANEL_HEIGHT);
-        assert_eq!(out, WindowRect { x: 0, y: 0, w: 800, h: 600 - PANEL_HEIGHT });
+        assert_eq!(
+            out,
+            WindowRect {
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 600 - PANEL_HEIGHT
+            }
+        );
     }
 
     #[test]

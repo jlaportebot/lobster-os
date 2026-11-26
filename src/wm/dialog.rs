@@ -1603,7 +1603,10 @@ mod resize_tests {
 
     #[test]
     fn no_shift_when_size_is_unchanged() {
-        assert_eq!(recentre_shift((800, 600), (800, 600), FILE_PICKER_H), (0, 0));
+        assert_eq!(
+            recentre_shift((800, 600), (800, 600), FILE_PICKER_H),
+            (0, 0)
+        );
     }
 
     #[test]
