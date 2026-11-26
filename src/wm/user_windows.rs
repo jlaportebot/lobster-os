@@ -224,11 +224,45 @@ fn kernel_ttbr0() -> u64 {
     v & 0x0000_FFFF_FFFF_F000
 }
 
+/// Copy a window title: from the calling EL0 process's memory (page-checked),
+/// or straight from the pointer for a kernel task, which owns its pointers.
+/// Returns the bytes and their length, or None for an unreadable user pointer.
+fn read_title(title_ptr: u64) -> Option<([u8; MAX_TITLE], usize)> {
+    let mut title = [0u8; MAX_TITLE];
+    if current_user_ttbr0().is_none() {
+        for (i, slot) in title.iter_mut().enumerate().take(MAX_TITLE - 1) {
+            // SAFETY: a kernel task passes a NUL-terminated string it owns.
+            let ch = unsafe { *((title_ptr + i as u64) as *const u8) };
+            if ch == 0 {
+                return Some((title, i));
+            }
+            *slot = ch;
+        }
+        return Some((title, MAX_TITLE - 1));
+    }
+    let mut len = 0usize;
+    while len < MAX_TITLE - 1 {
+        let ch = crate::sched::uaccess::read_user::<u8>(crate::sched::uaccess::UserPtr(
+            title_ptr + len as u64,
+        ))
+        .ok()?;
+        if ch == 0 {
+            break;
+        }
+        title[len] = ch;
+        len += 1;
+    }
+    Some((title, len))
+}
+
 /// Create a user window. Returns the syscall error code (-1 on failure).
 pub fn sys_win_create(x: u64, y: u64, w: u64, h: u64, title_ptr: u64) -> u64 {
     if w == 0 || h == 0 || w > 1024 || h > 1024 {
         return u64::MAX;
     }
+    let Some((title, tlen)) = read_title(title_ptr) else {
+        return crate::sched::uaccess::EFAULT;
+    };
     let pid = crate::sched::current_pid();
     unsafe {
         for slot in WINDOWS.iter_mut() {
@@ -254,18 +288,7 @@ pub fn sys_win_create(x: u64, y: u64, w: u64, h: u64, title_ptr: u64) -> u64 {
                 }
                 (cap, buf, Backing::Heap, 0)
             };
-            // Copy the title from USER memory (bounded read via byte walk)
-            let mut tlen = 0usize;
-            let mut i = 0usize;
-            while tlen < MAX_TITLE - 1 && i < 64 {
-                let ch = *((title_ptr + i as u64) as *const u8);
-                if ch == 0 {
-                    break;
-                }
-                slot.title[tlen] = ch;
-                tlen += 1;
-                i += 1;
-            }
+            slot.title[..tlen].copy_from_slice(&title[..tlen]);
             slot.title_len = tlen;
             slot.owner_pid = pid;
             slot.buf = buf;

@@ -768,41 +768,31 @@ pub fn spawn_user_process(elf_data: &[u8], priority: Priority) -> Option<Pid> {
 /// Layout pushed at the stack top (grows down):
 ///   [char* argv[argc]][NULL][string bytes...\0 per arg]
 /// Returns (argc, argv_ptr) on success.
-unsafe fn write_argv_block(user_sp: u64, args: &[&str]) -> Option<(u64, u64, u64)> {
+fn write_argv_block(root: u64, user_sp: u64, args: &[&str]) -> Option<(u64, u64, u64)> {
     const MAX_ARGV_BYTES: usize = 4096;
-    let argc = args.len() as u64;
+    const PTR_BYTES: usize = 8;
     let strings_len: usize = args.iter().map(|a| a.len() + 1).sum();
-    let array_len = (args.len() + 1) * 8; // argv[] + NULL terminator
+    let array_len = (args.len() + 1) * PTR_BYTES; // argv[] + NULL terminator
     let total = array_len + strings_len;
     if total > MAX_ARGV_BYTES {
         return None;
     }
-    // Layout (addresses grow up): [argv array + NULL][string bytes...]
-    // SP lands ABOVE the strings so the program's own stack pushes (which
-    // grow DOWN from SP) go below the array, never over the strings.
-    let block_top = user_sp & !0xF;
-    let block_base = block_top - total as u64;
-    let array_ptr = block_base; // array at the bottom, already 8-aligned
-    let strings_base = block_base + array_len as u64;
-    let mut p = strings_base;
-    let mut ptrs: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+    // SP lands BELOW the block so the program's own stack pushes (which grow
+    // down from SP) never overwrite the strings.
+    let block_base = (user_sp & !0xF) - total as u64;
+    let mut image = alloc::vec::Vec::with_capacity(total);
+    let mut string_va = block_base + array_len as u64;
     for a in args {
-        let sptr = p;
-        for &b in a.as_bytes() {
-            core::ptr::write_volatile(p as *mut u8, b);
-            p += 1;
-        }
-        core::ptr::write_volatile(p as *mut u8, 0);
-        p += 1;
-        ptrs.push(sptr);
+        image.extend_from_slice(&string_va.to_le_bytes());
+        string_va += a.len() as u64 + 1;
     }
-    let mut ap = array_ptr;
-    for ptr in &ptrs {
-        core::ptr::write_volatile(ap as *mut u64, *ptr);
-        ap += 8;
+    image.extend_from_slice(&0u64.to_le_bytes());
+    for a in args {
+        image.extend_from_slice(a.as_bytes());
+        image.push(0);
     }
-    core::ptr::write_volatile(ap as *mut u64, 0); // NULL terminator
-    Some((argc, array_ptr, block_base))
+    uaccess::copy_to_user_in(root, uaccess::UserPtr(block_base), &image).ok()?;
+    Some((args.len() as u64, block_base, block_base))
 }
 
 /// Set the entry registers for argv (call before the task first runs).
@@ -820,9 +810,8 @@ pub fn set_task_argv(pid: Pid, args: &[&str]) -> bool {
         if ttbr0 == 0 {
             return false;
         }
-        // User pages are dual-mapped into the kernel address space at
-        // ELF load time, so the kernel can write the block directly.
-        let Some((argc, argv_ptr, block_base)) = write_argv_block(user_sp, args) else {
+        // The block is written through the target's own page tree.
+        let Some((argc, argv_ptr, block_base)) = write_argv_block(ttbr0, user_sp, args) else {
             return false;
         };
         if let Some(ref mut t) = TASK_TABLE[idx] {

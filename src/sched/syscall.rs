@@ -46,7 +46,10 @@
 //! 42 = fcntl(fd, cmd, arg)
 
 use crate::println;
-use crate::sched::uaccess::{copy_from_user, copy_to_user, user_bytes, UserPtr, EFAULT};
+use crate::sched::uaccess::{
+    self, copy_from_user, copy_to_user, read_user, user_bytes, user_string, write_user, UserPtr,
+    EFAULT,
+};
 use crate::sched::{self, TrapFrame};
 
 /// Syscall numbers
@@ -211,7 +214,7 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         }
         SYS_WRITE => sys_write(args[0] as i32, args[1], args[2] as usize),
         SYS_READ => sys_read(args[0] as i32, args[1], args[2] as usize),
-        SYS_OPEN => sys_open(args[1] as *const u8, args[2] as u32),
+        SYS_OPEN => sys_open(args[1], args[2] as u32),
         SYS_CLOSE => sys_close(args[0] as i32),
         SYS_YIELD => {
             sys_yield();
@@ -225,16 +228,12 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_FORK => sys_fork(),
         SYS_EXEC => {
             // args[1] is a user pointer to a null-terminated path string.
-            // For now, construct a Rust &str from the raw pointer.
             let path_ptr = args[1] as *const u8;
-            let path_str = unsafe {
-                let mut len = 0usize;
-                while *path_ptr.add(len) != 0 {
-                    len += 1;
-                }
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                // Q4-TODO: user_str gate pending per-AS split
+            let path_string = match user_path(path_ptr as u64) {
+                Ok(p) => p,
+                Err(e) => return e,
             };
+            let path_str = path_string.as_str();
             sys_exec(path_str)
         }
         SYS_WAIT => sys_wait(args[0]),
@@ -317,25 +316,34 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_GETEGID => crate::security::sys_getegid() as u64,
         SYS_GETGROUPS => {
             // args[0] = user-provided buffer pointer for u32 groups
-            let buf_ptr = args[0] as *mut u32;
-            let buf_len = args[1] as usize;
-            let buf = if buf_ptr.is_null() || buf_len == 0 {
-                &mut []
-            } else {
-                unsafe { core::slice::from_raw_parts_mut(buf_ptr, buf_len.min(4)) }
-            };
-            crate::security::sys_getgroups(buf) as u64
+            let cap = (args[1] as usize).min(MAX_GROUPS);
+            let mut groups = [0u32; MAX_GROUPS];
+            let count = crate::security::sys_getgroups(&mut groups[..cap]) as u64;
+            if args[0] == 0 {
+                return count;
+            }
+            for (i, gid) in groups[..cap].iter().enumerate() {
+                if write_user(UserPtr(args[0]).offset(4 * i as u64), gid).is_err() {
+                    return EFAULT;
+                }
+            }
+            count
         }
         SYS_SETGROUPS => {
             // args[0] = pointer to u32 array, args[1] = count
-            let grp_ptr = args[0] as *const u32;
-            let grp_len = args[1] as usize;
-            let groups = if grp_ptr.is_null() || grp_len == 0 {
-                &[]
+            let len = if args[0] == 0 {
+                0
             } else {
-                unsafe { core::slice::from_raw_parts(grp_ptr, grp_len.min(4)) }
+                (args[1] as usize).min(MAX_GROUPS)
             };
-            crate::security::sys_setgroups(groups) as u64
+            let mut groups = [0u32; MAX_GROUPS];
+            for (i, slot) in groups[..len].iter_mut().enumerate() {
+                match read_user::<u32>(UserPtr(args[0]).offset(4 * i as u64)) {
+                    Ok(gid) => *slot = gid,
+                    Err(_) => return EFAULT,
+                }
+            }
+            crate::security::sys_setgroups(&groups[..len]) as u64
         }
         SYS_CAPGET => {
             // Return CapSet as two u64 halves in x0/x1
@@ -344,47 +352,37 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         }
         SYS_CAPSET => {
             // args[0] = pointer to CapSet (5 × u64 = 40 bytes)
-            let cap_ptr = args[0] as *const crate::security::CapSet;
-            if cap_ptr.is_null() {
-                u64::MAX
-            } else {
-                let new = unsafe { *cap_ptr };
-                crate::security::sys_capset(&new) as u64
+            if args[0] == 0 {
+                return u64::MAX;
+            }
+            match read_user::<crate::security::CapSet>(UserPtr(args[0])) {
+                Ok(new) => crate::security::sys_capset(&new) as u64,
+                Err(_) => EFAULT,
             }
         }
         SYS_CHMOD => {
             // args[0] = path ptr, args[1] = path len, args[2] = mode
-            let path_ptr = args[0] as *const u8;
-            let path_len = args[1] as usize;
             let mode = args[2] as u32;
-            if path_ptr.is_null() {
-                u64::MAX
-            } else {
-                let path_bytes =
-                    unsafe { core::slice::from_raw_parts(path_ptr, path_len.min(256)) };
-                let path_str = core::str::from_utf8(path_bytes).unwrap_or("");
-                match crate::fs::vfs::chmod(path_str, mode) {
-                    Ok(()) => 0,
-                    Err(_) => u64::MAX,
-                }
+            let path = match user_path_len(args[0], args[1] as usize) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            match crate::fs::vfs::chmod(&path, mode) {
+                Ok(()) => 0,
+                Err(_) => u64::MAX,
             }
         }
         SYS_CHOWN => {
             // args[0] = path ptr, args[1] = path len, args[2] = uid, args[3] = gid
-            let path_ptr = args[0] as *const u8;
-            let path_len = args[1] as usize;
             let uid = args[2] as u32;
             let gid = args[3] as u32;
-            if path_ptr.is_null() {
-                u64::MAX
-            } else {
-                let path_bytes =
-                    unsafe { core::slice::from_raw_parts(path_ptr, path_len.min(256)) };
-                let path_str = core::str::from_utf8(path_bytes).unwrap_or("");
-                match crate::fs::vfs::chown(path_str, uid, gid) {
-                    Ok(()) => 0,
-                    Err(_) => u64::MAX,
-                }
+            let path = match user_path_len(args[0], args[1] as usize) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            match crate::fs::vfs::chown(&path, uid, gid) {
+                Ok(()) => 0,
+                Err(_) => u64::MAX,
             }
         }
         SYS_SET_NO_NEW_PRIVS => crate::security::sys_set_no_new_privs() as u64,
@@ -396,42 +394,27 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         // ── Filesystem / VFS syscalls ──
         SYS_BRK => sys_brk(args[0]),
         SYS_GETTIMEOFDAY => {
-            let tv_ptr = args[0] as *mut u64;
-            let tz_ptr = args[1] as *mut u64;
             let now_us = crate::arch::timer::Timer::system_time_us();
-            if !tv_ptr.is_null() {
-                unsafe {
-                    *tv_ptr = now_us / 1_000_000;
-                    *tv_ptr.add(1) = now_us % 1_000_000;
-                }
+            if args[0] != 0 && put_pair(args[0], now_us / 1_000_000, now_us % 1_000_000).is_err() {
+                return EFAULT;
             }
-            if !tz_ptr.is_null() {
-                unsafe {
-                    *tz_ptr = 0;
-                }
+            if args[1] != 0 && put_pair(args[1], 0, 0).is_err() {
+                return EFAULT;
             }
             0
         }
         SYS_NANOSLEEP => {
-            let req_ptr = args[0] as *const u64;
-            let rem_ptr = args[1] as *mut u64;
-            let secs = if !req_ptr.is_null() {
-                unsafe { *req_ptr }
+            let (secs, nsecs) = if args[0] == 0 {
+                (0, 0)
             } else {
-                0
-            };
-            let nsecs = if !req_ptr.is_null() {
-                unsafe { *req_ptr.add(1) }
-            } else {
-                0
-            };
-            let total_ms = (secs * 1000) + (nsecs / 1_000_000);
-            sys_sleep(total_ms);
-            if !rem_ptr.is_null() {
-                unsafe {
-                    *rem_ptr = 0;
-                    *rem_ptr.add(1) = 0;
+                match get_pair(args[0]) {
+                    Ok(pair) => pair,
+                    Err(_) => return EFAULT,
                 }
+            };
+            sys_sleep((secs * 1000) + (nsecs / 1_000_000));
+            if args[1] != 0 && put_pair(args[1], 0, 0).is_err() {
+                return EFAULT;
             }
             0
         }
@@ -442,31 +425,25 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             if path_ptr.is_null() || stat_ptr.is_null() {
                 return u64::MAX;
             }
-            let path_str = unsafe {
-                let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 {
-                    len += 1;
-                }
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                // Q4-TODO: user_str gate pending per-AS split
+            let path_string = match user_path(path_ptr as u64) {
+                Ok(p) => p,
+                Err(e) => return e,
             };
-            sys_stat(path_str, stat_ptr)
+            let path_str = path_string.as_str();
+            sys_stat(path_str, args[2])
         }
-        SYS_FSTAT => sys_fstat(args[0] as i32, args[1] as *mut u8),
+        SYS_FSTAT => sys_fstat(args[0] as i32, args[1]),
         SYS_LSTAT => {
             let path_ptr = args[0] as *const u8;
             if path_ptr.is_null() {
                 return u64::MAX;
             }
-            let path_str = unsafe {
-                let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 {
-                    len += 1;
-                }
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                // Q4-TODO: user_str gate pending per-AS split
+            let path_string = match user_path(path_ptr as u64) {
+                Ok(p) => p,
+                Err(e) => return e,
             };
-            sys_stat(path_str, args[1] as *mut u8)
+            let path_str = path_string.as_str();
+            sys_stat(path_str, args[1])
         }
         SYS_LSEEK => crate::fs::vfs::seek(args[0] as usize, args[1] as i64, args[2] as u32)
             .unwrap_or(u64::MAX) as u64,
@@ -478,14 +455,11 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             if path_ptr.is_null() {
                 return u64::MAX;
             }
-            let path_str = unsafe {
-                let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 {
-                    len += 1;
-                }
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                // Q4-TODO: user_str gate pending per-AS split
+            let path_string = match user_path(path_ptr as u64) {
+                Ok(p) => p,
+                Err(e) => return e,
             };
+            let path_str = path_string.as_str();
             match crate::fs::vfs::mkdir(path_str) {
                 Ok(_) => 0,
                 Err(_) => u64::MAX,
@@ -497,14 +471,11 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             if path_ptr.is_null() {
                 return u64::MAX;
             }
-            let path_str = unsafe {
-                let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 {
-                    len += 1;
-                }
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                // Q4-TODO: user_str gate pending per-AS split
+            let path_string = match user_path(path_ptr as u64) {
+                Ok(p) => p,
+                Err(e) => return e,
             };
+            let path_str = path_string.as_str();
             match crate::fs::vfs::remove(path_str) {
                 Ok(_) => 0,
                 Err(_) => u64::MAX,
@@ -516,14 +487,11 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             if path_ptr.is_null() {
                 return u64::MAX;
             }
-            let path_str = unsafe {
-                let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 {
-                    len += 1;
-                }
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                // Q4-TODO: user_str gate pending per-AS split
+            let path_string = match user_path(path_ptr as u64) {
+                Ok(p) => p,
+                Err(e) => return e,
             };
+            let path_str = path_string.as_str();
             match crate::fs::vfs::unlink(path_str) {
                 Ok(_) => 0,
                 Err(_) => u64::MAX,
@@ -536,14 +504,11 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             if path_ptr.is_null() {
                 return u64::MAX;
             }
-            let path_str = unsafe {
-                let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 {
-                    len += 1;
-                }
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                // Q4-TODO: user_str gate pending per-AS split
+            let path_string = match user_path(path_ptr as u64) {
+                Ok(p) => p,
+                Err(e) => return e,
             };
+            let path_str = path_string.as_str();
             match crate::fs::vfs::open(
                 path_str,
                 crate::fs::vfs::O_WRONLY | crate::fs::vfs::O_CREAT | crate::fs::vfs::O_TRUNC,
@@ -560,34 +525,29 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             if path_ptr.is_null() {
                 return u64::MAX;
             }
-            let path_str = unsafe {
-                let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 {
-                    len += 1;
-                }
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                // Q4-TODO: user_str gate pending per-AS split
+            let path_string = match user_path(path_ptr as u64) {
+                Ok(p) => p,
+                Err(e) => return e,
             };
+            let path_str = path_string.as_str();
             match crate::fs::vfs::resolve_path(path_str) {
                 Ok(_) => 0,
                 Err(_) => u64::MAX,
             }
         }
         SYS_GETCWD => {
-            let buf_ptr = args[0] as *mut u8;
             let buf_size = args[1] as usize;
-            if buf_ptr.is_null() || buf_size == 0 {
+            if args[0] == 0 || buf_size == 0 {
                 return u64::MAX;
             }
             let cwd = crate::shell::cwd();
-            let bytes = cwd.as_bytes();
-            let copy_len = bytes.len().min(buf_size - 1);
-            unsafe { core::slice::from_raw_parts_mut(buf_ptr, copy_len) }
-                .copy_from_slice(&bytes[..copy_len]);
-            unsafe {
-                *buf_ptr.add(copy_len) = 0;
+            let copy_len = cwd.len().min(buf_size - 1);
+            let mut out = alloc::vec::Vec::from(&cwd.as_bytes()[..copy_len]);
+            out.push(0);
+            match copy_to_user(UserPtr(args[0]), &out) {
+                Ok(()) => args[0],
+                Err(_) => EFAULT,
             }
-            buf_ptr as u64
         }
         SYS_CHDIR => {
             let path_ptr = args[0] as *const u8;
@@ -595,14 +555,11 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             if path_ptr.is_null() {
                 return u64::MAX;
             }
-            let path_str = unsafe {
-                let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 {
-                    len += 1;
-                }
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                // Q4-TODO: user_str gate pending per-AS split
+            let path_string = match user_path(path_ptr as u64) {
+                Ok(p) => p,
+                Err(e) => return e,
             };
+            let path_str = path_string.as_str();
             match crate::fs::vfs::resolve_path(path_str) {
                 Ok(_) => {
                     crate::shell::set_cwd(path_str);
@@ -612,12 +569,9 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             }
         }
         SYS_TIME => {
-            let tloc = args[0] as *mut u64;
             let now_sec = crate::arch::timer::Timer::system_time_us() / 1_000_000;
-            if !tloc.is_null() {
-                unsafe {
-                    *tloc = now_sec;
-                }
+            if args[0] != 0 && write_user(UserPtr(args[0]), &now_sec).is_err() {
+                return EFAULT;
             }
             now_sec
         }
@@ -629,25 +583,13 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
         SYS_GETPPID => crate::sched::get_parent_pid(),
         SYS_SETSID => crate::sched::create_session(),
         SYS_UNAME => {
-            let buf_ptr = args[0] as *mut u8;
-            if buf_ptr.is_null() {
+            if args[0] == 0 {
                 return u64::MAX;
             }
-            let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, 6 * 65) };
-            for b in buf.iter_mut() {
-                *b = 0;
+            match copy_to_user(UserPtr(args[0]), &utsname_bytes()) {
+                Ok(()) => 0,
+                Err(_) => EFAULT,
             }
-            let name = b"lobster-os\0";
-            buf[..name.len()].copy_from_slice(name);
-            let node = b"lobster\0";
-            buf[65..65 + node.len()].copy_from_slice(node);
-            let rel = b"0.2.0\0";
-            buf[130..130 + rel.len()].copy_from_slice(rel);
-            let ver = b"lobster-os 0.2.0\0";
-            buf[195..195 + ver.len()].copy_from_slice(ver);
-            let mach = b"aarch64\0";
-            buf[260..260 + mach.len()].copy_from_slice(mach);
-            0
         }
         SYS_SYNC => {
             crate::fs::vfs::sync();
@@ -662,14 +604,11 @@ pub fn dispatch(syscall_num: u64, args: &[u64; 6]) -> u64 {
             if path_ptr.is_null() {
                 return u64::MAX;
             }
-            let path_str = unsafe {
-                let mut len = 0usize;
-                while *path_ptr.add(len) != 0 && len < 256 {
-                    len += 1;
-                }
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                // Q4-TODO: user_str gate pending per-AS split
+            let path_string = match user_path(path_ptr as u64) {
+                Ok(p) => p,
+                Err(e) => return e,
             };
+            let path_str = path_string.as_str();
             sys_truncate(path_str, length)
         }
         SYS_FTRUNCATE => sys_ftruncate(args[0] as i32, args[1] as u64),
@@ -860,10 +799,13 @@ mod linux_compat {
 
             LINUX_NANOSLEEP => {
                 // args[0] = timespec ptr {sec, nsec}, args[1] = rem ptr
-                let secs = if args[0] != 0 {
-                    unsafe { *(args[0] as *const u64) }
-                } else {
+                let secs = if args[0] == 0 {
                     0
+                } else {
+                    match read_user::<u64>(UserPtr(args[0])) {
+                        Ok(secs) => secs,
+                        Err(_) => return EFAULT,
+                    }
                 };
                 sys_sleep(secs * 1000);
                 0
@@ -871,27 +813,8 @@ mod linux_compat {
 
             LINUX_UNAME => {
                 // Fill utsname struct (6 × 65-byte fields)
-                if args[0] != 0 {
-                    let buf =
-                        unsafe { core::slice::from_raw_parts_mut(args[0] as *mut u8, 6 * 65) };
-                    for b in buf.iter_mut() {
-                        *b = 0;
-                    }
-                    // sysname
-                    let name = b"lobster-os\0";
-                    buf[..name.len()].copy_from_slice(name);
-                    // nodename
-                    let node = b"lobster\0";
-                    buf[65..65 + node.len()].copy_from_slice(node);
-                    // release
-                    let rel = b"0.2.0\0";
-                    buf[130..130 + rel.len()].copy_from_slice(rel);
-                    // version
-                    let ver = b"lobster-os 0.2.0\0";
-                    buf[195..195 + ver.len()].copy_from_slice(ver);
-                    // machine
-                    let mach = b"aarch64\0";
-                    buf[260..260 + mach.len()].copy_from_slice(mach);
+                if args[0] != 0 && copy_to_user(UserPtr(args[0]), &utsname_bytes()).is_err() {
+                    return EFAULT;
                 }
                 0
             }
@@ -899,22 +822,13 @@ mod linux_compat {
             LINUX_CLOCK_GETTIME | LINUX_GETTIMEOFDAY => {
                 // Return system uptime in appropriate format
                 let now_us = crate::arch::timer::Timer::system_time_us();
-                if syscall_num == LINUX_CLOCK_GETTIME {
-                    // args[1] = timespec ptr {sec, nsec}
-                    if args[1] != 0 {
-                        unsafe {
-                            *(args[1] as *mut u64) = now_us / 1_000_000;
-                            *((args[1] as *mut u64).add(1)) = (now_us % 1_000_000) * 1000;
-                        }
-                    }
-                } else if syscall_num == LINUX_GETTIMEOFDAY {
-                    // args[0] = timeval ptr {sec, usec}
-                    if args[0] != 0 {
-                        unsafe {
-                            *(args[0] as *mut u64) = now_us / 1_000_000;
-                            *((args[0] as *mut u64).add(1)) = now_us % 1_000_000;
-                        }
-                    }
+                let (dst, frac) = if syscall_num == LINUX_CLOCK_GETTIME {
+                    (args[1], (now_us % 1_000_000) * 1000)
+                } else {
+                    (args[0], now_us % 1_000_000)
+                };
+                if dst != 0 && put_pair(dst, now_us / 1_000_000, frac).is_err() {
+                    return EFAULT;
                 }
                 0
             }
@@ -927,14 +841,11 @@ mod linux_compat {
                     return u64::MAX;
                 }
                 // Read null-terminated path
-                let path_str = unsafe {
-                    let mut len = 0usize;
-                    while *path_ptr.add(len) != 0 && len < 256 {
-                        len += 1;
-                    }
-                    core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                    // Q4-TODO: user_str gate pending per-AS split
+                let path_string = match user_path(path_ptr as u64) {
+                    Ok(p) => p,
+                    Err(e) => return e,
                 };
+                let path_str = path_string.as_str();
                 sys_open_vfs(path_str, flags)
             }
 
@@ -945,14 +856,11 @@ mod linux_compat {
                 if path_ptr.is_null() {
                     return u64::MAX;
                 }
-                let path_str = unsafe {
-                    let mut len = 0usize;
-                    while *path_ptr.add(len) != 0 && len < 256 {
-                        len += 1;
-                    }
-                    core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                    // Q4-TODO: user_str gate pending per-AS split
+                let path_string = match user_path(path_ptr as u64) {
+                    Ok(p) => p,
+                    Err(e) => return e,
                 };
+                let path_str = path_string.as_str();
                 sys_open_vfs(path_str, flags)
             }
 
@@ -964,19 +872,9 @@ mod linux_compat {
                 } else {
                     args[2] // newfstatat: dirfd, path, statbuf, flag
                 };
-                if stat_ptr != 0 {
-                    // Linux stat struct (128 bytes on AArch64)
-                    let buf = unsafe { core::slice::from_raw_parts_mut(stat_ptr as *mut u8, 128) };
-                    for b in buf.iter_mut() {
-                        *b = 0;
-                    }
-                    // st_mode = 0100644 (regular file, rw-r--r--)
-                    unsafe {
-                        *(stat_ptr as *mut u32) = 0o100644;
-                    }
-                    // st_size — get from VFS fd
-                    // For stdout/stderr (fd 1, 2), return 0
-                    let _ = fd;
+                let _ = fd;
+                if stat_ptr != 0 && copy_to_user(UserPtr(stat_ptr), &stub_stat_bytes()).is_err() {
+                    return EFAULT;
                 }
                 0
             }
@@ -984,16 +882,15 @@ mod linux_compat {
             LINUX_WRITEV => {
                 // args[0] = fd, args[1] = iov ptr, args[2] = iovcnt
                 let fd = args[0] as i32;
-                let iov_ptr = args[1] as *const u64;
-                let iovcnt = args[2] as usize;
+                let iovcnt = (args[2] as usize).min(MAX_IOV);
                 let mut total = 0u64;
                 for i in 0..iovcnt {
-                    unsafe {
-                        let buf_ptr = *iov_ptr.add(i * 2);
-                        let len = *iov_ptr.add(i * 2 + 1) as usize;
-                        if len > 0 && buf_ptr != 0 {
-                            total += sys_write(fd, buf_ptr, len);
-                        }
+                    let at = UserPtr(args[1]).offset(16 * i as u64);
+                    let Ok((buf_ptr, len)) = get_pair(at.0) else {
+                        return EFAULT;
+                    };
+                    if len > 0 && buf_ptr != 0 {
+                        total += sys_write(fd, buf_ptr, len as usize);
                     }
                 }
                 total
@@ -1042,14 +939,11 @@ mod linux_compat {
                 if path_ptr.is_null() {
                     return u64::MAX;
                 }
-                let path_str = unsafe {
-                    let mut len = 0usize;
-                    while *path_ptr.add(len) != 0 && len < 256 {
-                        len += 1;
-                    }
-                    core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
-                    // Q4-TODO: user_str gate pending per-AS split
+                let path_string = match user_path(path_ptr as u64) {
+                    Ok(p) => p,
+                    Err(e) => return e,
                 };
+                let path_str = path_string.as_str();
                 sys_exec(path_str)
             }
 
@@ -1145,6 +1039,107 @@ fn sys_exit(code: i64) -> u64 {
     crate::sched::request_cooperative_exit();
 
     0 // exit doesn't really return, but we return 0 to satisfy the type
+}
+
+/// Most supplementary groups a process may hold.
+const MAX_GROUPS: usize = 4;
+/// Longest path accepted from user space.
+const MAX_PATH_BYTES: usize = 256;
+/// Most `iovec` entries serviced by one vectored write.
+const MAX_IOV: usize = 64;
+/// Bytes per `utsname` field.
+const UTS_FIELD: usize = 65;
+/// Size of the Linux `struct stat` the stubs fill in.
+const STAT_BYTES: usize = 128;
+
+/// Read a path argument: -1 for NULL, -EFAULT for a bad pointer.
+fn user_path(ptr: u64) -> Result<alloc::string::String, u64> {
+    if ptr == 0 {
+        return Err(u64::MAX);
+    }
+    user_string(UserPtr(ptr), MAX_PATH_BYTES).map_err(|_| EFAULT)
+}
+
+/// Read a path given as pointer + length (not NUL-terminated).
+fn user_path_len(ptr: u64, len: usize) -> Result<alloc::string::String, u64> {
+    if ptr == 0 {
+        return Err(u64::MAX);
+    }
+    let bytes = user_bytes(UserPtr(ptr), len.min(MAX_PATH_BYTES)).map_err(|_| EFAULT)?;
+    Ok(alloc::string::String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Store two consecutive u64 values (a `timeval`/`timespec`) at `ptr`.
+fn put_pair(ptr: u64, first: u64, second: u64) -> Result<(), uaccess::Fault> {
+    write_user(UserPtr(ptr), &[first, second])
+}
+
+/// Load two consecutive u64 values from `ptr`.
+fn get_pair(ptr: u64) -> Result<(u64, u64), uaccess::Fault> {
+    let [first, second] = read_user::<[u64; 2]>(UserPtr(ptr))?;
+    Ok((first, second))
+}
+
+/// The `utsname` reply: sysname, nodename, release, version, machine.
+fn utsname_bytes() -> [u8; 6 * UTS_FIELD] {
+    let mut buf = [0u8; 6 * UTS_FIELD];
+    let fields: [&[u8]; 5] = [
+        b"lobster-os\0",
+        b"lobster\0",
+        b"0.2.0\0",
+        b"lobster-os 0.2.0\0",
+        b"aarch64\0",
+    ];
+    for (i, text) in fields.iter().enumerate() {
+        buf[i * UTS_FIELD..i * UTS_FIELD + text.len()].copy_from_slice(text);
+    }
+    buf
+}
+
+/// A zeroed `struct stat` marked as a regular 0644 file.
+fn stub_stat_bytes() -> [u8; STAT_BYTES] {
+    let mut buf = [0u8; STAT_BYTES];
+    buf[..4].copy_from_slice(&0o100644u32.to_ne_bytes());
+    buf
+}
+
+/// Largest message copied by one msgq call.
+const MAX_MSG_BYTES: usize = 256;
+/// Largest buffer copied by one Unix-socket call.
+const MAX_SOCK_BYTES: usize = 4096;
+
+/// Store two file descriptors at user addresses; 0 or -EFAULT.
+fn put_fd_pair(first_ptr: u64, second_ptr: u64, first: i32, second: i32) -> u64 {
+    let ok = write_user(UserPtr(first_ptr), &first).is_ok()
+        && write_user(UserPtr(second_ptr), &second).is_ok();
+    if ok {
+        0
+    } else {
+        EFAULT
+    }
+}
+
+/// Copy the first `got` bytes of `buf` to user memory and return the count;
+/// negative `got` stays an error, a bad pointer is -EFAULT.
+fn finish_user_read(buf_ptr: u64, buf: &[u8], got: i64) -> u64 {
+    if got < 0 {
+        return u64::MAX;
+    }
+    let count = (got as usize).min(buf.len());
+    match copy_to_user(UserPtr(buf_ptr), &buf[..count]) {
+        Ok(()) => count as u64,
+        Err(_) => EFAULT,
+    }
+}
+
+/// Read the kernel log into a user buffer; returns the byte count or -EFAULT.
+fn klog_to_user(buf: u64, len: usize) -> Result<u64, u64> {
+    let mut staging = alloc::vec![0u8; len.min(MAX_IO_BYTES)];
+    let mut seq = 0;
+    let read = crate::klog::klog_read(&mut staging, &mut seq);
+    copy_to_user(UserPtr(buf), &staging[..read.min(staging.len())])
+        .map(|()| read as u64)
+        .map_err(|_| EFAULT)
 }
 
 /// Largest single read or write serviced per call (callers get a short count).
@@ -1247,18 +1242,11 @@ fn read_uart_to_user(buf_ptr: u64, len: usize) -> u64 {
 }
 
 /// sys_open(path, flags) — open a file
-fn sys_open(path: *const u8, flags: u32) -> u64 {
-    if path.is_null() {
-        return u64::MAX;
+fn sys_open(path: u64, flags: u32) -> u64 {
+    match user_path(path) {
+        Ok(path) => sys_open_vfs(&path, flags),
+        Err(e) => e,
     }
-    let path_str = unsafe {
-        let mut len = 0usize;
-        while *path.add(len) != 0 && len < 256 {
-            len += 1;
-        }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(path, len))
-    };
-    sys_open_vfs(path_str, flags)
 }
 
 /// sys_close(fd) — close a file descriptor
@@ -1365,12 +1353,7 @@ fn sys_munmap(_addr: u64, _len: usize) -> u64 {
 fn sys_pipe(read_fd_ptr: u64, write_fd_ptr: u64) -> u64 {
     match crate::ipc::create_pipe() {
         Some((read_fd, write_fd)) => {
-            // Store results in user memory
-            unsafe {
-                core::ptr::write(read_fd_ptr as *mut i32, read_fd as i32);
-                core::ptr::write(write_fd_ptr as *mut i32, write_fd as i32);
-            }
-            0
+            put_fd_pair(read_fd_ptr, write_fd_ptr, read_fd as i32, write_fd as i32)
         }
         None => u64::MAX, // -1
     }
@@ -1423,17 +1406,21 @@ fn sys_msgq_create(key: u64) -> u64 {
 
 /// sys_msgq_send(queue_idx, mtype, data_ptr, data_len) — send a message
 fn sys_msgq_send(queue_idx: usize, mtype: u64, data_ptr: u64, data_len: usize) -> u64 {
-    let data = unsafe { core::slice::from_raw_parts(data_ptr as *const u8, data_len.min(256)) };
-    crate::ipc::msgq_send(queue_idx, mtype, data) as u64
+    let Ok(data) = user_bytes(UserPtr(data_ptr), data_len.min(MAX_MSG_BYTES)) else {
+        return EFAULT;
+    };
+    crate::ipc::msgq_send(queue_idx, mtype, &data) as u64
 }
 
 /// sys_msgq_recv(queue_idx, mtype_filter, buf_ptr, buf_len) — receive a message
 /// Returns (len << 32) | mtype on success, -1 on error
 fn sys_msgq_recv(queue_idx: usize, mtype_filter: u64, buf_ptr: u64, buf_len: usize) -> u64 {
-    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len.min(256)) };
-    let (len, mtype) = crate::ipc::msgq_recv(queue_idx, mtype_filter, buf);
+    let mut buf = alloc::vec![0u8; buf_len.min(MAX_MSG_BYTES)];
+    let (len, mtype) = crate::ipc::msgq_recv(queue_idx, mtype_filter, &mut buf);
     if len < 0 {
         u64::MAX
+    } else if copy_to_user(UserPtr(buf_ptr), &buf[..(len as usize).min(buf.len())]).is_err() {
+        EFAULT
     } else {
         ((len as u64) << 32) | (mtype & 0xFFFFFFFF)
     }
@@ -1518,10 +1505,8 @@ fn sys_sigprocmask(how: u32, set: u64, oldset: u64) -> u64 {
         return u64::MAX;
     }
     // Write old mask to user-provided pointer if provided
-    if oldset != 0 {
-        unsafe {
-            *(oldset as *mut u64) = old_mask;
-        }
+    if oldset != 0 && write_user(UserPtr(oldset), &old_mask).is_err() {
+        return EFAULT;
     }
     0
 }
@@ -1551,18 +1536,19 @@ fn sys_rt_sigreturn() -> u64 {
 /// type 8: wait for new message (blocking)
 /// type 9: read next message (non-blocking)
 fn sys_klogctl(tp: i32, buf: u64, len: usize) -> u64 {
-    use crate::klog::{klog_clear, klog_read};
+    use crate::klog::klog_clear;
 
     match tp {
         2 | 3 => {
             // Read log (and optionally clear)
-            let mut user_buf = unsafe { core::slice::from_raw_parts_mut(buf as *mut u8, len) };
-            let mut seq = 0;
-            let read = klog_read(&mut user_buf, &mut seq);
+            let read = match klog_to_user(buf, len) {
+                Ok(read) => read,
+                Err(e) => return e,
+            };
             if tp == 3 {
                 klog_clear();
             }
-            read as u64
+            read
         }
         4 => {
             // Get buffer size
@@ -1579,9 +1565,7 @@ fn sys_klogctl(tp: i32, buf: u64, len: usize) -> u64 {
         }
         8 | 9 => {
             // Wait for/read message (simplified - just read available)
-            let mut user_buf = unsafe { core::slice::from_raw_parts_mut(buf as *mut u8, len) };
-            let mut seq = 0;
-            klog_read(&mut user_buf, &mut seq) as u64
+            klog_to_user(buf, len).unwrap_or_else(|e| e)
         }
         _ => u64::MAX,
     }
@@ -1593,14 +1577,19 @@ fn sys_klogctl(tp: i32, buf: u64, len: usize) -> u64 {
 
 /// sys_mkfifo(path_ptr, path_len, mode) — create a named pipe
 fn sys_mkfifo(path_ptr: u64, path_len: usize, mode: u32) -> u64 {
-    let path = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, path_len.min(256)) };
-    crate::ipc::mkfifo(path, mode).map_or(u64::MAX, |idx| idx as u64)
+    let Ok(path) = user_bytes(UserPtr(path_ptr), path_len.min(MAX_PATH_BYTES)) else {
+        return EFAULT;
+    };
+    crate::ipc::mkfifo(&path, mode).map_or(u64::MAX, |idx| idx as u64)
 }
 
 /// sys_open_fifo(path_ptr, path_len, flags) — open a named pipe
 /// Uses find_named_pipe then open_fifo_read or open_fifo_write depending on flags
 fn sys_open_fifo(path_ptr: u64, path_len: usize, flags: u32) -> u64 {
-    let path = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, path_len.min(256)) };
+    let Ok(path) = user_bytes(UserPtr(path_ptr), path_len.min(MAX_PATH_BYTES)) else {
+        return EFAULT;
+    };
+    let path = path.as_slice();
     let pid = sched::current_pid();
     let task_idx = match sched::find_task_index(pid) {
         Some(i) => i,
@@ -1671,7 +1660,10 @@ fn sys_unix_connect(sock_idx: usize, path_ptr: u64, path_len: usize) -> u64 {
 
 /// sys_unix_send(sock_idx, buf_ptr, len, task_idx) — send on a Unix socket
 fn sys_unix_send(sock_idx: usize, buf_ptr: u64, len: usize, task_idx: usize) -> u64 {
-    let buf = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, len.min(4096)) };
+    let Ok(buf) = user_bytes(UserPtr(buf_ptr), len.min(MAX_SOCK_BYTES)) else {
+        return EFAULT;
+    };
+    let buf = buf.as_slice();
     let pid = sched::current_pid();
     if let Some(tidx) = sched::find_task_index(pid) {
         if let Some(fd_table) = crate::ipc::get_fd_table(tidx) {
@@ -1691,7 +1683,7 @@ fn sys_unix_send(sock_idx: usize, buf_ptr: u64, len: usize, task_idx: usize) -> 
 
 /// sys_unix_recv(sock_idx, buf_ptr, len, task_idx) — recv on a Unix socket
 fn sys_unix_recv(sock_idx: usize, buf_ptr: u64, len: usize, task_idx: usize) -> u64 {
-    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, len.min(4096)) };
+    let mut buf = alloc::vec![0u8; len.min(MAX_SOCK_BYTES)];
     let pid = sched::current_pid();
     if let Some(tidx) = sched::find_task_index(pid) {
         if let Some(fd_table) = crate::ipc::get_fd_table(tidx) {
@@ -1700,7 +1692,8 @@ fn sys_unix_recv(sock_idx: usize, buf_ptr: u64, len: usize, task_idx: usize) -> 
                     if entry.kind == crate::ipc::FdKind::UnixSocket
                         && entry.index as usize == sock_idx
                     {
-                        return crate::ipc::unix_recv(task_idx, fd_num, buf) as u64;
+                        let got = crate::ipc::unix_recv(task_idx, fd_num, &mut buf);
+                        return finish_user_read(buf_ptr, &buf, got as i64);
                     }
                 }
             }
@@ -1834,11 +1827,7 @@ fn sys_openpty(amaster_ptr: u64, aslave_ptr: u64) -> u64 {
 
     match crate::ipc::pty_open() {
         Some((master_fd, slave_fd)) => {
-            unsafe {
-                core::ptr::write(amaster_ptr as *mut i32, master_fd as i32);
-                core::ptr::write(aslave_ptr as *mut i32, slave_fd as i32);
-            }
-            0
+            put_fd_pair(amaster_ptr, aslave_ptr, master_fd as i32, slave_fd as i32)
         }
         None => u64::MAX,
     }
@@ -1885,14 +1874,10 @@ fn sys_ioctl(fd: i32, cmd: u64, arg: u64) -> u64 {
                 // TIOCGWINSZ
                 // Return window size: 24 rows, 80 cols
                 let winsize = [24u16, 80u16, 0u16, 0u16];
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        winsize.as_ptr() as *const u8,
-                        arg as *mut u8,
-                        8,
-                    );
-                }
-                return 0;
+                return match write_user(UserPtr(arg), &winsize) {
+                    Ok(()) => 0,
+                    Err(_) => EFAULT,
+                };
             }
             0x5414 => {
                 // TIOCSWINSZ
@@ -1981,50 +1966,54 @@ mod arch_syscalls {
     }
 }
 
+/// Offset of `st_size` in the AArch64 Linux `struct stat`.
+const STAT_SIZE_OFF: usize = 48;
+/// Offset of `st_uid`.
+const STAT_UID_OFF: usize = 64;
+/// Offset of `st_gid`.
+const STAT_GID_OFF: usize = 68;
+/// Offset of `st_mtime` (seconds).
+const STAT_MTIME_OFF: usize = 88;
+
+/// Build the 128-byte stat image the user program receives.
+fn stat_bytes(mode: u32, size: u64, uid: u32, gid: u32, mtime: u64) -> [u8; STAT_BYTES] {
+    let mut buf = [0u8; STAT_BYTES];
+    buf[..4].copy_from_slice(&mode.to_ne_bytes());
+    buf[STAT_SIZE_OFF..STAT_SIZE_OFF + 8].copy_from_slice(&size.to_ne_bytes());
+    buf[STAT_UID_OFF..STAT_UID_OFF + 4].copy_from_slice(&uid.to_ne_bytes());
+    buf[STAT_GID_OFF..STAT_GID_OFF + 4].copy_from_slice(&gid.to_ne_bytes());
+    buf[STAT_MTIME_OFF..STAT_MTIME_OFF + 8].copy_from_slice(&mtime.to_ne_bytes());
+    buf
+}
+
+/// Copy a stat image to `stat_ptr`; 0 or -EFAULT.
+fn put_stat(stat_ptr: u64, image: &[u8; STAT_BYTES]) -> u64 {
+    match copy_to_user(UserPtr(stat_ptr), image) {
+        Ok(()) => 0,
+        Err(_) => EFAULT,
+    }
+}
+
 /// sys_stat — fill stat struct for a path
-fn sys_stat(path: &str, stat_ptr: *mut u8) -> u64 {
+fn sys_stat(path: &str, stat_ptr: u64) -> u64 {
     match crate::fs::vfs::stat(path) {
         Some(meta) => {
-            unsafe {
-                // Linux stat struct (128 bytes on AArch64)
-                let buf = core::slice::from_raw_parts_mut(stat_ptr, 128);
-                for b in buf.iter_mut() {
-                    *b = 0;
-                }
-                // st_mode
-                *(stat_ptr as *mut u32) = meta.file_type as u32 | meta.permissions;
-                // st_size
-                *(stat_ptr.add(48) as *mut u64) = meta.size;
-                // st_uid, st_gid
-                *(stat_ptr.add(64) as *mut u32) = meta.uid;
-                *(stat_ptr.add(68) as *mut u32) = meta.gid;
-                // st_mtime (seconds)
-                *(stat_ptr.add(88) as *mut u64) = meta.modified_time;
-            }
-            0
+            let mode = meta.file_type as u32 | meta.permissions;
+            put_stat(
+                stat_ptr,
+                &stat_bytes(mode, meta.size, meta.uid, meta.gid, meta.modified_time),
+            )
         }
         None => u64::MAX,
     }
 }
 
 /// sys_fstat — fill stat struct for an open fd
-fn sys_fstat(fd: i32, stat_ptr: *mut u8) -> u64 {
-    if fd < 0 || fd > 2 {
+fn sys_fstat(fd: i32, stat_ptr: u64) -> u64 {
+    if !(0..=2).contains(&fd) {
         return u64::MAX;
     }
-    unsafe {
-        let buf = core::slice::from_raw_parts_mut(stat_ptr, 128);
-        for b in buf.iter_mut() {
-            *b = 0;
-        }
-        // stdout/stderr/stdin are char devices
-        *(stat_ptr as *mut u32) = 0o100644; // regular file for simplicity
-        *(stat_ptr.add(48) as *mut u64) = 0;
-        *(stat_ptr.add(64) as *mut u32) = 0;
-        *(stat_ptr.add(68) as *mut u32) = 0;
-        *(stat_ptr.add(88) as *mut u64) = 0;
-    }
-    0
+    put_stat(stat_ptr, &stat_bytes(0o100644, 0, 0, 0, 0))
 }
 
 /// sys_getdents — read directory entries

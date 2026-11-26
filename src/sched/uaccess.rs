@@ -2,11 +2,10 @@
 //!
 //! Every syscall that takes a pointer argument must validate it before
 //! dereferencing: the pointer must be non-null, fully inside the user VA
-//! range (below the kernel's low-half boundary), and — on builds with
-//! per-process address spaces — backed by a mapped page. Until Q4's
-//! address-space split lands, the range check alone already prevents the
-//! classic "pass a kernel address to a syscall" escalation on the shared
-//! page table.
+//! range (below the kernel's low-half boundary) and backed by a mapped,
+//! EL0-accessible page of the current process. The copy helpers below walk
+//! that process's page table page by page, so a bad pointer is `-EFAULT`
+//! instead of a kernel data abort.
 
 use crate::memory::process_vmem::{USER_ADDR_LIMIT, USER_CODE_START};
 
@@ -309,39 +308,6 @@ pub fn user_bytes(src: UserPtr, len: usize) -> Result<alloc::vec::Vec<u8>, Fault
     Ok(buf)
 }
 
-/// Validate a user read buffer: `ptr` and `ptr + len` must both be in the
-/// user range. Returns a slice or None (caller maps None to -EFAULT).
-///
-/// # Safety
-/// The caller must be executing on behalf of the current EL0 task.
-pub fn user_slice<'a>(ptr: u64, len: u64) -> Option<&'a [u8]> {
-    if len == 0 {
-        return Some(&[]);
-    }
-    if !range_in_user_window(ptr, len) {
-        return None;
-    }
-    Some(unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) })
-}
-
-/// Validate a user write buffer (same rules as reads for now).
-pub fn user_slice_mut<'a>(ptr: u64, len: u64) -> Option<&'a mut [u8]> {
-    if len == 0 {
-        return Some(&mut []);
-    }
-    if !range_in_user_window(ptr, len) {
-        return None;
-    }
-    Some(unsafe { core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize) })
-}
-
-/// Read a NUL-terminated string from user memory (bounded).
-pub fn user_str<'a>(ptr: u64, max_len: u64) -> Option<&'a str> {
-    let bytes = user_slice(ptr, max_len)?;
-    let nul = bytes.iter().position(|&b| b == 0)?;
-    core::str::from_utf8(&bytes[..nul]).ok()
-}
-
 /// True if `va` is a plausible user virtual address (fast check for
 /// syscall paths that only need the range gate).
 pub fn is_user_va(va: u64) -> bool {
@@ -357,7 +323,6 @@ mod tests {
     #[test]
     fn kernel_text_address_is_rejected() {
         assert!(!range_in_user_window(0x8_0000, 64));
-        assert!(user_slice_mut(0x8_0000, 64).is_none());
         assert!(!is_user_va(0x8_0000));
     }
 

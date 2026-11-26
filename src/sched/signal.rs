@@ -12,6 +12,7 @@
 //! - signal_handlers: [u64; 64] (per-signal handler, SIG_DFL=0 or SIG_IGN=1 or user addr)
 
 use crate::println;
+use crate::sched::uaccess;
 use crate::sched::{self, find_task_index, Task, TrapFrame, TASK_TABLE};
 
 // ── Signal action constants ──
@@ -337,7 +338,10 @@ pub unsafe fn deliver_pending_signals(regs: *mut TrapFrame) -> bool {
                         let sa_flags = task.signal_handlers[sig as usize] >> 1; // sa_flags stored in upper bits
                         let do_restart = (sa_flags & SA_RESTART) != 0;
 
-                        setup_signal_frame(regs, sig, handler, task);
+                        if setup_signal_frame(regs, sig, handler, task).is_err() {
+                            // The handler stack is unusable: SIGSEGV-style kill.
+                            crate::sched::kill_current_and_exit(-(SIGSEGV as i64));
+                        }
                         println!(
                             "[signal] PID {}: delivering signal {} to handler {:#x}",
                             sched::current_pid(),
@@ -361,7 +365,12 @@ pub unsafe fn deliver_pending_signals(regs: *mut TrapFrame) -> bool {
 
 /// Set up signal frame on user stack for handler execution
 /// This saves the current context and prepares for signal handler call
-fn setup_signal_frame(regs: &mut TrapFrame, sig: u64, handler: u64, task: &mut Task) {
+fn setup_signal_frame(
+    regs: &mut TrapFrame,
+    sig: u64,
+    handler: u64,
+    task: &mut Task,
+) -> Result<(), uaccess::Fault> {
     // The user stack pointer
     let sp = regs.sp;
 
@@ -376,15 +385,7 @@ fn setup_signal_frame(regs: &mut TrapFrame, sig: u64, handler: u64, task: &mut T
 
     // Copy the current TrapFrame to user stack (sigreturn frame)
     // This is what sigreturn will restore
-    let frame_ptr = frame_sp as *mut u8;
-    unsafe {
-        // Write the TrapFrame to user stack
-        core::ptr::copy_nonoverlapping(
-            regs as *const TrapFrame as *const u8,
-            frame_ptr,
-            core::mem::size_of::<TrapFrame>(),
-        );
-    }
+    uaccess::write_user(uaccess::UserPtr(frame_sp), regs)?;
 
     // Check if SA_RESTART is set for this signal
     let sa_flags = task.signal_handlers[sig as usize] >> 1; // sa_flags stored in upper bits
@@ -420,6 +421,7 @@ fn setup_signal_frame(regs: &mut TrapFrame, sig: u64, handler: u64, task: &mut T
     // Mark that we're in a signal handler (for sigreturn)
     // We could use a flag in Task, but for now just note it
     task.signal_handlers[sig as usize] |= 1 << 63; // High bit = in handler
+    Ok(())
 }
 
 /// Send a signal to the current process (from kernel, e.g. page fault → SIGSEGV)
@@ -445,8 +447,8 @@ pub unsafe fn sigreturn(regs: *mut TrapFrame) -> Result<(), &'static str> {
 
             // Read the sigreturn frame from user stack
             // The frame was saved at sp by setup_signal_frame
-            let frame_ptr = sp as *const TrapFrame;
-            let saved_frame = core::ptr::read_volatile(frame_ptr);
+            let saved_frame = uaccess::read_user::<TrapFrame>(uaccess::UserPtr(sp))
+                .map_err(|_| "sigreturn frame not readable")?;
 
             // SECURITY (audit Q1c): never let sigreturn raise privilege. Mask the
             // M-field of the restored SPSR to EL0 only (M=0b0000 EL0t). A user

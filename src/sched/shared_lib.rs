@@ -9,6 +9,7 @@
 
 use crate::fs::vfs;
 use crate::println;
+use crate::sched::uaccess;
 use alloc::vec::Vec;
 use core::mem::size_of;
 
@@ -197,20 +198,19 @@ fn find_symbol_in_lib(_lib: &SharedLib, _dyn_info: SharedLibDynInfo, _name: &str
     None
 }
 
+/// Longest library path or symbol name read from user space.
+const MAX_LIB_NAME: usize = 256;
+
 /// dlopen syscall implementation
 pub fn sys_dlopen(path_ptr: u64, _flags: u32) -> u64 {
     if path_ptr == 0 {
         return 0;
     }
 
-    let path = unsafe {
-        let mut len = 0usize;
-        let ptr = path_ptr as *const u8;
-        while *ptr.add(len) != 0 && len < 256 {
-            len += 1;
-        }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len))
+    let Ok(path) = uaccess::user_string(uaccess::UserPtr(path_ptr), MAX_LIB_NAME) else {
+        return 0;
     };
+    let path = path.as_str();
 
     load_shared_lib(path).unwrap_or_default()
 }
@@ -221,14 +221,10 @@ pub fn sys_dlsym(handle: u64, symbol_ptr: u64) -> u64 {
         return 0;
     }
 
-    let symbol = unsafe {
-        let mut len = 0usize;
-        let ptr = symbol_ptr as *const u8;
-        while *ptr.add(len) != 0 && len < 256 {
-            len += 1;
-        }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len))
+    let Ok(symbol) = uaccess::user_string(uaccess::UserPtr(symbol_ptr), MAX_LIB_NAME) else {
+        return 0;
     };
+    let symbol = symbol.as_str();
 
     // If handle is a library base, search that library
     // Otherwise search all loaded libraries
