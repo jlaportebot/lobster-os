@@ -252,6 +252,14 @@ fn install(root: u64, asid: u16) {
     }
 }
 
+/// ASID currently installed in TTBR0_EL1.
+pub fn loaded_asid() -> u16 {
+    let value: u64;
+    // SAFETY: reading TTBR0_EL1 has no side effects.
+    unsafe { core::arch::asm!("mrs {}, TTBR0_EL1", out(reg) value) };
+    (value >> ASID_SHIFT) as u16
+}
+
 /// Table base currently installed in TTBR0_EL1 (ASID and CnP stripped).
 pub fn loaded_root() -> u64 {
     let value: u64;
