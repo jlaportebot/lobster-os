@@ -267,9 +267,11 @@ and tested by CI; nothing is hand-assembled.
       reflow (audit Q15).
 - [ ] **O4.5 Text editor / Code**: undo/redo, selection, click-to-place, syntax highlight,
       run button (compile + run with output pane) (audit Q8, Q16).
-- [ ] **O4.6 App Store**: real catalogue from the package index, install/remove/update with
+- [x] **O4.6 App Store**: real catalogue from the package index, install/remove/update with
       progress, installed apps appear in the start menu (audit Q11).
-      *2026-11-18:* `pkg install`ed apps and the package database now persist across reboot (ADR 0001, abdcb1c); the GUI is still to do.
+      *2026-11-18:* `pkg install`ed apps and the package database now persist across reboot (ADR 0001, abdcb1c).
+      *2026-11-26:* App Store GUI (browse, search, details, install/open/remove, offline mode) on an ed25519-signed
+      catalogue built by `tools/pkgrepo.py` and published by the `pkg-repo` workflow; a tampered index is refused.
 - [x] **O4.7 Calculator**: mouse input, decimals, history, shared window frame (audit Q17).
       *Verified 2026-11-16:* mouse keypad through hit regions, decimals, history line; `5 % 0` does not panic.
 - [ ] **O4.8 Task Manager**: per-process CPU/memory, end task, performance graphs.
@@ -279,9 +281,10 @@ and tested by CI; nothing is hand-assembled.
 - [ ] **O4.10 Help / welcome app** documenting the OS from inside it.
 
 ### O5. Kernel
-- [~] **O5.1 Per-process address spaces** (audit Q4): pointer checks + page-table teardown
-      done; remaining: stop dual-mapping user pages into the kernel table, drop the global
-      window mirror, validate every syscall pointer, `two_apps`/`leak`/`efault` tests.
+- [x] **O5.1 Per-process address spaces** (audit Q4): every EL0 process runs on its own TTBR0
+      root with a per-root ASID (ADR 0002); no dual-mapping or window mirror; every syscall pointer
+      goes through page-walking `uaccess` (-EFAULT on bad pointers); `two_apps`, `efault` and a
+      100-spawn leak check pass under TCG (2026-11-26). Under KVM: pending the early-console fix below.
 - [x] **O5.2 Real preemption** (audit Q5): timer IRQ ends an EL0 slice; foreground `run`
       becomes a sliced task. *Verify:* `while(1);` app does not freeze the desktop.
 - [x] **O5.3 Signals + Ctrl+C + kill** end to end (audit Q6).
@@ -378,3 +381,6 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-19 | O3.8 lock screen + passwords, O1.5 CSPRNG; uaccess confined to the EL0 window (kernel text was writable via getrandom) | gate 737 tests + harness 12/12 + live lock/greeter/getrandom_test |
 | 2026-11-25 | O4.2 Files phase 2 (trash, properties, drag-move, type-ahead, `/share` writes) | gate 780 tests + harness 12/12 |
 | 2026-11-25 | E3.3/E3.4 one-click installers: emulator v0.1.0 (Windows .exe, macOS .dmg, Linux AppImage x86_64 + aarch64), each installed and smoke-tested on its OS in CI | release run 45698277748 all green + AppImage e2e on the Pi |
+| 2026-11-26 | O4.6 App Store GUI on a signed package catalogue; dropdown lists draw in a screen-space overlay (no clipping at the window edge) | gate 840 tests + harness 11/12 (pkg_install harness expects the old hello demo) + live store screenshots |
+| 2026-11-26 | O5.1 per-process address spaces (own TTBR0 + ASID per process, uaccess everywhere); ELF loader shares the frame when two segments meet in one page | gate 861 tests + harness 11/12 (same) + two_apps/efault/leak under TCG + minesweeper live |
+| 2026-11-26 | Found: KVM boot hangs since e985e4e (kernel-log ring takes an atomic on every console write before the MMU/caches are on) — fix in progress | bisect over 13 stashed kernels + 4 builds |
