@@ -28,8 +28,8 @@
 //! as row-major ARGB32, stride = width * 4 bytes (no padding), so pixel
 //! (x, y) is the u32 at `va + (y * w + x) * 4`. Four slots span
 //! 0x4000_0000..0x4400_0000, clear of the user heap (0x2000_0000) and
-//! stack (0x7F00_0000). The pages are also mirrored into the kernel TTBR0
-//! (nG cleared, like the ELF loader does) so EL0 can run on it.
+//! stack (0x7F00_0000). The pages are mapped into the owning process's own
+//! translation tree only; the kernel reaches them through the direct map.
 //!
 //! The kernel never uses the user mapping: SYS_WIN_FILL and the compositor
 //! reach the same frames through the direct phys map
@@ -217,13 +217,6 @@ fn current_user_ttbr0() -> Option<u64> {
     }
 }
 
-fn kernel_ttbr0() -> u64 {
-    let v: u64;
-    unsafe { core::arch::asm!("mrs {}, TTBR0_EL1", out(reg) v) };
-    // Strip the ASID field / CnP bit; keep the table base.
-    v & 0x0000_FFFF_FFFF_F000
-}
-
 /// Copy a window title: from the calling EL0 process's memory (page-checked),
 /// or straight from the pointer for a kernel task, which owns its pointers.
 /// Returns the bytes and their length, or None for an unreadable user pointer.
@@ -399,16 +392,9 @@ pub fn sys_win_map(win_id: u64) -> u64 {
         }
 
         let va = USER_MAP_BASE + slot_index(slot) as u64 * USER_MAP_STRIDE;
-        let ktt = kernel_ttbr0();
-        // The kernel runs EL0 on its own TTBR0 (see elf.rs), so mirror
-        // there too, with nG cleared (kernel ASID 0).
-        let kflags = PTE_WIN_USER & !crate::memory::vmem::PTE_NG;
         for i in 0..slot.npages {
             let pva = va + (i * PAGE) as u64;
             crate::sched::elf::map_user_page(ttbr0, pva, slot.frames[i], PTE_WIN_USER);
-            if ktt != ttbr0 {
-                crate::sched::elf::map_user_page(ktt, pva, slot.frames[i], kflags);
-            }
         }
         slot.user_va = va;
         va
@@ -446,13 +432,9 @@ pub fn sys_win_close(win_id: u64) -> u64 {
             Backing::Frames => {
                 if slot.user_va != 0 {
                     if let Some(ttbr0) = current_user_ttbr0() {
-                        let ktt = kernel_ttbr0();
                         for i in 0..slot.npages {
                             let va = slot.user_va + (i * PAGE) as u64;
                             crate::memory::process_vmem::unmap_user_page(ttbr0, va);
-                            if ktt != ttbr0 {
-                                crate::memory::process_vmem::unmap_user_page(ktt, va);
-                            }
                         }
                     }
                 }

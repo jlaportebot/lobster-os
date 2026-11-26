@@ -22,10 +22,6 @@ const USER_L1_SLOTS: usize = 2;
 /// Bit position of the ASID inside TTBR0_EL1.
 const ASID_SHIFT: u64 = 48;
 
-/// Whether EL0 runs on its own TTBR0 root (true) or on the kernel's table
-/// with mirrored pages (false). Removed once the switch is complete.
-pub const PER_PROCESS_TTBR0: bool = false;
-
 /// Set once the first process root exists: the boot root's low half is then
 /// frozen and `mmu` asserts nothing maps into it any more.
 static LOW_HALF_FROZEN: AtomicBool = AtomicBool::new(false);
@@ -200,6 +196,9 @@ pub fn new_user_root() -> Option<u64> {
 
 /// Free a process root and every user frame it maps.
 pub fn free_user_root(root: u64) {
+    if loaded_root() == root {
+        activate_kernel();
+    }
     free_root(&mut KernelTables, root, &mut |pte| {
         super::process_vmem::release_leaf(pte)
     });
@@ -222,6 +221,14 @@ pub fn activate(root: u64, asid: u16) {
             v = in(reg) value,
         );
     }
+}
+
+/// Table base currently installed in TTBR0_EL1 (ASID and CnP stripped).
+pub fn loaded_root() -> u64 {
+    let value: u64;
+    // SAFETY: reading TTBR0_EL1 has no side effects.
+    unsafe { core::arch::asm!("mrs {}, TTBR0_EL1", out(reg) value) };
+    value & OUT_MASK
 }
 
 /// Return to the kernel's own table (kernel threads, teardown).

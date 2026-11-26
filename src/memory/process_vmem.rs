@@ -18,26 +18,51 @@
 //!     4. Decrements the original frame's refcount
 
 use crate::memory::frame_alloc;
-use crate::memory::{phys_to_virt, PhysAddr, PAGE_SIZE};
+use crate::memory::{PhysAddr, PAGE_SIZE};
 use crate::println;
 
 /// Re-export PTE flags
 pub use super::mmu::{MT_NORMAL, PTE_ACCESS, PTE_ISH, PTE_NG, PTE_PAGE, PTE_TABLE, PTE_VALID};
 
-/// User-space PTE flags (read-only, non-global, inner-shareable)
-pub const PTE_USER_RO: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_NG | PTE_ISH | MT_NORMAL;
+/// AP[2:1] = 01: EL0 and EL1 read/write.
+const AP_EL0_RW: u64 = 1 << 6;
+/// AP[2:1] = 11: EL0 and EL1 read-only.
+const AP_EL0_RO: u64 = 3 << 6;
+/// AP[2] (bit 7): set on every read-only descriptor.
+const AP_READ_ONLY_BIT: u64 = 1 << 7;
+/// Both AP bits.
+const AP_MASK: u64 = 3 << 6;
 
-/// User-space PTE flags (read-write, non-global, inner-shareable)
-pub const PTE_USER_RW: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_NG | PTE_ISH | MT_NORMAL;
+/// Descriptor bits every user page shares: valid page, non-global,
+/// inner-shareable normal memory.
+const PTE_USER_BASE: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_NG | PTE_ISH | MT_NORMAL;
 
-/// User-space PTE flags (read-execute, non-global, inner-shareable)
-pub const PTE_USER_RX: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_NG | PTE_ISH | MT_NORMAL;
+/// User read-only data: EL0 read, never executable at either level.
+pub const PTE_USER_RO: u64 = PTE_USER_BASE | AP_EL0_RO | super::mmu::PTE_UXN | super::mmu::PTE_PXN;
+
+/// User read-write data: never executable at either level.
+pub const PTE_USER_RW: u64 = PTE_USER_BASE | AP_EL0_RW | super::mmu::PTE_UXN | super::mmu::PTE_PXN;
+
+/// User read-execute code: read-only, EL0-executable, never EL1-executable.
+pub const PTE_USER_RX: u64 = PTE_USER_BASE | AP_EL0_RO | super::mmu::PTE_PXN;
+
+/// EL0 read/write/execute, privileged-never-execute. Only for ELF images whose
+/// linker script emits one RWX PT_LOAD (MicroPython, early test programs):
+/// splitting them is a toolchain change, so the loader keeps them working
+/// while still denying EL1 execution of user pages.
+pub const PTE_USER_RWX: u64 = PTE_USER_BASE | AP_EL0_RW | super::mmu::PTE_PXN;
 
 /// COW flag — bit 55 (software-reserved; bit 52 is the hardware Contiguous hint)
 pub const PTE_COW: u64 = 1 << 55;
 
 /// Shared/refcounted flag — bit 56 (software-reserved; bit 53 is PXN)
 pub const PTE_SHARED: u64 = 1 << 56;
+
+/// Output-address mask of a descriptor.
+const ADDR_MASK: u64 = 0x0000_FFFF_FFFF_F000;
+
+/// L1 slots (1 GiB each) that hold private user tables.
+const USER_L1_SLOTS: usize = 2;
 
 /// Maximum VMA regions per process
 pub const MAX_VMAS: usize = 32;
@@ -166,21 +191,13 @@ pub fn cow_is_shared(paddr: u64) -> bool {
     }
 }
 
-/// Allocate a new (empty) address space with a TTBR0 root page table
+/// Allocate a new (empty) address space: a process root that already holds
+/// the kernel's EL1-only descriptors (see `aspace`).
 pub fn create_address_space() -> Option<AddressSpace> {
-    let root_frame = frame_alloc::allocate_frame()?;
-    // Zero the root page table
-    let root_virt = phys_to_virt(root_frame);
-    unsafe {
-        let table = root_virt.0 as *mut u64;
-        for i in 0..512 {
-            core::ptr::write_volatile(table.add(i), 0);
-        }
-        crate::arch::cpu::dsb();
-    }
+    let root = super::aspace::new_user_root()?;
 
     Some(AddressSpace {
-        ttbr0_phys: root_frame.0,
+        ttbr0_phys: root,
         vmas: [Vma {
             start: 0,
             size: 0,
@@ -194,84 +211,9 @@ pub fn create_address_space() -> Option<AddressSpace> {
     })
 }
 
-/// Destroy an address space — free all page tables and data frames
+/// Destroy an address space: every user frame, user table and the root.
 pub fn destroy_address_space(space: &AddressSpace) {
-    // Walk the TTBR0 page tables and free all frames
-    // We need to free: L1 tables, L2 tables, L3 tables, and data pages
-    let root_virt = (crate::memory::PHYS_MAP_OFFSET + space.ttbr0_phys) as *mut [u64; 512];
-    unsafe {
-        free_page_table_tree(root_virt, 0);
-    }
-    // Free the root table itself
-    frame_alloc::deallocate_frame(PhysAddr::new(space.ttbr0_phys));
-}
-
-/// Recursively free all page table frames and data frames in a subtree
-unsafe fn free_page_table_tree(table: *mut [u64; 512], level: u32) {
-    if level >= 3 {
-        return; // L3 entries are data pages, not tables
-    }
-    for i in 0..512 {
-        let entry = (*table)[i];
-        if entry & PTE_VALID == 0 {
-            continue;
-        }
-        if entry & PTE_TABLE != 0 {
-            // Table descriptor — recurse
-            let next_phys = entry & !(PAGE_SIZE - 1);
-            let next_virt = (crate::memory::PHYS_MAP_OFFSET + next_phys) as *mut [u64; 512];
-            free_page_table_tree(next_virt, level + 1);
-            // Free the table frame itself
-            frame_alloc::deallocate_frame(PhysAddr::new(next_phys));
-        } else if level == 2 {
-            // Block entry at L2 — free the block (1 page of data = 2MB block)
-            // Block entries map large ranges; we'd need to free the underlying frames
-            // For now, just log it
-        }
-    }
-    // At L2, free the data pages pointed to by L3 entries
-    if level == 2 {
-        for i in 0..512 {
-            let entry = (*table)[i];
-            if entry & PTE_VALID == 0 {
-                continue;
-            }
-            if entry & PTE_TABLE != 0 {
-                // Already handled above
-            }
-        }
-    }
-}
-
-/// Recursively free data pages (L3 leaves) in a subtree
-pub unsafe fn free_user_pages(table: *mut [u64; 512], level: u32) {
-    if level > 3 {
-        return;
-    }
-    for i in 0..512 {
-        let entry = (*table)[i];
-        if entry & PTE_VALID == 0 {
-            continue;
-        }
-
-        if level < 3 && (entry & PTE_TABLE) != 0 {
-            // Follow table pointer
-            let next_phys = entry & !(PAGE_SIZE - 1);
-            let next_virt = (crate::memory::PHYS_MAP_OFFSET + next_phys) as *mut [u64; 512];
-            free_user_pages(next_virt, level + 1);
-        } else if level == 3 {
-            // Data page — free it
-            let pa = entry & !(PAGE_SIZE - 1);
-            // Check COW refcount before freeing
-            if entry & PTE_COW != 0 {
-                if cow_deref(pa) {
-                    frame_alloc::deallocate_frame(PhysAddr::new(pa));
-                }
-            } else {
-                frame_alloc::deallocate_frame(PhysAddr::new(pa));
-            }
-        }
-    }
+    super::aspace::free_user_root(space.ttbr0_phys);
 }
 
 /// Release the frame behind one valid user leaf descriptor, honouring COW
@@ -434,45 +376,51 @@ pub unsafe fn set_user_pte(ttbr0_phys: u64, va: u64, flags: u64) {
     crate::arch::cpu::isb();
 }
 
+/// Call `f` with the physical address of every user L3 table of the tree
+/// rooted at `root`. Only the two private L2 tables are walked, never the
+/// kernel's copied descriptors.
+unsafe fn for_each_user_l3(root: u64, mut f: impl FnMut(u64, usize, u64)) {
+    let phys_map = crate::memory::PHYS_MAP_OFFSET;
+    let l0 = (phys_map + root) as *const [u64; 512];
+    let l1_entry = (*l0)[0];
+    if l1_entry & PTE_TABLE == 0 {
+        return;
+    }
+    let l1 = (phys_map + (l1_entry & ADDR_MASK)) as *const [u64; 512];
+    for slot in 0..USER_L1_SLOTS {
+        let l2_entry = (*l1)[slot];
+        if l2_entry & PTE_TABLE == 0 {
+            continue;
+        }
+        let l2_phys = l2_entry & ADDR_MASK;
+        let l2 = (phys_map + l2_phys) as *const [u64; 512];
+        for i in 0..512 {
+            let e = (*l2)[i];
+            if e & PTE_VALID != 0 && e & PTE_TABLE != 0 {
+                f(l2_phys, i, e & ADDR_MASK);
+            }
+        }
+    }
+}
+
 /// Mark all writable user pages as COW (read-only + COW bit)
 /// Used by fork() to set up copy-on-write
 pub unsafe fn cow_mark_all(ttbr0_phys: u64) {
-    let phys_map = crate::memory::PHYS_MAP_OFFSET;
-    let root_virt = (phys_map + ttbr0_phys) as *mut [u64; 512];
-    cow_mark_tree(root_virt, 0);
+    for_each_user_l3(ttbr0_phys, |_, _, l3| {
+        cow_mark_leaves((crate::memory::PHYS_MAP_OFFSET + l3) as *mut [u64; 512]);
+    });
 }
 
-fn cow_mark_tree(table: *mut [u64; 512], level: u32) {
-    if level > 3 {
-        return;
-    }
+/// Mark the writable leaves of one L3 table copy-on-write.
+unsafe fn cow_mark_leaves(table: *mut [u64; 512]) {
     for i in 0..512 {
-        let entry = unsafe { (*table)[i] };
-        if entry & PTE_VALID == 0 {
+        let entry = (*table)[i];
+        let writable = entry & AP_READ_ONLY_BIT == 0;
+        if entry & PTE_VALID == 0 || entry & PTE_NG == 0 || entry & PTE_COW != 0 || !writable {
             continue;
         }
-
-        if level < 3 && (entry & PTE_TABLE) != 0 {
-            let next_phys = entry & !(PAGE_SIZE - 1);
-            let next_virt = (crate::memory::PHYS_MAP_OFFSET + next_phys) as *mut [u64; 512];
-            cow_mark_tree(next_virt, level + 1);
-        } else if level == 3 {
-            // Data page — if writable, mark COW
-            // A writable user page has AP = EL0/EL1 RW (bits 7:6 = 01 for RW)
-            // Since we use PTE_USER_RW, check if it's a writable user page
-            // Simple heuristic: if it has PTE_NG set and doesn't have PTE_COW
-            if entry & PTE_NG != 0 && entry & PTE_COW == 0 {
-                let pa = entry & !(PAGE_SIZE - 1);
-                // Increment refcount
-                cow_ref(pa);
-                // Mark read-only + COW
-                // Remove write permission: change from PTE_USER_RW to PTE_USER_RO + COW
-                let new_flags = PTE_USER_RO | PTE_COW;
-                unsafe {
-                    (*table)[i] = pa | new_flags;
-                }
-            }
-        }
+        cow_ref(entry & !(PAGE_SIZE - 1) & ADDR_MASK);
+        (*table)[i] = (entry & !AP_MASK) | AP_EL0_RO | PTE_COW;
     }
     crate::arch::cpu::dsb();
 }
@@ -586,59 +534,56 @@ pub fn clone_address_space(src: &AddressSpace) -> Option<AddressSpace> {
     Some(new_space)
 }
 
-/// Copy all page table entries from src TTBR0 to dst TTBR0
-/// This is a shallow copy — both point to the same physical frames
+/// Copy every user leaf of `src_ttbr0` into `dst_ttbr0` (shallow: both share
+/// the physical frames, COW refcounts are bumped).
 fn copy_page_tables(src_ttbr0: u64, dst_ttbr0: u64) -> Option<()> {
-    let phys_map = crate::memory::PHYS_MAP_OFFSET;
-    let src_root = (phys_map + src_ttbr0) as *const [u64; 512];
-    let dst_root = (phys_map + dst_ttbr0) as *mut [u64; 512];
-
+    let mut ok = true;
+    // SAFETY: both roots are live process roots owned by the caller.
     unsafe {
-        copy_table_tree(src_root, dst_root, 0);
+        for_each_user_l3(src_ttbr0, |l2_phys, idx, src_l3| {
+            ok = ok && copy_l3(l2_phys, idx, src_l3, src_ttbr0, dst_ttbr0);
+        });
     }
-    Some(())
+    ok.then_some(())
 }
 
-/// Recursively copy page table entries (shallow — share physical frames)
-unsafe fn copy_table_tree(src: *const [u64; 512], dst: *mut [u64; 512], level: u32) {
-    if level > 3 {
-        return;
-    }
+/// Copy one L3 table: find the matching destination L2 slot, give it a fresh
+/// L3 and duplicate the leaves.
+unsafe fn copy_l3(l2_phys: u64, idx: usize, src_l3: u64, src_root: u64, dst_root: u64) -> bool {
+    let phys_map = crate::memory::PHYS_MAP_OFFSET;
+    let Some(dst_l2) = matching_l2(l2_phys, src_root, dst_root) else {
+        return false;
+    };
+    let Some(frame) = frame_alloc::allocate_frame() else {
+        return false;
+    };
+    let dst = (phys_map + frame.0) as *mut [u64; 512];
+    let src = (phys_map + src_l3) as *const [u64; 512];
     for i in 0..512 {
         let entry = (*src)[i];
-        if entry & PTE_VALID == 0 {
-            continue;
-        }
-
-        if level < 3 && (entry & PTE_TABLE) != 0 {
-            // Table descriptor — allocate a new table and recurse
-            let src_next_phys = entry & !(PAGE_SIZE - 1);
-            let src_next = (crate::memory::PHYS_MAP_OFFSET + src_next_phys) as *const [u64; 512];
-
-            // Allocate new table frame for the destination
-            let new_frame = match frame_alloc::allocate_frame() {
-                Some(f) => f,
-                None => return,
-            };
-            // Zero it
-            let new_virt = (crate::memory::PHYS_MAP_OFFSET + new_frame.0) as *mut u64;
-            for j in 0..512 {
-                core::ptr::write_volatile(new_virt.add(j), 0);
-            }
-            crate::arch::cpu::dsb();
-
-            let dst_next = (crate::memory::PHYS_MAP_OFFSET + new_frame.0) as *mut [u64; 512];
-            (*dst)[i] = new_frame.0 | PTE_VALID | PTE_TABLE;
-
-            copy_table_tree(src_next, dst_next, level + 1);
-        } else if level == 3 {
-            // Data page — just copy the PTE (shares the physical frame)
-            (*dst)[i] = entry;
-            // Increment COW refcount for this frame
-            let pa = entry & !(PAGE_SIZE - 1);
-            cow_ref(pa);
+        (*dst)[i] = entry;
+        if entry & PTE_VALID != 0 {
+            cow_ref(entry & !(PAGE_SIZE - 1) & ADDR_MASK);
         }
     }
+    let l2 = (phys_map + dst_l2) as *mut [u64; 512];
+    (*l2)[idx] = frame.0 | PTE_VALID | PTE_TABLE;
+    crate::arch::cpu::dsb();
+    true
+}
+
+/// The private L2 table of `dst_root` that sits at the same L1 slot as the
+/// L2 table `src_l2` of `src_root`.
+unsafe fn matching_l2(src_l2: u64, src_root: u64, dst_root: u64) -> Option<u64> {
+    let phys_map = crate::memory::PHYS_MAP_OFFSET;
+    let l1_of = |root: u64| {
+        let l0 = (phys_map + root) as *const [u64; 512];
+        (phys_map + ((*l0)[0] & ADDR_MASK)) as *const [u64; 512]
+    };
+    let (src_l1, dst_l1) = (l1_of(src_root), l1_of(dst_root));
+    (0..USER_L1_SLOTS)
+        .find(|&s| (*src_l1)[s] & ADDR_MASK == src_l2)
+        .map(|s| (*dst_l1)[s] & ADDR_MASK)
 }
 
 /// Handle a user-space page fault

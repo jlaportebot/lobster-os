@@ -254,7 +254,7 @@ pub fn exec(path: &str) -> i64 {
             task.regs.x30 = load_result.entry_point;
 
             // Switch to the new address space immediately
-            switch_address_space(load_result.ttbr0_phys);
+            crate::memory::aspace::activate(load_result.ttbr0_phys, 0);
 
             // 6. Credential transformation on exec (setuid/setgid binaries)
             {
@@ -277,14 +277,6 @@ pub fn exec(path: &str) -> i64 {
     }
 
     0 // Success — the scheduler will eret to the new entry point
-}
-
-/// Switch to a user process address space (public for exec)
-unsafe fn switch_address_space(ttbr0_phys: u64) {
-    core::arch::asm!("msr TTBR0_EL1, {}", in(reg) ttbr0_phys);
-    core::arch::asm!("tlbi vmalle1is");
-    crate::arch::cpu::dsb();
-    crate::arch::cpu::isb();
 }
 
 /// Exit the current process

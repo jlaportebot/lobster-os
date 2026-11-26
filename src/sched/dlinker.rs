@@ -388,13 +388,8 @@ fn parse_dynamic(
 // GOT allocation and mapping
 // ═══════════════════════════════════════════════════════════════
 
-/// Page flags for GOT (user-accessible, writable, not executable)
-const PTE_GOT: u64 = crate::memory::vmem::PTE_VALID
-    | crate::memory::vmem::PTE_PAGE
-    | crate::memory::vmem::PTE_ACCESS
-    | crate::memory::vmem::PTE_NG
-    | crate::memory::vmem::PTE_ISH
-    | crate::memory::mmu::MT_NORMAL;
+/// Page flags for GOT: user read/write, never executable.
+const PTE_GOT: u64 = crate::memory::process_vmem::PTE_USER_RW;
 
 /// Allocate and map GOT pages into the user process address space.
 fn map_got(ttbr0_phys: u64) -> Result<u64, &'static str> {

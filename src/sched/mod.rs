@@ -1025,10 +1025,7 @@ pub unsafe fn do_context_switch() {
             task.state = TaskState::Running;
             task.time_slice = time_slice_for(task.priority);
 
-            // Switch address space if needed (user process)
-            if task.is_user && task.ttbr0_phys != 0 {
-                switch_address_space(task.ttbr0_phys);
-            }
+            enter_address_space(task);
 
             // Restore context of new task
             restore_context(&task.regs);
@@ -1124,13 +1121,14 @@ pub unsafe fn restore_context(frame: &TrapFrame) {
     );
 }
 
-/// Switch to a user process address space
-unsafe fn switch_address_space(ttbr0_phys: u64) {
-    // Set TTBR0_EL1 to the process's page table root
-    asm!("msr TTBR0_EL1, {}", in(reg) ttbr0_phys);
-    // Barrier only — no TLB invalidation needed for first context switch
-    // since the kernel uses TTBR1 for its own pages
-    crate::arch::cpu::isb();
+/// Load the incoming task's translation root: its own for an EL0 process,
+/// the kernel's for a kernel thread.
+fn enter_address_space(task: &Task) {
+    if task.is_user && task.ttbr0_phys != 0 {
+        crate::memory::aspace::activate(task.ttbr0_phys, 0);
+    } else {
+        crate::memory::aspace::activate_kernel();
+    }
 }
 
 /// Timer tick handler — called from timer IRQ
@@ -1426,13 +1424,7 @@ pub unsafe extern "C" fn run_and_wait_body(_pid: u64) -> i64 {
             task.state = TaskState::Running;
             task.time_slice = time_slice_for(task.priority);
             preempt::begin_slice();
-            if task.is_user && task.ttbr0_phys != 0 {
-                elf::activate_user_mappings(pid, task.ttbr0_phys);
-            }
-
-            // User pages are dual-mapped into kernel TTBR0 at ELF load time,
-            // so no TTBR0 switch is needed. eret into EL0 will work with the
-            // kernel's page table still active.
+            enter_address_space(task);
             let frame = task.regs;
 
             // Q3: put the task's FP/SIMD state back in the registers right
@@ -1864,10 +1856,8 @@ fn release_task_resources(task: &Task) {
 
 /// Q4: free a user task's data frames (stack, code, heap) by walking its
 /// OWN page tree, then the tree itself. User VAs live in TTBR0, so they
-/// cannot be translated through the kernel's TTBR1 walk. The kernel-TTBR0
-/// mirror is dropped first so no mapping outlives the frames.
+/// cannot be translated through the kernel's TTBR1 walk.
 fn free_user_address_space(task: &Task) {
-    elf::release_user_mappings(task.pid);
     // The task is dead, so no CPU walks its tree, and window
     // pages were unmapped by close_all_for_pid before this runs.
     crate::memory::aspace::free_user_root(task.ttbr0_phys);
