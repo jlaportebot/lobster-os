@@ -5,6 +5,8 @@
 //! therefore keeps running when a process root is loaded in TTBR0, and EL0 can
 //! only reach the pages the kernel mapped for it.
 
+use super::asid::{AsidTable, KERNEL_ASID};
+use crate::sync::spinlock::Spinlock;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Entries in one translation table.
@@ -21,6 +23,9 @@ const OUT_MASK: u64 = 0x0000_FFFF_FFFF_F000;
 const USER_L1_SLOTS: usize = 2;
 /// Bit position of the ASID inside TTBR0_EL1.
 const ASID_SHIFT: u64 = 48;
+
+/// ASID bindings of every live process root.
+static ASIDS: Spinlock<AsidTable> = Spinlock::new(AsidTable::new());
 
 /// Set once the first process root exists: the boot root's low half is then
 /// frozen and `mmu` asserts nothing maps into it any more.
@@ -199,27 +204,51 @@ pub fn free_user_root(root: u64) {
     if loaded_root() == root {
         activate_kernel();
     }
+    let released = ASIDS.lock().release(root);
+    if let Some(asid) = released {
+        flush_asid(asid);
+    }
     free_root(&mut KernelTables, root, &mut |pte| {
         super::process_vmem::release_leaf(pte)
     });
 }
 
-/// Install `root` (with `asid`) in TTBR0_EL1 and drop stale translations.
-pub fn activate(root: u64, asid: u16) {
+/// Invalidate every cached translation tagged with `asid`.
+fn flush_asid(asid: u16) {
+    let operand = (asid as u64) << ASID_SHIFT;
+    // SAFETY: TLB maintenance by ASID only discards cached translations.
+    unsafe {
+        core::arch::asm!("tlbi aside1is, {v}", "dsb ish", "isb", v = in(reg) operand);
+    }
+}
+
+/// Invalidate every cached translation (ASID rollover).
+fn flush_all() {
+    // SAFETY: TLB maintenance only discards cached translations.
+    unsafe {
+        core::arch::asm!("tlbi vmalle1is", "dsb ish", "isb");
+    }
+}
+
+/// Switch TTBR0_EL1 to a user root under its own ASID. User descriptors
+/// are non-global, so no TLB flush is needed unless the ASIDs rolled over.
+pub fn activate_user(root: u64) {
+    let binding = ASIDS.lock().bind(root);
+    if binding.rolled_over {
+        flush_all();
+    }
+    install(root, binding.asid);
+}
+
+/// Write TTBR0_EL1 after the table stores are visible.
+fn install(root: u64, asid: u16) {
     let value = root | ((asid as u64) << ASID_SHIFT);
     crate::arch::cpu::dsb();
     // SAFETY: `root` is a live root containing the kernel's low-half blocks,
     // so instruction fetch continues after the write; the barriers order the
     // table stores before the switch and the switch before later accesses.
     unsafe {
-        core::arch::asm!(
-            "msr TTBR0_EL1, {v}",
-            "isb",
-            "tlbi vmalle1is",
-            "dsb ish",
-            "isb",
-            v = in(reg) value,
-        );
+        core::arch::asm!("msr TTBR0_EL1, {v}", "isb", v = in(reg) value);
     }
 }
 
@@ -233,7 +262,7 @@ pub fn loaded_root() -> u64 {
 
 /// Return to the kernel's own table (kernel threads, teardown).
 pub fn activate_kernel() {
-    activate(super::mmu::boot_root_phys(), 0);
+    install(super::mmu::boot_root_phys(), KERNEL_ASID);
 }
 
 #[cfg(test)]

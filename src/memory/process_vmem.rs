@@ -409,6 +409,9 @@ pub unsafe fn cow_mark_all(ttbr0_phys: u64) {
     for_each_user_l3(ttbr0_phys, |_, _, l3| {
         cow_mark_leaves((crate::memory::PHYS_MAP_OFFSET + l3) as *mut [u64; 512]);
     });
+    // The running parent may hold writable translations for the pages that
+    // just became read-only; drop them so the next store takes the COW fault.
+    core::arch::asm!("tlbi vmalle1is", "dsb ish", "isb");
 }
 
 /// Mark the writable leaves of one L3 table copy-on-write.

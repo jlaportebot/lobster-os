@@ -1125,7 +1125,7 @@ pub unsafe fn restore_context(frame: &TrapFrame) {
 /// the kernel's for a kernel thread.
 fn enter_address_space(task: &Task) {
     if task.is_user && task.ttbr0_phys != 0 {
-        crate::memory::aspace::activate(task.ttbr0_phys, 0);
+        crate::memory::aspace::activate_user(task.ttbr0_phys);
     } else {
         crate::memory::aspace::activate_kernel();
     }

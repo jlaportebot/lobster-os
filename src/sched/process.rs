@@ -222,7 +222,9 @@ pub fn exec(path: &str) -> i64 {
 
     unsafe {
         if let Some(ref mut task) = TASK_TABLE[task_idx] {
-            // Free old address space
+            // Load the new root first so the old tree is never live while
+            // it is being freed.
+            crate::memory::aspace::activate_user(load_result.ttbr0_phys);
             if task.ttbr0_phys != 0 {
                 let old_space = AddressSpace {
                     ttbr0_phys: task.ttbr0_phys,
@@ -252,9 +254,6 @@ pub fn exec(path: &str) -> i64 {
             task.regs.sp = elf::USER_STACK_TOP;
             task.regs.spsr = 0x0000; // EL0t, all IRQs unmasked
             task.regs.x30 = load_result.entry_point;
-
-            // Switch to the new address space immediately
-            crate::memory::aspace::activate(load_result.ttbr0_phys, 0);
 
             // 6. Credential transformation on exec (setuid/setgid binaries)
             {
