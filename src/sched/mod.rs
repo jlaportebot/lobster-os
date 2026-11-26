@@ -1053,67 +1053,44 @@ unsafe fn save_current_context(frame: &mut TrapFrame) {
     asm!("mrs {}, SPSR_EL1", out(reg) frame.spsr);
 }
 
-/// Restore execution context from a TrapFrame
-/// Loads all registers from memory and does eret.
-/// Saves ptr to stack first to avoid it being clobbered by ldr.
+/// Restore execution context from a TrapFrame.
+/// Restores all 31 general registers, SP_EL0, ELR_EL1 and SPSR_EL1, then does eret.
+/// Never returns to the caller.
 pub unsafe fn restore_context(frame: &TrapFrame) {
     let ptr = frame as *const TrapFrame as *const u8;
-    // Debug: print key values before eret (suppressed to reduce serial spam)
-    // crate::println!(
-    //     "[sched] restore_context: entry={:#018x} sp={:#018x} spsr={:#018x}",
-    //     frame.elr, frame.sp, frame.spsr
-    // );
+    // SAFETY: `ptr` points to a valid, aligned TrapFrame that outlives this call. IRQs are
+    // masked by every caller, and the block never returns (eret or noreturn).
     asm!(
-        "sub sp, sp, #16",
-        "str x16, [sp]",
-        // Load x0-x15
-        "ldr x0, [x16, #0]",
-        "ldr x1, [x16, #8]",
-        "ldr x2, [x16, #16]",
-        "ldr x3, [x16, #24]",
-        "ldr x4, [x16, #32]",
-        "ldr x5, [x16, #40]",
-        "ldr x6, [x16, #48]",
-        "ldr x7, [x16, #56]",
-        "ldr x8, [x16, #64]",
-        "ldr x9, [x16, #72]",
-        "ldr x10, [x16, #80]",
-        "ldr x11, [x16, #88]",
-        "ldr x12, [x16, #96]",
-        "ldr x13, [x16, #104]",
-        "ldr x14, [x16, #112]",
-        "ldr x15, [x16, #120]",
-        // Load x17-x30 (x16 stays the frame pointer until the very end)
-        "ldr x17, [x16, #136]",
-        "ldr x18, [x16, #144]",
-        "ldr x19, [x16, #152]",
-        "ldr x20, [x16, #160]",
-        "ldr x21, [x16, #168]",
-        "ldr x22, [x16, #176]",
-        "ldr x23, [x16, #184]",
-        "ldr x24, [x16, #192]",
-        "ldr x25, [x16, #200]",
-        "ldr x26, [x16, #208]",
-        "ldr x27, [x16, #216]",
-        "ldr x28, [x16, #224]",
-        "ldr x29, [x16, #232]",
-        "ldr x30, [x16, #240]",
-        // Now reload ptr from stack to a scratch reg for SP/ELR/SPSR
-        "ldr x16, [sp]",            // x16 = saved ptr
-        "ldr x17, [x16, #248]",     // sp (user stack)
-        // Workaround: QEMU doesn't implement direct msr SP_EL0 at EL1.
-        // Switch SP bank to SP_EL0, write SP, switch back to SP_EL1.
-        // SPSel controls which SP bank is active.
-        "mov x18, #0",              // x18 = 0 (select SP_EL0)
-        "msr SPSel, x18",           // SP = SP_EL0 bank
-        "mov sp, x17",              // Write user SP to SP_EL0
-        "mov x18, #1",              // x18 = 1 (select SP_EL1)
-        "msr SPSel, x18",           // SP = SP_EL1 bank (restore kernel SP)
-        "ldr x17, [x16, #256]",     // elr
+        // System registers first, while x17/x18 are still free to use as scratch.
+        "ldr x17, [x16, #248]",     // user SP
+        // QEMU workaround kept from the original: write SP_EL0 through the SPSel bank switch.
+        "mov x18, #0",
+        "msr SPSel, x18",
+        "mov sp, x17",
+        "mov x18, #1",
+        "msr SPSel, x18",
+        "ldr x17, [x16, #256]",     // ELR_EL1
         "msr ELR_EL1, x17",
-        "ldr x17, [x16, #264]",     // spsr
+        "ldr x17, [x16, #264]",     // SPSR_EL1
         "msr SPSR_EL1, x17",
-        "add sp, sp, #16",
+        // General registers: the base moves to x30, which is loaded last.
+        "mov x30, x16",
+        "ldp x0, x1, [x30, #0]",
+        "ldp x2, x3, [x30, #16]",
+        "ldp x4, x5, [x30, #32]",
+        "ldp x6, x7, [x30, #48]",
+        "ldp x8, x9, [x30, #64]",
+        "ldp x10, x11, [x30, #80]",
+        "ldp x12, x13, [x30, #96]",
+        "ldp x14, x15, [x30, #112]",
+        "ldp x16, x17, [x30, #128]",
+        "ldp x18, x19, [x30, #144]",
+        "ldp x20, x21, [x30, #160]",
+        "ldp x22, x23, [x30, #176]",
+        "ldp x24, x25, [x30, #192]",
+        "ldp x26, x27, [x30, #208]",
+        "ldp x28, x29, [x30, #224]",
+        "ldr x30, [x30, #240]",
         "eret",
         in("x16") ptr,
         options(noreturn),
