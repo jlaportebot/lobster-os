@@ -161,6 +161,28 @@ pub fn tick() {
     }
 }
 
+/// Set once the splash hands over; cleared when the ready marker is sent.
+static DESKTOP_READY_PENDING: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Announce desktop-ready (serial marker plus lobster-sys state) after the
+/// first full composite with panel and icons reached the framebuffer.
+///
+/// The harness and `lobstervm start --wait` screenshot as soon as they see
+/// the marker, so it must not fire while only the wallpaper is on screen.
+pub fn announce_desktop_ready_if_pending() {
+    use core::sync::atomic::Ordering;
+    if !DESKTOP_READY_PENDING.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    // E2: the harness waits on this instead of a fixed sleep, and it doubles
+    // as the boot-time baseline record.
+    let now_us = crate::arch::timer::Timer::system_time_us();
+    crate::println!("desktop-ready t_ms={}", now_us / 1_000);
+    #[cfg(feature = "qemu_raspi5b")]
+    crate::drivers::lobster_sys::publish_state(crate::drivers::lobster_sys::GuestState::Desktop);
+}
+
 /// Transition from splash to desktop
 pub fn transition_to_desktop() {
     unsafe {
@@ -175,12 +197,7 @@ pub fn transition_to_desktop() {
     // 2. Blend splash → desktop over N frames
     // 3. Switch to desktop
     // For now, instant transition
-    // E2: desktop-ready marker — the harness waits on this instead of a fixed
-    // 16s sleep, and it doubles as the boot-time baseline record.
-    let now_us = crate::arch::timer::Timer::system_time_us();
-    crate::println!("desktop-ready t_ms={}", now_us / 1_000);
-    #[cfg(feature = "qemu_raspi5b")]
-    crate::drivers::lobster_sys::publish_state(crate::drivers::lobster_sys::GuestState::Desktop);
+    DESKTOP_READY_PENDING.store(true, core::sync::atomic::Ordering::Release);
     crate::println!("[splash] Transitioning to desktop");
 
     unsafe {

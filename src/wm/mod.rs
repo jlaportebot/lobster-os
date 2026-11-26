@@ -187,8 +187,11 @@ fn tick_scene(user_only: bool) {
         desktop_icons::tick();
     }
     damage_live_regions(content_dirty);
-    scene::compose();
+    let presented = scene::compose();
     compositor::draw_software_cursor(&device);
+    if presented && crate::display::splash::is_done() {
+        crate::display::splash::announce_desktop_ready_if_pending();
+    }
 }
 
 /// Run one frame of the window manager: poll input, update, composite
@@ -237,6 +240,9 @@ fn tick_hardware() {
     dialog::draw(&fb);
     if lock::is_active() {
         lock::draw(&fb);
+    }
+    if crate::display::splash::is_done() {
+        crate::display::splash::announce_desktop_ready_if_pending();
     }
 }
 
