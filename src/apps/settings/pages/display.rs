@@ -43,11 +43,11 @@ pub fn draw(ui: &mut Ui, flow: &mut Flow, st: &mut State) {
     ui.dropdown(0, scale, "100%", false);
     note(ui, flow, "Only 100% is available in this build.");
     if st.resolution_menu.is_open() {
-        open_popup(ui, st, field);
+        open_popup(ui, field);
     }
 }
 
-fn open_popup(ui: &mut Ui, st: &State, field: crate::wm::controls::Rect) {
+fn open_popup(ui: &mut Ui, field: crate::wm::controls::Rect) {
     let labels: Vec<String> = RESOLUTIONS.iter().map(|&(w, h)| mode_label(w, h)).collect();
     let items: Vec<&str> = labels.iter().map(String::as_str).collect();
     let keys: Vec<u32> = (0..items.len())
@@ -55,14 +55,5 @@ fn open_popup(ui: &mut Ui, st: &State, field: crate::wm::controls::Rect) {
         .collect();
     let (w, h) = display::current();
     let selected = index_of(w, h).unwrap_or(usize::MAX);
-    let view = ui.view_extent();
-    ui.dropdown_popup(
-        field,
-        &items,
-        &keys,
-        &st.resolution_menu,
-        selected,
-        Action::DismissPopup.key(),
-        view,
-    );
+    ui.dropdown_popup(field, &items, &keys, selected, Action::DismissPopup.key());
 }

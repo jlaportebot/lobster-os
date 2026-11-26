@@ -163,31 +163,11 @@ fn grab_offset(track: &Track, press_y: i32) -> i32 {
 /// Keyboard input while the Settings window is focused. True when consumed.
 pub fn handle_key(scancode: u8, ch: Option<char>) -> bool {
     let st = state::get();
-    let consumed = key_in_popup(st, scancode)
-        || key_in_url_field(st, scancode, ch)
-        || key_navigation(st, scancode);
+    let consumed = key_in_url_field(st, scancode, ch) || key_navigation(st, scancode);
     if consumed {
         crate::wm::dirty::mark();
     }
     consumed
-}
-
-fn key_in_popup(st: &mut state::State, scancode: u8) -> bool {
-    if !st.resolution_menu.is_open() {
-        return false;
-    }
-    match scancode {
-        SC_ESC => st.resolution_menu.close(),
-        SC_UP => st.resolution_menu.move_highlight(-1),
-        SC_DOWN => st.resolution_menu.move_highlight(1),
-        SC_ENTER | SC_SPACE => {
-            if let Some(i) = st.resolution_menu.activate() {
-                actions::perform(Action::ResolutionPick(i as u8));
-            }
-        }
-        _ => return false,
-    }
-    true
 }
 
 fn key_in_url_field(st: &mut state::State, scancode: u8, ch: Option<char>) -> bool {

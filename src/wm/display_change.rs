@@ -81,6 +81,7 @@ pub fn apply_mode(
     crate::wm::start_menu::close();
     crate::wm::tray_popups::close();
     crate::wm::context_menu::hide();
+    crate::wm::popup_list::close();
     crate::wm::dialog::on_screen_resize((old.width, old.height), (info.width, info.height));
     #[cfg(feature = "qemu_raspi5b")]
     crate::wm::scene::init();

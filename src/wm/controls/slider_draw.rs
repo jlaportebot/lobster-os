@@ -1,7 +1,6 @@
 //! Slider, dropdown, progress bar, scrollbar and text field drawing.
 
 use super::drag::Track;
-use super::dropdown::Dropdown;
 use super::scroll;
 use super::ui::{on_color, style, Look, Ui};
 use super::widgets::{CONTROL_H, LABEL_PX, RADIUS};
@@ -9,7 +8,7 @@ use super::Rect;
 use crate::display::icons::Glyph;
 use crate::display::text::{self, Face};
 use crate::wm::hit_region::HitKind;
-use crate::wm::theme;
+use crate::wm::{popup_list, theme};
 
 /// Slider thumb diameter.
 const THUMB_D: u32 = 20;
@@ -17,8 +16,6 @@ const THUMB_D: u32 = 20;
 const TRACK_H: u32 = 6;
 /// Height of one row in a dropdown popup.
 pub const POPUP_ROW_H: u32 = 32;
-/// Vertical gap between a dropdown field and its popup.
-const POPUP_GAP: u32 = 4;
 /// Opacity of popup drop shadows.
 pub const SHADOW_ALPHA: u8 = 90;
 /// Progress bar thickness.
@@ -102,56 +99,23 @@ impl Ui<'_> {
         }
     }
 
-    /// Popup list for an open dropdown, drawn over the content below
-    /// `anchor` (or above it when there is no room). A scrim covering the
-    /// whole view is registered first so outside clicks reach `dismiss_key`.
-    #[allow(clippy::too_many_arguments)]
+    /// Open the popup list for a dropdown whose field is `anchor`. The
+    /// list is drawn by [`crate::wm::popup_list`] in screen space so it can
+    /// extend past this window; picking a row delivers `keys[i]` to this
+    /// window's handler and dismissing delivers `dismiss_key`. Call every
+    /// frame while the dropdown is open: repeats are ignored, and a frame
+    /// that does not call it closes the list.
     pub fn dropdown_popup(
         &mut self,
         anchor: Rect,
         items: &[&str],
         keys: &[u32],
-        menu: &Dropdown,
         selected: usize,
         dismiss_key: u32,
-        view: Rect,
     ) {
-        let th = theme::current();
-        self.set_modal(false);
-        self.register(dismiss_key, view, HitKind::Custom, false);
-        let height = items.len() as u32 * POPUP_ROW_H + 8;
-        let below = anchor.bottom() + POPUP_GAP as i32;
-        let fits =
-            self.to_client(Rect::new(0, below, 1, height)).bottom() <= self.viewport_bottom();
-        let top = if fits {
-            below
-        } else {
-            anchor.y - POPUP_GAP as i32 - height as i32
-        };
-        let popup = Rect::new(anchor.x, top, anchor.w, height);
-        self.blend(popup.offset(0, 3), RADIUS + 2, 0x000000, SHADOW_ALPHA);
-        self.ring(popup, RADIUS + 2, 1, th.panel_border, th.menu_bg);
-        for (i, item) in items.iter().enumerate() {
-            let row = Rect::new(
-                popup.x + 4,
-                popup.y + 4 + (i as u32 * POPUP_ROW_H) as i32,
-                popup.w - 8,
-                POPUP_ROW_H,
-            );
-            let hot = menu.highlight() == i || self.look(row, true) != Look::Normal;
-            if hot {
-                self.blend(row, RADIUS, theme::accent_color(), 90);
-            }
-            let color = th.menu_item_text;
-            let s = style(Face::Ui, LABEL_PX, color);
-            let ty = row.y + (row.h.saturating_sub(text::line_height(&s)) / 2) as i32;
-            self.text_fitted(row.x + 10, ty, row.w - 40, item, &s);
-            if i == selected {
-                let tick = Rect::new(row.right() - 28, row.y, 20, row.h);
-                self.glyph(Glyph::Check, 16, tick, th.label_text);
-            }
-            self.register(keys[i], row, HitKind::MenuItem, false);
-        }
+        self.popup_requested = true;
+        let screen = self.to_screen(anchor);
+        popup_list::open(self.win_id, screen, items, keys, selected, dismiss_key);
     }
 
     /// Thin progress bar filled to `percent` (0..=100).

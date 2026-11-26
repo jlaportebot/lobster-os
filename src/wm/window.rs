@@ -274,6 +274,7 @@ pub fn destroy(id: u32) {
     crate::wm::scene::release_window(id);
     // Clear hit regions for this window
     crate::wm::hit_region::on_window_destroyed(id);
+    crate::wm::popup_list::on_window_destroyed(id);
     // Find the window index first
     let win_idx = {
         let windows = WINDOWS.lock();
@@ -440,6 +441,7 @@ pub fn resize(id: u32, w: u32, h: u32) {
 
 /// Minimize a window
 pub fn minimize(id: u32) {
+    crate::wm::popup_list::on_window_destroyed(id);
     let mut windows = WINDOWS.lock();
 
     for i in 0..MAX_WINDOWS {
