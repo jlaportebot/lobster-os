@@ -107,6 +107,9 @@ pub mod wm;
 #[cfg(target_arch = "x86_64")]
 pub mod sched {
 
+    #[path = "uaccess.rs"]
+    pub mod uaccess;
+
     pub const MAX_TASKS: usize = 32;
     pub const TICK_MS: u64 = 10;
 
