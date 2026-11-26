@@ -307,7 +307,7 @@ fn handle_key_press(scancode: u8, _extended: bool) {
     }
 
     // Alt+Tab: window switcher overlay
-    if hid::alt_held() && scancode == 0x2B {
+    if hid::alt_held() && scancode == crate::wm::shortcuts::SC_TAB {
         if crate::wm::alt_tab::is_visible() {
             crate::wm::alt_tab::advance(hid::shift_held());
         } else {

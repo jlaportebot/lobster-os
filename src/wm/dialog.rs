@@ -221,18 +221,52 @@ fn top_dialog() -> Option<&'static Dialog> {
     }
 }
 
+/// Top-left corner of a `DIALOG_W` x `dialog_h` dialog centred on a
+/// `screen_w` x `screen_h` screen.
+fn centered_origin(screen_w: u32, screen_h: u32, dialog_h: u32) -> (u32, u32) {
+    (
+        screen_w.saturating_sub(DIALOG_W) / 2,
+        screen_h.saturating_sub(dialog_h) / 2,
+    )
+}
+
 /// Calculate dialog position (centered on screen)
 fn dialog_position(fb: &FramebufferInfo) -> (u32, u32) {
-    let x = (fb.width.saturating_sub(DIALOG_W)) / 2;
-    let y = (fb.height.saturating_sub(DIALOG_H)) / 2;
-    (x, y)
+    centered_origin(fb.width, fb.height, DIALOG_H)
 }
 
 /// Calculate file picker position
 fn file_picker_position(fb: &FramebufferInfo) -> (u32, u32) {
-    let x = (fb.width.saturating_sub(DIALOG_W)) / 2;
-    let y = (fb.height.saturating_sub(FILE_PICKER_H)) / 2;
-    (x, y)
+    centered_origin(fb.width, fb.height, FILE_PICKER_H)
+}
+
+/// How far a dialog of height `dialog_h` moves when the screen changes from
+/// `old` to `new` size (both `(width, height)`), so it stays centred.
+fn recentre_shift(old: (u32, u32), new: (u32, u32), dialog_h: u32) -> (i32, i32) {
+    let (ox, oy) = centered_origin(old.0, old.1, dialog_h);
+    let (nx, ny) = centered_origin(new.0, new.1, dialog_h);
+    (nx as i32 - ox as i32, ny as i32 - oy as i32)
+}
+
+/// Move a coordinate by a signed delta, saturating at zero.
+fn shifted(value: u32, delta: i32) -> u32 {
+    (value as i64 + i64::from(delta)).max(0) as u32
+}
+
+/// Re-centre every open dialog after a display mode change. Buttons keep
+/// absolute screen coordinates, so they have to move with their dialog.
+pub fn on_screen_resize(old: (u32, u32), new: (u32, u32)) {
+    // SAFETY: dialogs are only touched from the kernel's single render
+    // thread, the same context that changes the display mode.
+    let stack = unsafe { &mut *core::ptr::addr_of_mut!(DIALOG_STACK) };
+    for dialog in stack.iter_mut().flatten() {
+        let (dx, dy) = recentre_shift(old, new, get_dialog_height(&dialog.kind));
+        for button in dialog.buttons.iter_mut().flatten() {
+            button.x = shifted(button.x, dx);
+            button.y = shifted(button.y, dy);
+        }
+    }
+    crate::wm::compositor::mark_full_redraw();
 }
 
 /// Create standard dialog buttons
@@ -479,6 +513,21 @@ fn load_directory(dialog: &mut Dialog) {
                 _ => a.name.cmp(&b.name),
             });
     }
+}
+
+/// Route one left-button edge to the top dialog and report it consumed.
+///
+/// Only presses act: the release of the click that opened the dialog (a
+/// context-menu item, a Settings button) arrives after the dialog exists and
+/// would otherwise land outside the text field and unfocus it.
+pub fn handle_button_edge(px: u32, py: u32, is_press: bool) -> bool {
+    if !is_open() {
+        return false;
+    }
+    if is_press {
+        handle_click(px, py);
+    }
+    true
 }
 
 /// Handle a click on the top dialog
@@ -1213,6 +1262,41 @@ mod tests {
     }
 
     #[test]
+    fn release_of_the_opening_click_keeps_the_prompt_focused() {
+        let _guard = crate::test_support::serial_guard();
+        init();
+        // SAFETY: serialized by test_support::serial_guard
+        unsafe {
+            STACK_DEPTH = 0;
+            for slot in DIALOG_STACK.iter_mut() {
+                *slot = None;
+            }
+        }
+        let mut input = TextInput::ZERO;
+        input.state = WidgetState::Focused;
+        let opened = push_dialog(Dialog {
+            kind: DialogKind::Prompt {
+                title: "New Folder".into(),
+                message: "Name:".into(),
+                default_value: String::new(),
+                ok_label: "OK".into(),
+                cancel_label: "Cancel".into(),
+            },
+            buttons: [None, None, None],
+            button_count: 0,
+            text_input: Some(input),
+            focused_btn: 0,
+            file_entries: Vec::new(),
+            file_selected: None,
+            file_scroll: 0,
+        });
+        assert!(opened);
+        assert!(handle_button_edge(5, 5, false));
+        let state = top_dialog_mut().and_then(|d| d.text_input.as_ref().map(|i| i.state));
+        assert_eq!(state, Some(WidgetState::Focused));
+    }
+
+    #[test]
     fn dialog_max_depth() {
         let _guard = crate::test_support::serial_guard();
         init();
@@ -1500,4 +1584,45 @@ fn draw_row_text(
 ) {
     let y = theme::centered_line_y(row_y, row_h, style);
     text::draw_fitted(fb, x, y, max_w, text, style);
+}
+
+#[cfg(test)]
+mod resize_tests {
+    use super::*;
+
+    #[test]
+    fn centred_origin_matches_old_formula() {
+        assert_eq!(centered_origin(1920, 1080, DIALOG_H), (760, 440));
+    }
+
+    #[test]
+    fn shift_follows_the_new_screen_centre() {
+        let (dx, dy) = recentre_shift((1920, 1080), (1280, 720), DIALOG_H);
+        assert_eq!((dx, dy), (440 - 760, 260 - 440));
+    }
+
+    #[test]
+    fn no_shift_when_size_is_unchanged() {
+        assert_eq!(
+            recentre_shift((800, 600), (800, 600), FILE_PICKER_H),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn shifted_saturates_at_zero() {
+        assert_eq!(shifted(10, -50), 0);
+        assert_eq!(shifted(10, 5), 15);
+    }
+
+    #[test]
+    fn buttons_stay_inside_dialog_after_resize() {
+        let (mut buttons, _) = create_buttons(&["OK", "Cancel"], 760, 440, DIALOG_W);
+        let (dx, dy) = recentre_shift((1920, 1080), (1280, 720), DIALOG_H);
+        let button = buttons[1].as_mut().unwrap();
+        button.x = shifted(button.x, dx);
+        let (nx, _) = centered_origin(1280, 720, DIALOG_H);
+        assert!(button.x >= nx && button.x + button.w <= nx + DIALOG_W);
+        assert!(dy < 0);
+    }
 }

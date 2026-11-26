@@ -1167,25 +1167,8 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
                     ));
                     return 0;
                 }
-                match crate::display::fb::init(w, h, 32) {
+                match crate::wm::display_change::apply_mode(w, h) {
                     Ok(info) => {
-                        crate::display::console::init(info);
-                        // Repaint the desktop onto the new surface and
-                        // pull all windows back on-screen.
-                        crate::wm::wallpaper::paint_to_screen();
-                        for id in 1..=crate::wm::window::max_id() {
-                            if !crate::wm::window::exists(id) {
-                                continue;
-                            }
-                            if let Some((x, y, _ww, _hh)) = crate::wm::window::get_info(id) {
-                                let nx = x.min(info.width.saturating_sub(64));
-                                let ny = y.min(info.height.saturating_sub(64));
-                                if nx != x || ny != y {
-                                    crate::wm::window::move_window(id, nx, ny);
-                                }
-                            }
-                        }
-                        crate::wm::dirty::mark();
                         out.puts(&alloc::format!(
                             "resolution: now {}x{}\r\n",
                             info.width,
