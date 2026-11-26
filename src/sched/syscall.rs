@@ -46,6 +46,7 @@
 //! 42 = fcntl(fd, cmd, arg)
 
 use crate::println;
+use crate::sched::uaccess::{copy_from_user, copy_to_user, user_bytes, UserPtr, EFAULT};
 use crate::sched::{self, TrapFrame};
 
 /// Syscall numbers
@@ -1103,13 +1104,17 @@ fn sys_brk(addr: u64) -> u64 {
 /// sys_getrandom — fill a user buffer from the kernel CSPRNG. A buffer that
 /// is not entirely in user address space is refused with -EFAULT.
 fn sys_getrandom(buf_ptr: u64, len: usize, _flags: u32) -> u64 {
-    if len == 0 {
-        return 0;
+    let mut chunk = [0u8; IO_CHUNK];
+    let mut done = 0usize;
+    while done < len {
+        let n = IO_CHUNK.min(len - done);
+        crate::security::random::fill(&mut chunk[..n]);
+        let at = UserPtr(buf_ptr).offset(done as u64);
+        if copy_to_user(at, &chunk[..n]).is_err() {
+            return EFAULT;
+        }
+        done += n;
     }
-    let Some(buf) = crate::sched::uaccess::user_slice_mut(buf_ptr, len as u64) else {
-        return u64::MAX - 13; // -EFAULT
-    };
-    crate::security::random::fill(buf);
     len as u64
 }
 
@@ -1142,104 +1147,103 @@ fn sys_exit(code: i64) -> u64 {
     0 // exit doesn't really return, but we return 0 to satisfy the type
 }
 
+/// Largest single read or write serviced per call (callers get a short count).
+const MAX_IO_BYTES: usize = 1 << 20;
+/// Bytes staged on the kernel stack per copy in the streaming paths.
+const IO_CHUNK: usize = 256;
+
 /// sys_write(fd, buf_ptr, len) — write to file descriptor
 fn sys_write(fd: i32, buf_ptr: u64, len: usize) -> u64 {
-    // Check if this is an IPC fd first
+    let len = len.min(MAX_IO_BYTES);
     let pid = sched::current_pid();
     if let Some(task_idx) = sched::find_task_index(pid) {
-        if let Some(fd_table) = crate::ipc::get_fd_table(task_idx) {
-            if let Some(entry) = fd_table.get(fd as usize) {
-                if entry.kind == crate::ipc::FdKind::PipeWrite {
-                    // Q4: validate the user pointer before dereferencing.
-                    let Some(buf) = crate::sched::uaccess::user_slice(buf_ptr, len as u64) else {
-                        return u64::MAX - 13; // -EFAULT
-                    };
-                    let result = crate::ipc::pipe_write(task_idx, fd as usize, buf);
-                    return if result < 0 {
-                        u64::MAX // Error
-                    } else {
-                        result as u64
-                    };
-                }
-            }
+        if is_fd_kind(task_idx, fd, crate::ipc::FdKind::PipeWrite) {
+            let Ok(buf) = user_bytes(UserPtr(buf_ptr), len) else {
+                return EFAULT;
+            };
+            let result = crate::ipc::pipe_write(task_idx, fd as usize, &buf);
+            return if result < 0 { u64::MAX } else { result as u64 };
         }
     }
-
-    // Fallback: fd=1 (stdout) and fd=2 (stderr) → UART
     if fd != 1 && fd != 2 {
         return u64::MAX; // -1 (EBADF)
     }
+    write_user_to_uart(buf_ptr, len)
+}
 
-    // Q4: validate the user pointer before dereferencing.
-    let Some(buf) = crate::sched::uaccess::user_slice(buf_ptr, len as u64) else {
-        return u64::MAX - 13; // -EFAULT
-    };
-    #[cfg(target_arch = "aarch64")]
-    {
-        for &byte in buf {
-            crate::drivers::uart::Uart10::putc(byte);
+/// True when `fd` of task `task_idx` is an IPC descriptor of `kind`.
+fn is_fd_kind(task_idx: usize, fd: i32, kind: crate::ipc::FdKind) -> bool {
+    crate::ipc::get_fd_table(task_idx)
+        .and_then(|table| table.get(fd as usize))
+        .is_some_and(|entry| entry.kind == kind)
+}
+
+/// Stream `len` user bytes to the console; -EFAULT if any page is bad.
+fn write_user_to_uart(buf_ptr: u64, len: usize) -> u64 {
+    let mut chunk = [0u8; IO_CHUNK];
+    let mut done = 0usize;
+    while done < len {
+        let n = IO_CHUNK.min(len - done);
+        let at = UserPtr(buf_ptr).offset(done as u64);
+        if copy_from_user(at, &mut chunk[..n]).is_err() {
+            return if done == 0 { EFAULT } else { done as u64 };
         }
-    }
-    #[cfg(target_arch = "x86_64")]
-    {
-        for &byte in buf {
+        for &byte in &chunk[..n] {
+            #[cfg(target_arch = "aarch64")]
+            crate::drivers::uart::Uart10::putc(byte);
+            #[cfg(target_arch = "x86_64")]
             crate::arch::x86_64::console::serial_putc(byte);
         }
+        done += n;
     }
     len as u64
 }
 
 /// sys_read(fd, buf_ptr, len) — read from file descriptor
 fn sys_read(fd: i32, buf_ptr: u64, len: usize) -> u64 {
-    // Check if this is an IPC fd first
+    let len = len.min(MAX_IO_BYTES);
     let pid = sched::current_pid();
     if let Some(task_idx) = sched::find_task_index(pid) {
-        if let Some(fd_table) = crate::ipc::get_fd_table(task_idx) {
-            if let Some(entry) = fd_table.get(fd as usize) {
-                if entry.kind == crate::ipc::FdKind::PipeRead {
-                    // Read from pipe
-                    // Q4: validate the user pointer before dereferencing.
-                    let Some(buf) = crate::sched::uaccess::user_slice_mut(buf_ptr, len as u64)
-                    else {
-                        return u64::MAX - 13; // -EFAULT
-                    };
-                    let result = crate::ipc::pipe_read(task_idx, fd as usize, buf);
-                    return if result < 0 {
-                        u64::MAX // Error / would-block
-                    } else {
-                        result as u64
-                    };
-                }
+        if is_fd_kind(task_idx, fd, crate::ipc::FdKind::PipeRead) {
+            let mut buf = alloc::vec![0u8; len];
+            let result = crate::ipc::pipe_read(task_idx, fd as usize, &mut buf);
+            if result < 0 {
+                return u64::MAX; // Error / would-block
             }
+            return match copy_to_user(UserPtr(buf_ptr), &buf[..result as usize]) {
+                Ok(()) => result as u64,
+                Err(_) => EFAULT,
+            };
         }
     }
-
-    // Fallback: fd=0 (stdin) → UART
     if fd == 0 {
-        // Read from UART — non-blocking poll for data
-        let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, len) };
-        let mut count = 0usize;
-        for slot in buf.iter_mut() {
-            // Poll UART for a byte
-            match crate::drivers::uart::Uart10::read_byte_nb() {
-                Some(byte) => {
-                    *slot = byte;
-                    count += 1;
-                    if byte == b'\r' || byte == b'\n' {
-                        break; // Line-buffered: stop at newline
-                    }
-                }
-                None => break, // No more data available
-            }
-        }
-        if count == 0 {
-            // No data available — yield to scheduler and return 0
-            crate::arch::cpu::wfe();
-            return 0;
-        }
-        return count as u64;
+        return read_uart_to_user(buf_ptr, len);
     }
     u64::MAX // -1 (EBADF)
+}
+
+/// Poll the console for a line (up to `len` bytes) and copy it out.
+fn read_uart_to_user(buf_ptr: u64, len: usize) -> u64 {
+    let mut line = alloc::vec::Vec::new();
+    while line.len() < len {
+        match crate::drivers::uart::Uart10::read_byte_nb() {
+            Some(byte) => {
+                line.push(byte);
+                if byte == b'\r' || byte == b'\n' {
+                    break; // Line-buffered: stop at newline
+                }
+            }
+            None => break,
+        }
+    }
+    if line.is_empty() {
+        crate::arch::cpu::wfe();
+        return 0;
+    }
+    match copy_to_user(UserPtr(buf_ptr), &line) {
+        Ok(()) => line.len() as u64,
+        Err(_) => EFAULT,
+    }
 }
 
 /// sys_open(path, flags) — open a file

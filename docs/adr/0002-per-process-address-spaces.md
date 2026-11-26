@@ -363,3 +363,37 @@ Line numbers are from this commit. Unmarked entries are user pointers in
 
 `wm/user_windows.rs` pixel accesses (:155, :171, :201, :332, :366, :686) go
 through the direct map of window frames and are not user pointers.
+
+## Amendments (orchestrator review, 2026-11-25)
+
+**A. Bit-identical kernel descriptors.** Global (nG=0) TLB entries are not
+ASID-tagged: an identity entry cached while the boot root is live would be used
+by EL0 while a process root is live. The commit that starts copying descriptors
+also applies UXN=1 (identity RAM blocks) and UXN=1+PXN=1 (peripheral and GIC
+blocks) to the BOOT ROOT's own entries, so every table holds identical kernel
+descriptors. Host test: the copied descriptors equal the boot descriptors.
+
+**B. TCR_EL1.** `setup_tcr` (`memory/mmu.rs`, the `msr TCR_EL1` write) composes
+T0SZ=T1SZ=16, TG0=4 KiB, TG1=4 KiB, SH/ORGN/IRGN=3/1/1, IPS=2 and nothing else:
+A1 (bit 22) is 0, so the ASID comes from TTBR0, and AS (bit 36) is 0, so ASIDs
+are 8 bits. Verified by reading the constant; no change needed.
+
+**C. Kernel low half is frozen after boot.** Grep of every runtime mapper:
+`map_page_virt`, `unmap_page_virt`, `protect_page_virt` and `remap_non_cacheable`
+(`memory/mmu.rs`; callers `memory/vmem.rs:29-39` and `display/fb.rs:439`) all edit
+the TTBR1 root (`PAGE_TABLE_STORAGE.0[1]`) at `PHYS_MAP_OFFSET` addresses. The
+framebuffer remap, MMIO and DMA buffers therefore never touch the low half.
+`map_range_blocks`/`map_range` on the TTBR0 root run only inside `mmu::init`.
+Phase B adds a debug assertion that `mmu::init` is the only writer after the
+first process root exists.
+
+**D. I-cache.** Code pages are filled through the direct-map alias, so before
+the first EL0 entry of a process (and after any write into an executable page)
+the loader runs `dc cvau` over the alias range, `dsb ish`, `ic ialluis`,
+`dsb ish`, `isb` (A76 I-cache is PIPT, so the alias is coherent after that).
+With W^X on there must be no GOT/PLT patching of executable pages; the
+relocation writer asserts the target PTE has UXN=1.
+
+**E. Flag lifetime.** `PER_PROCESS_TTBR0` exists during commits 2-4 only. The
+last commit deletes the dual-map path, `activate_user_mappings`,
+`INSTALLED_USER_PID` and the window mirror, leaving no dead code.
