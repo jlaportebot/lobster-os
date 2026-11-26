@@ -12,7 +12,9 @@ pub use package::{
 };
 
 #[allow(unused_imports)]
-pub use repo::{download_package, verify_checksum, RepoError, RepositoryConfig, RepositoryManager};
+pub use repo::{
+    download_package, verify_checksum, IndexFiles, RepoError, RepositoryConfig, RepositoryManager,
+};
 
 #[allow(unused_imports)]
 pub use install::{

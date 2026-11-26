@@ -361,6 +361,14 @@ fn handle_key_press(scancode: u8, _extended: bool) {
         return;
     }
 
+    // App Store: search, navigation and activation when its window is focused
+    if crate::wm::window::get_title(crate::wm::window::focused_id())
+        == crate::apps::app_store::TITLE
+        && crate::apps::app_store::handle_key(scancode, ch)
+    {
+        return;
+    }
+
     // Files: navigation, selection and file operations when focused
     if crate::apps::files::handle_key(scancode) {
         return;

@@ -119,6 +119,7 @@ fn render_apps(content_dirty: bool) {
         render_app(crate::apps::notes::render_to_windows);
         render_app(crate::apps::welcome::render_to_windows);
         render_app(crate::apps::settings::render_settings_window);
+        render_app(crate::apps::app_store::render_window);
         render_app(crate::apps::image_viewer::bmp_view::render_to_windows);
         render_app(crate::wm::user_windows::render_to_windows);
     }

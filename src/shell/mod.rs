@@ -1466,6 +1466,18 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
             }
             0
         }
+        "store" => {
+            #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
+            {
+                if argc >= 2 && args[1] == "state" {
+                    crate::println!("{}", crate::apps::app_store::describe());
+                } else {
+                    let id = crate::apps::app_store::open_window();
+                    crate::println!("store: window {}", id);
+                }
+            }
+            0
+        }
         "settings" => {
             #[cfg(all(target_arch = "aarch64", feature = "qemu_raspi5b"))]
             {

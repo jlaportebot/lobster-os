@@ -164,6 +164,8 @@ impl RepositoryManager {
         };
 
         let content = core::str::from_utf8(&data).unwrap_or("");
+        // The file is the whole truth: loading twice must not duplicate repos.
+        self.repos.clear();
         for line in content.lines() {
             if line.is_empty() || line.starts_with('#') {
                 continue;
@@ -184,29 +186,35 @@ impl RepositoryManager {
         Ok(())
     }
 
-    /// Update repository index (fetch from remote)
+    /// Fetch `index.json` of repository `name` and, when the repository
+    /// verifies signatures, its detached signature. Nothing is stored.
     #[cfg(target_arch = "aarch64")]
-    pub fn update_index(&mut self, name: &str) -> Result<(), RepoError> {
+    pub fn fetch_index_files(&self, name: &str) -> Result<IndexFiles, RepoError> {
         let repo = self
             .repos
             .iter()
             .find(|r| r.name == name && r.enabled)
             .ok_or(RepoError::NotFound)?;
         let index_url = format!("{}/index.json", repo.url);
-        let verify = repo.verify_signatures;
         let signature_url = format!("{}/{}", repo.url, INDEX_SIGNATURE_FILE);
         crate::println!("[pkg] Updating repository index from {}", index_url);
-
         let body = fetch_ok(&index_url)?;
-        let signature = if verify {
+        let signature = if repo.verify_signatures {
             Some(fetch_ok(&signature_url).map_err(|_| RepoError::SignatureError)?)
         } else {
             None
         };
+        Ok(IndexFiles { body, signature })
+    }
+
+    /// Update repository index (fetch from remote)
+    #[cfg(target_arch = "aarch64")]
+    pub fn update_index(&mut self, name: &str) -> Result<(), RepoError> {
+        let files = self.fetch_index_files(name)?;
         self.ingest_index(
             name,
-            &body,
-            signature.as_deref(),
+            &files.body,
+            files.signature.as_deref(),
             crate::arch::timer::Timer::uptime_ms(),
         )
     }
@@ -305,6 +313,13 @@ impl Default for RepositoryManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The two files a repository serves for its catalogue.
+#[derive(Debug, Clone)]
+pub struct IndexFiles {
+    pub body: Vec<u8>,
+    pub signature: Option<Vec<u8>>,
 }
 
 /// Repository errors
