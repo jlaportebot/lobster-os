@@ -142,14 +142,17 @@ and tested by CI; nothing is hand-assembled.
       channels on Windows), per-OS data dirs, display backend auto-pick (gtk/cocoa/sdl), finds a
       bundled QEMU next to itself; PyInstaller spec; unit tests + harness on all three OSes in CI.
       *Verified 2026-11-18:* Unix-socket/TCP channels, portable process control, per-OS dirs, display auto, bundle discovery, PyInstaller spec + bundle assembler + smoke test; CI unit tests + PyInstaller green on ubuntu/macos/windows; harness 12/12 on both transports; local bundle smoke passed (emulator 51af4d2). Live Windows/macOS runs arrive with E3.3's smoke matrix.
-- [ ] **E3.3 Release pipeline** (emulator repo): on tag / nightly, gather `kernel-nightly`
+- [x] **E3.3 Release pipeline** (emulator repo): on tag / nightly, gather `kernel-nightly`
       (kernel8.img), `qemu-nightly` (per OS), base disk from `tools/mkbase.py`, frozen `lobstervm`
       → Windows Inno Setup `.exe` (Start-menu + desktop shortcut), macOS `.dmg` (drag-to-Applications
       `.app`), Linux AppImage (+ `.deb` if cheap). Each installer is installed and smoke-tested on a
       clean runner of its OS (install → create VM → start headless → `desktop-ready` → shell
       `uptime` → screenshot artefact → uninstall), then attached to a GitHub Release with SHA256SUMS.
-- [ ] **E3.4 Docs**: README "Install" section with the three download links and first-run steps;
+- [x] **E3.4 Docs**: README "Install" section with the three download links and first-run steps;
       unsigned-binary notes (SmartScreen / Gatekeeper) stated plainly.
+      *Verified 2026-11-25:* emulator v0.1.0 (634b267) release run 45698277748 all green — 4 packages, 4 per-OS
+      install+smoke jobs, publish; orchestrator e2e of the aarch64 AppImage on a Pi 5 (SHA256SUMS OK, create/start/
+      shell/screenshot/stop/delete, desktop ready 6.5 s). Since 3dd905a any AppImage arguments go to the CLI.
 
 ---
 
@@ -240,14 +243,16 @@ and tested by CI; nothing is hand-assembled.
       Tab/Shift+Tab focus (30b9b03, gate 480 tests, harness 12/12). Disabled with a reason until their
       features exist: scale (O2.9), passwords (O3.8). Gaps: no mouse wheel (QEMU input has no wheel
       events), dropdown popups clip to the window, keyboard focus starts only after a click.
-- [~] **O4.2 Files**: mouse selection, double-click open-with by type, back/forward/up,
+- [x] **O4.2 Files**: mouse selection, double-click open-with by type, back/forward/up,
       breadcrumb, new/rename/delete/copy/cut/paste, drag-move, properties, trash, list/icon
       views, sidebar places, shared folder.
       *Verified 2026-11-19 (phase 1):* new `src/apps/files/` on the shared controls — list/icon views, sortable
       columns, places sidebar, clickable breadcrumb, back/forward/up, click/Ctrl/Shift multi-select with totals,
       copy/cut/paste with "(copy)" naming + rollback, rename, new folder/file, delete, item + background context menus,
       open-with through the desktop opener, `/share` listing, layout at 800×600 (f2b11fb, gate 641 tests, harness
-      12/12). Left (phase 2): trash, properties, drag-move, type-to-select, writes into `/share`.
+      12/12). *Phase 2 verified 2026-11-25:* trash, properties, drag-move, type-ahead, disabled Paste state, writes
+      into `/share` (8c37bf5, gate 780 tests, harness 12/12). Nits left: "Move 1 item(s)" wording, dotfiles shown
+      in Home, `/share` delete/rename only unit-tested.
 - [~] **O4.3 Browser v2**: fix the panic; HTML tokenizer + block/inline layout (headings,
       paragraphs, lists, links, emphasis, pre, tables-lite), proportional text, address bar,
       back/forward/reload, clickable links, scrolling, history/bookmarks, images (O2.6),
@@ -371,3 +376,5 @@ Work top to bottom; each step is committed and pushed when its check passes.
 | 2026-11-19 | O4.3 Browser v2: HTML tokenizer + layout engine, status-aware fetch, links/history/bookmarks | gate 563 tests + harness 12/12 + live pages (test page, 404, example.com, info.cern.ch, Wikipedia 512 KiB) |
 | 2026-11-19 | O4.2 Files phase 1 (views, selection, clipboard operations, context menus, open-with) | gate 641 tests + harness 12/12 + live screenshots |
 | 2026-11-19 | O3.8 lock screen + passwords, O1.5 CSPRNG; uaccess confined to the EL0 window (kernel text was writable via getrandom) | gate 737 tests + harness 12/12 + live lock/greeter/getrandom_test |
+| 2026-11-25 | O4.2 Files phase 2 (trash, properties, drag-move, type-ahead, `/share` writes) | gate 780 tests + harness 12/12 |
+| 2026-11-25 | E3.3/E3.4 one-click installers: emulator v0.1.0 (Windows .exe, macOS .dmg, Linux AppImage x86_64 + aarch64), each installed and smoke-tested on its OS in CI | release run 45698277748 all green + AppImage e2e on the Pi |
