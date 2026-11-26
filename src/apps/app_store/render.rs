@@ -31,8 +31,12 @@ const OFFLINE_ALPHA: u8 = 46;
 const DETAILS_PAD: i32 = 20;
 const DETAILS_BUTTON_H: u32 = 34;
 const LINE_GAP: i32 = 6;
-/// Width of the details pane's Close button.
-const CLOSE_BUTTON_W: u32 = 88;
+/// Width of the details pane's primary action button.
+const DETAILS_PRIMARY_W: u32 = 96;
+/// Width of the details pane's Remove button.
+const DETAILS_REMOVE_W: u32 = 88;
+/// Narrowest the details pane's Close button may become.
+const CLOSE_MIN_W: i32 = 64;
 
 /// Draw everything into `ui`, whose view covers the client area.
 pub fn frame(ui: &mut Ui, client: (u32, u32), st: &mut State) {
@@ -395,7 +399,7 @@ fn facts(e: &Entry) -> alloc::vec::Vec<(&'static str, String)> {
 fn detail_buttons(ui: &mut Ui, pane: Rect, y: i32, e: &Entry, busy: bool) {
     let x = pane.x + DETAILS_PAD;
     let w = pane.w.saturating_sub(2 * DETAILS_PAD as u32);
-    let first = Rect::new(x, y, 112, DETAILS_BUTTON_H);
+    let first = Rect::new(x, y, DETAILS_PRIMARY_W, DETAILS_BUTTON_H);
     let label = e.status().button();
     ui.button(
         Action::DetailsPrimary.key(),
@@ -406,7 +410,7 @@ fn detail_buttons(ui: &mut Ui, pane: Rect, y: i32, e: &Entry, busy: bool) {
     );
     let mut next = first.right() + 8;
     if e.installed.is_some() {
-        let r = Rect::new(next, y, 100, DETAILS_BUTTON_H);
+        let r = Rect::new(next, y, DETAILS_REMOVE_W, DETAILS_BUTTON_H);
         ui.button(
             Action::DetailsRemove.key(),
             r,
@@ -419,7 +423,7 @@ fn detail_buttons(ui: &mut Ui, pane: Rect, y: i32, e: &Entry, busy: bool) {
     let close = Rect::new(
         next,
         y,
-        (x + w as i32 - next).max(72) as u32,
+        (x + w as i32 - next).max(CLOSE_MIN_W) as u32,
         DETAILS_BUTTON_H,
     );
     ui.button(
