@@ -222,7 +222,9 @@ pub fn exec(path: &str) -> i64 {
 
     unsafe {
         if let Some(ref mut task) = TASK_TABLE[task_idx] {
-            // Free old address space
+            // Load the new root first so the old tree is never live while
+            // it is being freed.
+            crate::memory::aspace::activate_user(load_result.ttbr0_phys);
             if task.ttbr0_phys != 0 {
                 let old_space = AddressSpace {
                     ttbr0_phys: task.ttbr0_phys,
@@ -253,9 +255,6 @@ pub fn exec(path: &str) -> i64 {
             task.regs.spsr = 0x0000; // EL0t, all IRQs unmasked
             task.regs.x30 = load_result.entry_point;
 
-            // Switch to the new address space immediately
-            switch_address_space(load_result.ttbr0_phys);
-
             // 6. Credential transformation on exec (setuid/setgid binaries)
             {
                 let (file_uid, file_gid, file_mode) = match crate::fs::vfs::resolve_path(path) {
@@ -277,14 +276,6 @@ pub fn exec(path: &str) -> i64 {
     }
 
     0 // Success — the scheduler will eret to the new entry point
-}
-
-/// Switch to a user process address space (public for exec)
-unsafe fn switch_address_space(ttbr0_phys: u64) {
-    core::arch::asm!("msr TTBR0_EL1, {}", in(reg) ttbr0_phys);
-    core::arch::asm!("tlbi vmalle1is");
-    crate::arch::cpu::dsb();
-    crate::arch::cpu::isb();
 }
 
 /// Exit the current process

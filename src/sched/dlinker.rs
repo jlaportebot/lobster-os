@@ -29,6 +29,7 @@
 use crate::memory::frame_alloc;
 use crate::memory::{phys_to_virt, PhysAddr, PAGE_SIZE};
 use crate::println;
+use crate::sched::uaccess;
 
 // ═══════════════════════════════════════════════════════════════
 // ELF constants for dynamic linking
@@ -269,7 +270,7 @@ pub fn link_elf(
     let got_addr = map_got(ttbr0_phys)?;
 
     // Process RELA relocations (immediate)
-    let rela_count = process_rela(elf_data, load_base, &dyn_info, got_addr, ttbr0_phys)?;
+    let rela_count = process_rela(elf_data, load_base, &dyn_info, ttbr0_phys)?;
 
     // Process PLT relocations (lazy)
     let plt_count = process_plt(elf_data, load_base, &dyn_info, got_addr, ttbr0_phys)?;
@@ -387,13 +388,8 @@ fn parse_dynamic(
 // GOT allocation and mapping
 // ═══════════════════════════════════════════════════════════════
 
-/// Page flags for GOT (user-accessible, writable, not executable)
-const PTE_GOT: u64 = crate::memory::vmem::PTE_VALID
-    | crate::memory::vmem::PTE_PAGE
-    | crate::memory::vmem::PTE_ACCESS
-    | crate::memory::vmem::PTE_NG
-    | crate::memory::vmem::PTE_ISH
-    | crate::memory::mmu::MT_NORMAL;
+/// Page flags for GOT: user read/write, never executable.
+const PTE_GOT: u64 = crate::memory::process_vmem::PTE_USER_RW;
 
 /// Allocate and map GOT pages into the user process address space.
 fn map_got(ttbr0_phys: u64) -> Result<u64, &'static str> {
@@ -434,8 +430,7 @@ fn process_rela(
     elf_data: &[u8],
     load_base: u64,
     dyn_info: &DynInfo,
-    got_addr: u64,
-    _ttbr0_phys: u64,
+    ttbr0_phys: u64,
 ) -> Result<u32, &'static str> {
     if dyn_info.rela == 0 || dyn_info.relasz == 0 {
         println!("[dlinker] No RELA relocations");
@@ -495,7 +490,7 @@ fn process_rela(
                 // S + A → write (load_base + addend) at r_offset
                 let target_vaddr = rela.r_offset + load_base;
                 let value = (load_base as i64 + rela.r_addend) as u64;
-                write_user_u64(target_vaddr, value, got_addr);
+                write_user_u64(ttbr0_phys, target_vaddr, value);
                 count += 1;
             }
 
@@ -504,7 +499,7 @@ fn process_rela(
                 let sym_val = resolve_symbol(elf_data, dyn_info, _rsym, load_base);
                 let value = (sym_val as i64 + rela.r_addend) as u64;
                 let target_vaddr = rela.r_offset + load_base;
-                write_user_u64(target_vaddr, value, got_addr);
+                write_user_u64(ttbr0_phys, target_vaddr, value);
                 count += 1;
             }
 
@@ -513,7 +508,7 @@ fn process_rela(
                 let sym_val = resolve_symbol(elf_data, dyn_info, _rsym, load_base);
                 let value = (sym_val as i64 + rela.r_addend) as u64;
                 let target_vaddr = rela.r_offset + load_base;
-                write_user_u64(target_vaddr, value, got_addr);
+                write_user_u64(ttbr0_phys, target_vaddr, value);
                 count += 1;
             }
 
@@ -522,14 +517,14 @@ fn process_rela(
                 let resolver_addr = (load_base as i64 + rela.r_addend) as u64;
                 let target_vaddr = rela.r_offset + load_base;
                 // Write the resolver address; real impl would call it
-                write_user_u64(target_vaddr, resolver_addr, got_addr);
+                write_user_u64(ttbr0_phys, target_vaddr, resolver_addr);
                 count += 1;
             }
 
             R_AARCH64_TLS_DTPREL64 | R_AARCH64_TLS_DTPMOD64 | R_AARCH64_TLS_TPREL64 => {
                 // TLS relocations — write 0 for now (no TLS support yet)
                 let target_vaddr = rela.r_offset + load_base;
-                write_user_u64(target_vaddr, 0, got_addr);
+                write_user_u64(ttbr0_phys, target_vaddr, 0);
                 count += 1;
             }
 
@@ -563,7 +558,7 @@ fn process_plt(
     load_base: u64,
     dyn_info: &DynInfo,
     got_addr: u64,
-    _ttbr0_phys: u64,
+    ttbr0_phys: u64,
 ) -> Result<u32, &'static str> {
     if dyn_info.jmprel == 0 || dyn_info.pltrelsz == 0 {
         println!("[dlinker] No PLT relocations");
@@ -613,14 +608,14 @@ fn process_plt(
             let sym_val = resolve_symbol(elf_data, dyn_info, _rsym, load_base);
             let value = (sym_val as i64 + rela.r_addend) as u64;
             let target_vaddr = rela.r_offset + load_base;
-            write_user_u64(target_vaddr, value, got_addr);
+            write_user_u64(ttbr0_phys, target_vaddr, value);
         } else {
             // Lazy binding: write the PLT resolver stub address into GOT slot
             // The GOT slot at rela.r_offset will initially point back to the
             // PLT trampoline, which calls dl_resolve().
             let plt_stub_addr = got_addr; // Resolver stub at GOT base
             let target_vaddr = rela.r_offset + load_base;
-            write_user_u64(target_vaddr, plt_stub_addr, got_addr);
+            write_user_u64(ttbr0_phys, target_vaddr, plt_stub_addr);
         }
 
         count += 1;
@@ -639,8 +634,8 @@ fn process_plt(
     // unresolved PLT calls trap with a clear signal.
     if count > 0 {
         // UDF #0 = 0x00000000
-        write_user_u64(got_addr, 0, got_addr); // stub[0]
-        write_user_u64(got_addr + 8, 0, got_addr); // stub[1]
+        write_user_u64(ttbr0_phys, got_addr, 0); // stub[0]
+        write_user_u64(ttbr0_phys, got_addr + 8, 0); // stub[1]
     }
 
     println!(
@@ -728,13 +723,7 @@ fn resolve_symbol(elf_data: &[u8], dyn_info: &DynInfo, sym_idx: u32, load_base: 
 /// **Note**: In a real OS, this runs in EL0 user context. In our
 // kernel-side implementation, we resolve and patch the GOT entry
 /// so future calls go directly to the target.
-pub fn dl_resolve(
-    elf_data: &[u8],
-    load_base: u64,
-    dyn_info: &DynInfo,
-    reloc_index: u32,
-    got_addr: u64,
-) -> u64 {
+pub fn dl_resolve(elf_data: &[u8], load_base: u64, dyn_info: &DynInfo, reloc_index: u32) -> u64 {
     let entry_size = core::mem::size_of::<Elf64Rela>();
     let file_off = if load_base != 0 {
         (dyn_info.jmprel - load_base) as usize + reloc_index as usize * entry_size
@@ -758,7 +747,9 @@ pub fn dl_resolve(
 
     // Patch the GOT slot so future calls bypass the resolver
     let target_vaddr = rela.r_offset + load_base;
-    write_user_u64(target_vaddr, resolved, got_addr);
+    if let Some(root) = uaccess::current_root() {
+        write_user_u64(root, target_vaddr, resolved);
+    }
 
     if dyn_info.strtab != 0 && rsym != 0 {
         let sym_size = core::mem::size_of::<Elf64Sym>();
@@ -829,36 +820,14 @@ fn find_file_offset_for_vaddr(elf_data: &[u8], vaddr: u64) -> usize {
     vaddr as usize
 }
 
-/// Write a u64 value into the user process's address space via the GOT mapping.
+/// Store one 64-bit relocation or GOT value in the target process's memory.
 ///
-/// Since the GOT is identity-mapped into kernel virtual memory via phys_to_virt,
-/// we can write to user VAs that fall within the GOT region directly.
-/// For other regions, we'd need to walk the user page tables — for now,
-/// we rely on the fact that our ELF loader writes directly to phys frames.
-fn write_user_u64(vaddr: u64, value: u64, _got_addr: u64) {
-    // In a bare-metal kernel, the user pages are mapped 1:1 via phys_to_virt.
-    // We translate the user VA through the direct map to write.
-    // This works because the ELF loader allocated physical frames and mapped
-    // them; the kernel can access all physical memory.
-    //
-    // A proper implementation would walk the user page tables via TTBR0.
-    // For now, we simply store the value and trust the loader's phys map.
-
-    // HACK: write via the direct physical map by looking up the user VA
-    // in the kernel's page tables. If the VA falls within our user range,
-    // it was mapped by the ELF loader and we can translate it.
-    if let Some(pa) = crate::memory::vmem::translate_va(crate::memory::VirtAddr::new(vaddr)) {
-        let kvirt = phys_to_virt(pa);
-        unsafe {
-            let ptr = kvirt.0 as *mut u64;
-            core::ptr::write_volatile(ptr, value);
-        }
-    } else {
-        // VA not yet mapped — this can happen for RELATIVE relocations
-        // that target a VMA in a segment we haven't walked yet.
-        // In practice, the ELF loader maps all segments before we get here,
-        // so this should not trigger.
-        // Future: allocate and map the page on demand.
+/// Goes through the target's page tree, so it works for a process that is not
+/// running yet. W^X: the destination must never be an executable page.
+fn write_user_u64(root: u64, vaddr: u64, value: u64) {
+    let written = uaccess::copy_to_user_in(root, uaccess::UserPtr(vaddr), &value.to_le_bytes());
+    if written.is_err() {
+        println!("[dlinker] relocation target {:#x} is not mapped", vaddr);
     }
 }
 

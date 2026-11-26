@@ -43,6 +43,13 @@ pub const PTE_KERNEL_DATA_BLOCK: u64 = PTE_VALID | PTE_ACCESS | PTE_ISH | MT_NOR
 /// Block entry (2MB) for device memory — bit 1 (Table/Block) must be 0
 pub const PTE_DEVICE_BLOCK: u64 = PTE_VALID | PTE_ACCESS | PTE_OSH | MT_DEVICE;
 
+/// Kernel identity RAM block in the low half: EL1-only, never executable from
+/// EL0. Every process root carries a bit-identical copy (ADR 0002, amendment A).
+pub const PTE_IDENTITY_BLOCK: u64 = PTE_KERNEL_CODE_BLOCK | PTE_UXN;
+
+/// Peripheral/GIC identity block in the low half: EL1-only, no execution.
+pub const PTE_IDENTITY_DEVICE_BLOCK: u64 = PTE_DEVICE_BLOCK | PTE_UXN | PTE_PXN;
+
 /// Number of entries per page table (4096 / 8 = 512)
 const PT_ENTRIES: usize = 512;
 
@@ -168,6 +175,10 @@ unsafe fn map_range_blocks(
     size: u64,
     flags: u64,
 ) {
+    debug_assert!(
+        !super::aspace::low_half_frozen(),
+        "boot-root low half is frozen once a process root exists"
+    );
     // 2MB block size (L2 block)
     const BLOCK_SIZE_2M: u64 = 2 * 1024 * 1024;
     const BLOCK_ALIGN_2M: u64 = BLOCK_SIZE_2M - 1;
@@ -301,6 +312,14 @@ unsafe fn enable_mmu_and_caches(ttbr0: u64, ttbr1: u64) {
     println!("[mmu] SCTLR_EL1 {:#x} -> {:#x}", sctlr, enabled);
 }
 
+/// Physical address of the boot TTBR0 root (the kernel's own table).
+static BOOT_ROOT_PHYS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Physical address of the boot TTBR0 root; per-process roots are built from it.
+pub fn boot_root_phys() -> u64 {
+    BOOT_ROOT_PHYS.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 /// Initialize the MMU — set up page tables and enable virtual memory
 pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
     println!("[mmu] Initializing MMU...");
@@ -316,13 +335,7 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
     // Identity map the first 128MB in TTBR0 (low VA range).
     // Covers kernel image (~0x80000-0x13e000), BSS, page tables, and
     // the 16MB stack area (up to ~0x41f2000). 128MB = 64 × 2MB blocks.
-    map_range_blocks(
-        ttbr0_root,
-        0x0,
-        0x0,
-        128 * 1024 * 1024,
-        PTE_KERNEL_CODE_BLOCK,
-    );
+    map_range_blocks(ttbr0_root, 0x0, 0x0, 128 * 1024 * 1024, PTE_IDENTITY_BLOCK);
 
     // Identity-map the full QEMU peripheral range in TTBR0 as device memory.
     // QEMU raspi5b puts peripherals at 0x7C00_0000 - 0x7E00_0000 (32MB).
@@ -337,7 +350,7 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
             QEMU_PERIPH_BASE,
             QEMU_PERIPH_BASE,
             QEMU_PERIPH_SIZE,
-            PTE_DEVICE_BLOCK,
+            PTE_IDENTITY_DEVICE_BLOCK,
         );
 
         // Identity-map GIC-400 at 0x10_7FFF_0000 in TTBR0.
@@ -354,7 +367,7 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
             GIC_PERIPH_BASE,
             GIC_PERIPH_BASE,
             GIC_PERIPH_SIZE,
-            PTE_DEVICE_BLOCK,
+            PTE_IDENTITY_DEVICE_BLOCK,
         );
         println!("[mmu] GIC identity map done, next_pt={}", unsafe {
             NEXT_PT_INDEX
@@ -454,6 +467,7 @@ pub unsafe fn init(kernel_phys_start: u64, kernel_size: u64, ram_size: u64) {
     }
 
     let ttbr0_phys = pt_phys(ttbr0_root);
+    BOOT_ROOT_PHYS.store(ttbr0_phys, core::sync::atomic::Ordering::Relaxed);
     let ttbr1_phys = pt_phys(ttbr1_root);
 
     println!("[mmu] TTBR0 (user): {:#018x}", ttbr0_phys);

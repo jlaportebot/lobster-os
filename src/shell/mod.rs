@@ -923,6 +923,24 @@ fn run_builtin_out(cmd: &str, args: [&str; MAX_ARGS], argc: usize, out: &ShellOu
             cmd_uptime(out);
             0
         }
+        "frames" => {
+            let (total, used, _) = crate::memory::frame_alloc::stats();
+            out.puts(&alloc::format!(
+                "frames: free={} used={} total={}\r\n",
+                total.saturating_sub(used),
+                used,
+                total
+            ));
+            0
+        }
+        "aspace" => {
+            out.puts(&alloc::format!(
+                "aspace: root={:#x} asid={}\r\n",
+                crate::memory::aspace::loaded_root(),
+                crate::memory::aspace::loaded_asid()
+            ));
+            0
+        }
         c if crate::wm::lock::commands::NAMES.contains(&c) => {
             let (code, text) = crate::wm::lock::commands::run_with_args(c, &args[..argc]);
             out.puts(&text);
@@ -5132,14 +5150,14 @@ fn cmd_which(args: [&str; MAX_ARGS], argc: usize) -> i32 {
     }
     // All commands are built-in shell commands
     let builtin = [
-        "help", "clear", "uptime", "mem", "ps", "kill", "echo", "version", "cpu", "timer", "gpio",
-        "login", "su", "sudo", "passwd", "useradd", "userdel", "groupadd", "groupdel", "id",
-        "whoami", "hexdump", "yield", "test", "set", "export", "unset", "env", "printenv",
-        "history", "cat", "ls", "cd", "home", "pwd", "mkdir", "rm", "mv", "chmod", "chown",
-        "touch", "cp", "head", "tail", "wc", "du", "df", "free", "which", "uname", "date", "find",
-        "run", "svc", "runlevel", "reboot", "halt", "cc", "curl", "wget", "pkg", "gh", "vi",
-        "edit", "ed", "nano", "grep", "sort", "cut", "tr", "uniq", "seq", "yes", "tee", "stat",
-        "file", "ln", "basename", "dirname", "sleep", "man", "who", "userlist",
+        "help", "clear", "uptime", "frames", "aspace", "mem", "ps", "kill", "echo", "version",
+        "cpu", "timer", "gpio", "login", "su", "sudo", "passwd", "useradd", "userdel", "groupadd",
+        "groupdel", "id", "whoami", "hexdump", "yield", "test", "set", "export", "unset", "env",
+        "printenv", "history", "cat", "ls", "cd", "home", "pwd", "mkdir", "rm", "mv", "chmod",
+        "chown", "touch", "cp", "head", "tail", "wc", "du", "df", "free", "which", "uname", "date",
+        "find", "run", "svc", "runlevel", "reboot", "halt", "cc", "curl", "wget", "pkg", "gh",
+        "vi", "edit", "ed", "nano", "grep", "sort", "cut", "tr", "uniq", "seq", "yes", "tee",
+        "stat", "file", "ln", "basename", "dirname", "sleep", "man", "who", "userlist",
     ];
     if builtin.contains(&args[1]) {
         crate::println!("{}: shell built-in command", args[1]);

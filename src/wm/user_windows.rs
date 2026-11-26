@@ -28,8 +28,8 @@
 //! as row-major ARGB32, stride = width * 4 bytes (no padding), so pixel
 //! (x, y) is the u32 at `va + (y * w + x) * 4`. Four slots span
 //! 0x4000_0000..0x4400_0000, clear of the user heap (0x2000_0000) and
-//! stack (0x7F00_0000). The pages are also mirrored into the kernel TTBR0
-//! (nG cleared, like the ELF loader does) so EL0 can run on it.
+//! stack (0x7F00_0000). The pages are mapped into the owning process's own
+//! translation tree only; the kernel reaches them through the direct map.
 //!
 //! The kernel never uses the user mapping: SYS_WIN_FILL and the compositor
 //! reach the same frames through the direct phys map
@@ -217,11 +217,35 @@ fn current_user_ttbr0() -> Option<u64> {
     }
 }
 
-fn kernel_ttbr0() -> u64 {
-    let v: u64;
-    unsafe { core::arch::asm!("mrs {}, TTBR0_EL1", out(reg) v) };
-    // Strip the ASID field / CnP bit; keep the table base.
-    v & 0x0000_FFFF_FFFF_F000
+/// Copy a window title: from the calling EL0 process's memory (page-checked),
+/// or straight from the pointer for a kernel task, which owns its pointers.
+/// Returns the bytes and their length, or None for an unreadable user pointer.
+fn read_title(title_ptr: u64) -> Option<([u8; MAX_TITLE], usize)> {
+    let mut title = [0u8; MAX_TITLE];
+    if current_user_ttbr0().is_none() {
+        for (i, slot) in title.iter_mut().enumerate().take(MAX_TITLE - 1) {
+            // SAFETY: a kernel task passes a NUL-terminated string it owns.
+            let ch = unsafe { *((title_ptr + i as u64) as *const u8) };
+            if ch == 0 {
+                return Some((title, i));
+            }
+            *slot = ch;
+        }
+        return Some((title, MAX_TITLE - 1));
+    }
+    let mut len = 0usize;
+    while len < MAX_TITLE - 1 {
+        let ch = crate::sched::uaccess::read_user::<u8>(crate::sched::uaccess::UserPtr(
+            title_ptr + len as u64,
+        ))
+        .ok()?;
+        if ch == 0 {
+            break;
+        }
+        title[len] = ch;
+        len += 1;
+    }
+    Some((title, len))
 }
 
 /// Create a user window. Returns the syscall error code (-1 on failure).
@@ -229,6 +253,9 @@ pub fn sys_win_create(x: u64, y: u64, w: u64, h: u64, title_ptr: u64) -> u64 {
     if w == 0 || h == 0 || w > 1024 || h > 1024 {
         return u64::MAX;
     }
+    let Some((title, tlen)) = read_title(title_ptr) else {
+        return crate::sched::uaccess::EFAULT;
+    };
     let pid = crate::sched::current_pid();
     unsafe {
         for slot in WINDOWS.iter_mut() {
@@ -254,18 +281,7 @@ pub fn sys_win_create(x: u64, y: u64, w: u64, h: u64, title_ptr: u64) -> u64 {
                 }
                 (cap, buf, Backing::Heap, 0)
             };
-            // Copy the title from USER memory (bounded read via byte walk)
-            let mut tlen = 0usize;
-            let mut i = 0usize;
-            while tlen < MAX_TITLE - 1 && i < 64 {
-                let ch = *((title_ptr + i as u64) as *const u8);
-                if ch == 0 {
-                    break;
-                }
-                slot.title[tlen] = ch;
-                tlen += 1;
-                i += 1;
-            }
+            slot.title[..tlen].copy_from_slice(&title[..tlen]);
             slot.title_len = tlen;
             slot.owner_pid = pid;
             slot.buf = buf;
@@ -376,16 +392,9 @@ pub fn sys_win_map(win_id: u64) -> u64 {
         }
 
         let va = USER_MAP_BASE + slot_index(slot) as u64 * USER_MAP_STRIDE;
-        let ktt = kernel_ttbr0();
-        // The kernel runs EL0 on its own TTBR0 (see elf.rs), so mirror
-        // there too, with nG cleared (kernel ASID 0).
-        let kflags = PTE_WIN_USER & !crate::memory::vmem::PTE_NG;
         for i in 0..slot.npages {
             let pva = va + (i * PAGE) as u64;
             crate::sched::elf::map_user_page(ttbr0, pva, slot.frames[i], PTE_WIN_USER);
-            if ktt != ttbr0 {
-                crate::sched::elf::map_user_page(ktt, pva, slot.frames[i], kflags);
-            }
         }
         slot.user_va = va;
         va
@@ -423,13 +432,9 @@ pub fn sys_win_close(win_id: u64) -> u64 {
             Backing::Frames => {
                 if slot.user_va != 0 {
                     if let Some(ttbr0) = current_user_ttbr0() {
-                        let ktt = kernel_ttbr0();
                         for i in 0..slot.npages {
                             let va = slot.user_va + (i * PAGE) as u64;
                             crate::memory::process_vmem::unmap_user_page(ttbr0, va);
-                            if ktt != ttbr0 {
-                                crate::memory::process_vmem::unmap_user_page(ktt, va);
-                            }
                         }
                     }
                 }

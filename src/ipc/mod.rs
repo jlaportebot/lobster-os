@@ -13,6 +13,10 @@
 //! All IPC objects are tracked in global tables with reference counting.
 //! File-descriptor integration is via the per-process fd table in `ipc::FdTable`.
 
+use crate::sched::uaccess::{read_user, write_user, UserPtr};
+
+/// `-EFAULT` as the negative status IPC calls return.
+const EFAULT_ERRNO: isize = -14;
 use crate::memory::frame_alloc;
 use crate::memory::{phys_to_virt, PhysAddr, PAGE_SIZE};
 use crate::println;
@@ -1413,17 +1417,18 @@ pub fn shm_ctl(shm_idx: usize, cmd: u32, result_ptr: u64) -> isize {
                     is_marked_for_removal: region.marked_for_removal,
                 };
                 // Copy to user memory
-                if result_ptr != 0 {
-                    let dst = result_ptr as *mut ShmIdDs;
-                    core::ptr::write(dst, ds);
+                if result_ptr != 0 && write_user(UserPtr(result_ptr), &ds).is_err() {
+                    return EFAULT_ERRNO;
                 }
                 0
             }
             SHM_CTL_SET => {
                 // Read new mode from user memory
                 if result_ptr != 0 {
-                    let src = result_ptr as *const u32;
-                    region.mode = core::ptr::read(src);
+                    match read_user::<u32>(UserPtr(result_ptr)) {
+                        Ok(mode) => region.mode = mode,
+                        Err(_) => return EFAULT_ERRNO,
+                    }
                 }
                 0
             }
@@ -2566,33 +2571,30 @@ pub fn pty_ioctl(idx: usize, cmd: u64, arg: u64) -> i64 {
                 let ws_col = pty.ws_col;
                 let ws_xpixel = pty.ws_xpixel;
                 let ws_ypixel = pty.ws_ypixel;
-                unsafe {
-                    let ptr = arg as *mut u16;
-                    *ptr = ws_row;
-                    *ptr.add(1) = ws_col;
-                    *ptr.add(2) = ws_xpixel;
-                    *ptr.add(3) = ws_ypixel;
+                let winsize = [ws_row, ws_col, ws_xpixel, ws_ypixel];
+                if write_user(UserPtr(arg), &winsize).is_err() {
+                    return EFAULT_ERRNO as i64;
                 }
                 0
             }
             // TIOCSWINSZ - set window size
             0x5414 => {
                 // arg is pointer to winsize struct
-                unsafe {
-                    let ptr = arg as *const u16;
-                    pty.ws_row = *ptr;
-                    pty.ws_col = *ptr.add(1);
-                    pty.ws_xpixel = *ptr.add(2);
-                    pty.ws_ypixel = *ptr.add(3);
-                }
+                let Ok([row, col, xpixel, ypixel]) = read_user::<[u16; 4]>(UserPtr(arg)) else {
+                    return EFAULT_ERRNO as i64;
+                };
+                pty.ws_row = row;
+                pty.ws_col = col;
+                pty.ws_xpixel = xpixel;
+                pty.ws_ypixel = ypixel;
                 // TODO: Send SIGWINCH to foreground process group
                 0
             }
             // TIOCGPGRP - get process group
             0x540F => {
                 // arg is pointer to pid_t
-                unsafe {
-                    *(arg as *mut u32) = pty.pgrp;
+                if write_user(UserPtr(arg), &pty.pgrp).is_err() {
+                    return EFAULT_ERRNO as i64;
                 }
                 0
             }

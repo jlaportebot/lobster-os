@@ -768,41 +768,31 @@ pub fn spawn_user_process(elf_data: &[u8], priority: Priority) -> Option<Pid> {
 /// Layout pushed at the stack top (grows down):
 ///   [char* argv[argc]][NULL][string bytes...\0 per arg]
 /// Returns (argc, argv_ptr) on success.
-unsafe fn write_argv_block(user_sp: u64, args: &[&str]) -> Option<(u64, u64, u64)> {
+fn write_argv_block(root: u64, user_sp: u64, args: &[&str]) -> Option<(u64, u64, u64)> {
     const MAX_ARGV_BYTES: usize = 4096;
-    let argc = args.len() as u64;
+    const PTR_BYTES: usize = 8;
     let strings_len: usize = args.iter().map(|a| a.len() + 1).sum();
-    let array_len = (args.len() + 1) * 8; // argv[] + NULL terminator
+    let array_len = (args.len() + 1) * PTR_BYTES; // argv[] + NULL terminator
     let total = array_len + strings_len;
     if total > MAX_ARGV_BYTES {
         return None;
     }
-    // Layout (addresses grow up): [argv array + NULL][string bytes...]
-    // SP lands ABOVE the strings so the program's own stack pushes (which
-    // grow DOWN from SP) go below the array, never over the strings.
-    let block_top = user_sp & !0xF;
-    let block_base = block_top - total as u64;
-    let array_ptr = block_base; // array at the bottom, already 8-aligned
-    let strings_base = block_base + array_len as u64;
-    let mut p = strings_base;
-    let mut ptrs: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+    // SP lands BELOW the block so the program's own stack pushes (which grow
+    // down from SP) never overwrite the strings.
+    let block_base = (user_sp & !0xF) - total as u64;
+    let mut image = alloc::vec::Vec::with_capacity(total);
+    let mut string_va = block_base + array_len as u64;
     for a in args {
-        let sptr = p;
-        for &b in a.as_bytes() {
-            core::ptr::write_volatile(p as *mut u8, b);
-            p += 1;
-        }
-        core::ptr::write_volatile(p as *mut u8, 0);
-        p += 1;
-        ptrs.push(sptr);
+        image.extend_from_slice(&string_va.to_le_bytes());
+        string_va += a.len() as u64 + 1;
     }
-    let mut ap = array_ptr;
-    for ptr in &ptrs {
-        core::ptr::write_volatile(ap as *mut u64, *ptr);
-        ap += 8;
+    image.extend_from_slice(&0u64.to_le_bytes());
+    for a in args {
+        image.extend_from_slice(a.as_bytes());
+        image.push(0);
     }
-    core::ptr::write_volatile(ap as *mut u64, 0); // NULL terminator
-    Some((argc, array_ptr, block_base))
+    uaccess::copy_to_user_in(root, uaccess::UserPtr(block_base), &image).ok()?;
+    Some((args.len() as u64, block_base, block_base))
 }
 
 /// Set the entry registers for argv (call before the task first runs).
@@ -820,9 +810,8 @@ pub fn set_task_argv(pid: Pid, args: &[&str]) -> bool {
         if ttbr0 == 0 {
             return false;
         }
-        // User pages are dual-mapped into the kernel address space at
-        // ELF load time, so the kernel can write the block directly.
-        let Some((argc, argv_ptr, block_base)) = write_argv_block(user_sp, args) else {
+        // The block is written through the target's own page tree.
+        let Some((argc, argv_ptr, block_base)) = write_argv_block(ttbr0, user_sp, args) else {
             return false;
         };
         if let Some(ref mut t) = TASK_TABLE[idx] {
@@ -1036,10 +1025,7 @@ pub unsafe fn do_context_switch() {
             task.state = TaskState::Running;
             task.time_slice = time_slice_for(task.priority);
 
-            // Switch address space if needed (user process)
-            if task.is_user && task.ttbr0_phys != 0 {
-                switch_address_space(task.ttbr0_phys);
-            }
+            enter_address_space(task);
 
             // Restore context of new task
             restore_context(&task.regs);
@@ -1134,13 +1120,14 @@ pub unsafe fn restore_context(frame: &TrapFrame) {
     );
 }
 
-/// Switch to a user process address space
-unsafe fn switch_address_space(ttbr0_phys: u64) {
-    // Set TTBR0_EL1 to the process's page table root
-    asm!("msr TTBR0_EL1, {}", in(reg) ttbr0_phys);
-    // Barrier only — no TLB invalidation needed for first context switch
-    // since the kernel uses TTBR1 for its own pages
-    crate::arch::cpu::isb();
+/// Load the incoming task's translation root: its own for an EL0 process,
+/// the kernel's for a kernel thread.
+fn enter_address_space(task: &Task) {
+    if task.is_user && task.ttbr0_phys != 0 {
+        crate::memory::aspace::activate_user(task.ttbr0_phys);
+    } else {
+        crate::memory::aspace::activate_kernel();
+    }
 }
 
 /// Timer tick handler — called from timer IRQ
@@ -1436,13 +1423,7 @@ pub unsafe extern "C" fn run_and_wait_body(_pid: u64) -> i64 {
             task.state = TaskState::Running;
             task.time_slice = time_slice_for(task.priority);
             preempt::begin_slice();
-            if task.is_user && task.ttbr0_phys != 0 {
-                elf::activate_user_mappings(pid, task.ttbr0_phys);
-            }
-
-            // User pages are dual-mapped into kernel TTBR0 at ELF load time,
-            // so no TTBR0 switch is needed. eret into EL0 will work with the
-            // kernel's page table still active.
+            enter_address_space(task);
             let frame = task.regs;
 
             // Q3: put the task's FP/SIMD state back in the registers right
@@ -1874,28 +1855,11 @@ fn release_task_resources(task: &Task) {
 
 /// Q4: free a user task's data frames (stack, code, heap) by walking its
 /// OWN page tree, then the tree itself. User VAs live in TTBR0, so they
-/// cannot be translated through the kernel's TTBR1 walk. The kernel-TTBR0
-/// mirror is dropped first so no mapping outlives the frames.
+/// cannot be translated through the kernel's TTBR1 walk.
 fn free_user_address_space(task: &Task) {
-    elf::release_user_mappings(task.pid);
-    let root = (crate::memory::PHYS_MAP_OFFSET + task.ttbr0_phys) as *mut [u64; 512];
-    // SAFETY: `ttbr0_phys` is the task's own live tree; the task is dead, so
-    // no CPU walks it, and window pages were unmapped by close_all_for_pid.
-    unsafe { crate::memory::process_vmem::free_user_pages(root, 0) };
-    let space = crate::memory::process_vmem::AddressSpace {
-        ttbr0_phys: task.ttbr0_phys,
-        vmas: [crate::memory::process_vmem::Vma {
-            start: 0,
-            size: 0,
-            prot: 0,
-            file_offset: 0,
-            shared: false,
-            in_use: false,
-        }; crate::memory::process_vmem::MAX_VMAS],
-        vma_count: 0,
-        brk: 0,
-    };
-    crate::memory::process_vmem::destroy_address_space(&space);
+    // The task is dead, so no CPU walks its tree, and window
+    // pages were unmapped by close_all_for_pid before this runs.
+    crate::memory::aspace::free_user_root(task.ttbr0_phys);
 }
 
 /// Kill the current user process and force return to kernel cooperative mode.
