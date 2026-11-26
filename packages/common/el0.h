@@ -13,6 +13,7 @@
 #define SYS_SLEEP 7
 #define SYS_GETTIMEOFDAY 69
 #define SYS_WIN_CREATE 110
+#define SYS_WIN_FILL 111
 #define SYS_WIN_FLUSH 112
 #define SYS_WIN_CLOSE 113
 #define SYS_WIN_POLL 114
@@ -44,6 +45,22 @@ static inline long sys3(long num, long a0, long a1, long a2)
     register long x1 __asm__("x1") = a1;
     register long x2 __asm__("x2") = a2;
     __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2) : "memory");
+    return x0;
+}
+
+static inline long sys6(long num, long a0, long a1, long a2, long a3, long a4, long a5)
+{
+    register long x8 __asm__("x8") = num;
+    register long x0 __asm__("x0") = a0;
+    register long x1 __asm__("x1") = a1;
+    register long x2 __asm__("x2") = a2;
+    register long x3 __asm__("x3") = a3;
+    register long x4 __asm__("x4") = a4;
+    register long x5 __asm__("x5") = a5;
+    __asm__ volatile("svc #0"
+                     : "+r"(x0)
+                     : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+                     : "memory");
     return x0;
 }
 
@@ -156,18 +173,14 @@ static inline int win_open(struct win *win, int x, int y, int w, int h, const ch
     return 0;
 }
 
+/* The kernel fills the rectangle (clipped to the window): a pixel loop in
+ * user mode between syscalls was long enough to stall the desktop. */
 static inline void win_fill(struct win *win, int x, int y, int w, int h, u32 argb)
 {
-    for (int row = y; row < y + h; row++) {
-        if (row < 0 || row >= win->h) {
-            continue;
-        }
-        for (int col = x; col < x + w; col++) {
-            if (col >= 0 && col < win->w) {
-                win->px[row * win->w + col] = argb;
-            }
-        }
+    if (x < 0 || y < 0 || w <= 0 || h <= 0) {
+        return;
     }
+    sys6(SYS_WIN_FILL, win->id, x, y, w, h, (long)argb);
 }
 
 static inline void win_flush(struct win *win)
