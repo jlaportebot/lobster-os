@@ -288,10 +288,24 @@ pub fn init() {
     );
 }
 
+/// Set once the MMU and caches are on. Exclusive loads/stores (`BUSY`'s
+/// compare_exchange) only succeed on cacheable memory, so before this point
+/// capture must not touch `BUSY`; a plain atomic load is legal on any memory.
+static CAPTURE_READY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Start recording console output. Call right after the MMU and caches are
+/// enabled; earlier console output is printed but not captured.
+pub fn enable_capture() {
+    CAPTURE_READY.store(true, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// Record console (`println!`) output in the ring. Allocation-free and
 /// non-blocking: text is dropped if the ring is busy, so this is safe to
 /// call from the console path with interrupts disabled.
 pub fn capture(text: &str) {
+    if !CAPTURE_READY.load(core::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     let stamp = now_ms();
     let _ = try_with_log(|log| log.capture(stamp, text));
 }
@@ -345,6 +359,17 @@ pub fn klog_clear() {
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_records_nothing_until_enabled() {
+        CAPTURE_READY.store(false, core::sync::atomic::Ordering::Relaxed);
+        let before = klog_len();
+        capture("early line\n");
+        assert_eq!(klog_len(), before);
+        enable_capture();
+        capture("late line\n");
+        assert!(klog_len() > before);
+    }
 
     fn log() -> alloc::boxed::Box<KernelLog> {
         alloc::boxed::Box::new(KernelLog::new())
