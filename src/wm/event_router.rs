@@ -230,7 +230,7 @@ fn handle_context_menu(ev: &ButtonEv) -> bool {
 /// dialog itself decides what a press or release inside it means.
 fn handle_dialog(ev: &ButtonEv) -> bool {
     if ev.left_press() || ev.left_release() {
-        dialog::handle_click(ev.x, ev.y);
+        dialog::handle_button_edge(ev.x, ev.y, ev.left_press());
     }
     true
 }

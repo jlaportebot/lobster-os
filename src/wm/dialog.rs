@@ -515,6 +515,21 @@ fn load_directory(dialog: &mut Dialog) {
     }
 }
 
+/// Route one left-button edge to the top dialog and report it consumed.
+///
+/// Only presses act: the release of the click that opened the dialog (a
+/// context-menu item, a Settings button) arrives after the dialog exists and
+/// would otherwise land outside the text field and unfocus it.
+pub fn handle_button_edge(px: u32, py: u32, is_press: bool) -> bool {
+    if !is_open() {
+        return false;
+    }
+    if is_press {
+        handle_click(px, py);
+    }
+    true
+}
+
 /// Handle a click on the top dialog
 /// Returns true if the click was consumed
 pub fn handle_click(px: u32, py: u32) -> bool {
@@ -1244,6 +1259,41 @@ mod tests {
         assert!(popped.is_some());
         assert_eq!(depth(), 0);
         assert!(!is_open());
+    }
+
+    #[test]
+    fn release_of_the_opening_click_keeps_the_prompt_focused() {
+        let _guard = crate::test_support::serial_guard();
+        init();
+        // SAFETY: serialized by test_support::serial_guard
+        unsafe {
+            STACK_DEPTH = 0;
+            for slot in DIALOG_STACK.iter_mut() {
+                *slot = None;
+            }
+        }
+        let mut input = TextInput::ZERO;
+        input.state = WidgetState::Focused;
+        let opened = push_dialog(Dialog {
+            kind: DialogKind::Prompt {
+                title: "New Folder".into(),
+                message: "Name:".into(),
+                default_value: String::new(),
+                ok_label: "OK".into(),
+                cancel_label: "Cancel".into(),
+            },
+            buttons: [None, None, None],
+            button_count: 0,
+            text_input: Some(input),
+            focused_btn: 0,
+            file_entries: Vec::new(),
+            file_selected: None,
+            file_scroll: 0,
+        });
+        assert!(opened);
+        assert!(handle_button_edge(5, 5, false));
+        let state = top_dialog_mut().and_then(|d| d.text_input.as_ref().map(|i| i.state));
+        assert_eq!(state, Some(WidgetState::Focused));
     }
 
     #[test]
