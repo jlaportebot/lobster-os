@@ -176,6 +176,42 @@ pub fn verify_header(ehdr: &Elf64Ehdr) -> bool {
 
 use crate::memory::process_vmem::{PTE_USER_RO, PTE_USER_RW, PTE_USER_RWX, PTE_USER_RX};
 
+/// AP[2]: the page is read-only for every level.
+const PTE_READ_ONLY_BIT: u64 = 1 << 7;
+/// Output-address bits of a page descriptor.
+const USER_PTE_ADDR_MASK: u64 = 0x0000_FFFF_FFFF_F000;
+
+/// Page protection that satisfies two segments sharing one page: writable if
+/// either is, executable if either is.
+fn merge_page_flags(existing: u64, wanted: u64) -> u64 {
+    let writable = |f: u64| f & PTE_READ_ONLY_BIT == 0;
+    let executable = |f: u64| f & crate::memory::mmu::PTE_UXN == 0;
+    let write = writable(existing) || writable(wanted);
+    let exec = executable(existing) || executable(wanted);
+    match (write, exec) {
+        (true, true) => PTE_USER_RWX,
+        (true, false) => PTE_USER_RW,
+        (false, true) => PTE_USER_RX,
+        (false, false) => PTE_USER_RO,
+    }
+}
+
+/// Frame and flags for the page at `va` of a segment. A segment that starts
+/// inside a page the previous segment ended in (a code/rodata segment
+/// followed by .data in the same page) must share that frame, otherwise the
+/// earlier segment's bytes (strings in .rodata) would be replaced by zeros.
+/// The flag says the frame already holds data.
+fn segment_frame(ttbr0: u64, va: u64, flags: u64) -> Result<(PhysAddr, u64, bool), &'static str> {
+    // SAFETY: `ttbr0` is the root of the tree being built by the caller.
+    let existing = unsafe { crate::memory::process_vmem::get_user_pte(ttbr0, va) };
+    if let Some(pte) = existing.filter(|p| p & crate::memory::vmem::PTE_VALID != 0) {
+        let pa = pte & USER_PTE_ADDR_MASK;
+        return Ok((PhysAddr::new(pa), merge_page_flags(pte, flags), true));
+    }
+    let frame = frame_alloc::allocate_frame().ok_or("Out of frames for ELF loading")?;
+    Ok((frame, flags, false))
+}
+
 /// Allocate a user-space page table root (kernel descriptors included).
 fn alloc_user_page_table() -> Option<PhysAddr> {
     crate::memory::aspace::new_user_root().map(PhysAddr::new)
@@ -364,22 +400,23 @@ pub fn load_elf(elf_data: &[u8]) -> Result<LoadResult, &'static str> {
         let mut file_offset = phdr.p_offset;
 
         while va < va_end {
-            // Allocate a physical frame
-            let frame = frame_alloc::allocate_frame().ok_or("Out of frames for ELF loading")?;
+            let (frame, page_flags, is_shared_page) = segment_frame(ttbr0.0, va, flags)?;
 
-            // Map the page in user space
             unsafe {
-                map_user_page(ttbr0.0, va, frame.0, flags);
+                map_user_page(ttbr0.0, va, frame.0, page_flags);
             }
 
             // Copy data from ELF file into the page
             let page_virt = phys_to_virt(PhysAddr::new(frame.0)).0;
             let page_ptr = page_virt as *mut u8;
 
-            // Zero the page first (for BSS)
-            unsafe {
-                for b in 0..PAGE_SIZE as usize {
-                    core::ptr::write_volatile(page_ptr.add(b), 0);
+            // Zero a fresh page (for BSS); a page shared with the previous
+            // segment already holds that segment's bytes.
+            if !is_shared_page {
+                unsafe {
+                    for b in 0..PAGE_SIZE as usize {
+                        core::ptr::write_volatile(page_ptr.add(b), 0);
+                    }
                 }
             }
 
@@ -618,4 +655,25 @@ pub fn build_hello_elf_into(buf: &mut [u8]) -> usize {
     buf[load_offset + code_size..total].copy_from_slice(msg);
 
     total
+}
+
+#[cfg(test)]
+mod page_share_tests {
+    use super::*;
+
+    #[test]
+    fn code_then_data_in_one_page_becomes_writable_and_executable() {
+        assert_eq!(merge_page_flags(PTE_USER_RX, PTE_USER_RW), PTE_USER_RWX);
+    }
+
+    #[test]
+    fn rodata_then_data_becomes_writable_not_executable() {
+        assert_eq!(merge_page_flags(PTE_USER_RO, PTE_USER_RW), PTE_USER_RW);
+    }
+
+    #[test]
+    fn identical_flags_are_unchanged() {
+        assert_eq!(merge_page_flags(PTE_USER_RX, PTE_USER_RX), PTE_USER_RX);
+        assert_eq!(merge_page_flags(PTE_USER_RO, PTE_USER_RO), PTE_USER_RO);
+    }
 }
