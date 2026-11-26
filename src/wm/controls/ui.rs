@@ -89,6 +89,7 @@ pub struct Ui<'a> {
     pointer: Option<(i32, i32)>,
     pressed: bool,
     modal: bool,
+    pub(super) popup_requested: bool,
     pub(super) state: &'a mut ControlState,
 }
 
@@ -120,6 +121,7 @@ impl<'a> Ui<'a> {
             pointer: viewport.contains(pointer.0, pointer.1).then_some(pointer),
             pressed: crate::wm::input::mouse_buttons().0,
             modal: false,
+            popup_requested: false,
             state,
         };
         ui.set_view(viewport, (0, 0));
@@ -144,6 +146,9 @@ impl<'a> Ui<'a> {
 
     /// End the frame, committing the focus order.
     pub fn finish(self) {
+        if !self.popup_requested {
+            crate::wm::popup_list::on_window_destroyed(self.win_id);
+        }
         self.state.order = core::mem::take(&mut self.state.building);
     }
 

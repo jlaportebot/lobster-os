@@ -33,6 +33,7 @@ pub mod lock;
 pub mod notifications;
 pub mod panel;
 pub mod panel_layout;
+pub mod popup_list;
 pub mod scene;
 pub mod shortcuts;
 pub mod start_menu;
@@ -238,6 +239,7 @@ fn tick_hardware() {
     tray_popups::draw(&fb);
     alt_tab::draw(&fb);
     notifications::draw(&fb);
+    popup_list::draw(&fb);
     context_menu::draw(&fb);
     dialog::draw(&fb);
     if lock::is_active() {

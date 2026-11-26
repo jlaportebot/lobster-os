@@ -348,6 +348,7 @@ fn draw_overlays(target: &FramebufferInfo) {
     crate::wm::tray_popups::draw(target);
     crate::wm::alt_tab::draw(target);
     crate::wm::notifications::draw(target);
+    crate::wm::popup_list::draw(target);
     crate::wm::context_menu::draw(target);
     crate::wm::dialog::draw(target);
 }

@@ -15,6 +15,7 @@
 //! |---|------------------|-----------------------|------------------|
 //! | 0 | `dialog`         | every button edge     | Application-modal dialog (O3.6). While open it swallows ALL button edges so nothing behind it can be clicked. |
 //! | 1 | `context_menu`   | every button edge     | Modal popup drawn above everything else. While visible it swallows ALL button edges (even outside clicks and releases) so a click can never leak to what is drawn beneath it. |
+//! | 1b | `popup_list`    | every button edge     | Dropdown list drawn above windows; modal while open, like `context_menu`. |
 //! | 2 | `start_menu`     | left press            | Modal while open: a press inside is consumed, a press outside closes the menu and is consumed too, so nothing underneath (windows, taskbar, icons) ever sees it. The taskbar launcher therefore closes an open menu by being an outside press. |
 //! | 3 | `hit_region`     | left press            | Single hit-region dispatch (O2.2). Consults only the topmost window under the pointer: EL0 app content is an implicit full-content region (press captured so the release is paired); kernel windows dispatch through regions registered with `hit_region::register` to the handler set with `hit_region::set_handler` (Task Manager, Terminal and Editor tab strips, Calculator keys). Chrome or unmatched client area falls through. |
 //! | 4 | `panel`          | left press            | Launcher, task buttons, tray. Above desktop icons and plain windows. |
@@ -39,8 +40,8 @@
 
 use crate::usb::hid::HidEvent;
 use crate::wm::{
-    config, context_menu, desktop_icons, dialog, hit_region, input, panel, start_menu, tray_popups,
-    user_windows, window,
+    config, context_menu, desktop_icons, dialog, hit_region, input, panel, popup_list, start_menu,
+    tray_popups, user_windows, window,
 };
 
 /// A mouse-button edge, as seen by the router.
@@ -74,7 +75,7 @@ pub struct Stage {
 }
 
 /// The routing table, in priority order. See module docs.
-pub static STAGES: [Stage; 8] = [
+pub static STAGES: [Stage; 9] = [
     Stage {
         name: "dialog",
         hit: hit_dialog,
@@ -84,6 +85,11 @@ pub static STAGES: [Stage; 8] = [
         name: "context_menu",
         hit: hit_context_menu,
         handle: handle_context_menu,
+    },
+    Stage {
+        name: "popup_list",
+        hit: hit_popup_list,
+        handle: handle_popup_list,
     },
     Stage {
         name: "start_menu",
@@ -171,6 +177,7 @@ pub fn route_move(x: u32, y: u32, dx: i16, dy: i16) {
     start_menu::handle_move(x, y);
     desktop_icons::update_hover(x, y);
     context_menu::handle_hover(x, y);
+    popup_list::handle_hover(x, y);
     desktop_icons::drag_move(x, y);
 
     // Drag / resize bookkeeping
@@ -194,6 +201,10 @@ pub fn route_move(x: u32, y: u32, dx: i16, dy: i16) {
 
 fn hit_context_menu(_: &ButtonEv) -> bool {
     context_menu::is_visible()
+}
+
+fn hit_popup_list(_: &ButtonEv) -> bool {
+    popup_list::is_open()
 }
 
 fn hit_left_press(ev: &ButtonEv) -> bool {
@@ -222,6 +233,15 @@ fn handle_context_menu(ev: &ButtonEv) -> bool {
         if let Some(action) = context_menu::handle_click(ev.x, ev.y) {
             input::handle_context_action(action);
         }
+    }
+    true
+}
+
+/// Modal dropdown list: a press picks a row or dismisses the list and is
+/// delivered to the owning window; every edge is consumed while open.
+fn handle_popup_list(ev: &ButtonEv) -> bool {
+    if ev.left_press() {
+        popup_list::apply(popup_list::handle_click(ev.x, ev.y));
     }
     true
 }

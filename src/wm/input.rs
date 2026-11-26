@@ -327,6 +327,12 @@ fn handle_key_press(scancode: u8, _extended: bool) {
         return;
     }
 
+    // Open dropdown list: arrows, Enter and Esc go to it before any window
+    if crate::wm::popup_list::apply(crate::wm::popup_list::handle_key(scancode)) {
+        crate::wm::dirty::mark();
+        return;
+    }
+
     // Start menu keyboard handling (typing searches, arrows navigate, Enter launches)
     if crate::wm::start_menu::handle_key(scancode, ch) {
         return;
