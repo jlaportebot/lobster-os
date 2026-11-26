@@ -20,6 +20,7 @@ pub mod controls;
 pub mod desktop_files;
 pub mod desktop_icons;
 pub mod desktop_layout;
+pub mod display_change;
 pub mod dialog;
 pub mod dirty;
 pub mod event_router;
