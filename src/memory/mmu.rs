@@ -309,6 +309,7 @@ unsafe fn enable_mmu_and_caches(ttbr0: u64, ttbr1: u64) {
     let enabled = sctlr_with_mmu_and_caches(sctlr);
     core::arch::asm!("msr SCTLR_EL1, {0}", in(reg) enabled);
     crate::arch::cpu::isb();
+    crate::klog::enable_capture();
     println!("[mmu] SCTLR_EL1 {:#x} -> {:#x}", sctlr, enabled);
 }
 
