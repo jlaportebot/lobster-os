@@ -30,8 +30,8 @@ pub const EFAULT: u64 = (-14i64) as u64;
 const PTE_EL0_ACCESS: u64 = 1 << 6;
 /// PTE bit 7, AP[2]: the page is read-only.
 const PTE_READ_ONLY: u64 = 1 << 7;
-/// Software bit 52 marking a copy-on-write page.
-const PTE_COW_BIT: u64 = 1 << 52;
+/// Software bit marking a copy-on-write page.
+const PTE_COW_BIT: u64 = crate::memory::process_vmem::PTE_COW;
 /// Output-address mask of a descriptor.
 const PTE_OUT_MASK: u64 = 0x0000_FFFF_FFFF_F000;
 /// Descriptor type bits (valid + table/page).

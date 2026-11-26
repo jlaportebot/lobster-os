@@ -33,11 +33,11 @@ pub const PTE_USER_RW: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_NG | PTE_IS
 /// User-space PTE flags (read-execute, non-global, inner-shareable)
 pub const PTE_USER_RX: u64 = PTE_VALID | PTE_PAGE | PTE_ACCESS | PTE_NG | PTE_ISH | MT_NORMAL;
 
-/// COW flag — bit 52 (software-defined, ignored by hardware)
-pub const PTE_COW: u64 = 1 << 52;
+/// COW flag — bit 55 (software-reserved; bit 52 is the hardware Contiguous hint)
+pub const PTE_COW: u64 = 1 << 55;
 
-/// Shared/refcounted flag — bit 53
-pub const PTE_SHARED: u64 = 1 << 53;
+/// Shared/refcounted flag — bit 56 (software-reserved; bit 53 is PXN)
+pub const PTE_SHARED: u64 = 1 << 56;
 
 /// Maximum VMA regions per process
 pub const MAX_VMAS: usize = 32;
@@ -272,6 +272,16 @@ pub unsafe fn free_user_pages(table: *mut [u64; 512], level: u32) {
             }
         }
     }
+}
+
+/// Release the frame behind one valid user leaf descriptor, honouring COW
+/// reference counts.
+pub fn release_leaf(entry: u64) {
+    let pa = entry & !(PAGE_SIZE - 1) & 0x0000_FFFF_FFFF_FFFF;
+    if entry & PTE_COW != 0 && !cow_deref(pa) {
+        return;
+    }
+    frame_alloc::deallocate_frame(PhysAddr::new(pa));
 }
 
 /// Map a page into a user address space

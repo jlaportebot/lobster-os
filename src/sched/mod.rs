@@ -1879,24 +1879,9 @@ fn release_task_resources(task: &Task) {
 /// mirror is dropped first so no mapping outlives the frames.
 fn free_user_address_space(task: &Task) {
     elf::release_user_mappings(task.pid);
-    let root = (crate::memory::PHYS_MAP_OFFSET + task.ttbr0_phys) as *mut [u64; 512];
-    // SAFETY: `ttbr0_phys` is the task's own live tree; the task is dead, so
-    // no CPU walks it, and window pages were unmapped by close_all_for_pid.
-    unsafe { crate::memory::process_vmem::free_user_pages(root, 0) };
-    let space = crate::memory::process_vmem::AddressSpace {
-        ttbr0_phys: task.ttbr0_phys,
-        vmas: [crate::memory::process_vmem::Vma {
-            start: 0,
-            size: 0,
-            prot: 0,
-            file_offset: 0,
-            shared: false,
-            in_use: false,
-        }; crate::memory::process_vmem::MAX_VMAS],
-        vma_count: 0,
-        brk: 0,
-    };
-    crate::memory::process_vmem::destroy_address_space(&space);
+    // The task is dead, so no CPU walks its tree, and window
+    // pages were unmapped by close_all_for_pid before this runs.
+    crate::memory::aspace::free_user_root(task.ttbr0_phys);
 }
 
 /// Kill the current user process and force return to kernel cooperative mode.
